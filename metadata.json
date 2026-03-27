@@ -1,0 +1,8 @@
+{
+  "name": "WhatsCRM SaaS",
+  "description": "Multi-tenant WhatsApp CRM & Automation platform with AI assistant and license key payments.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
