@@ -110,7 +110,8 @@ export default function Dashboard() {
     }
   };
 
-  const checkStatus = async (userId: string) => {
+  const checkStatus = async (userId: string, manual = false) => {
+    // console.log(`[WhatsApp] Checking status for userId: ${userId}`);
     try {
       if (!userId || userId === "guest-user") return;
       
@@ -132,6 +133,7 @@ export default function Dashboard() {
       // Handle 404 gracefully - it likely means no session exists yet
       if (response.status === 404) {
         setStatus("disconnected");
+        if (manual) toast.info("Nenhuma sessão encontrada. Inicie uma nova conexão.");
         return;
       }
 
@@ -139,17 +141,48 @@ export default function Dashboard() {
       
       const data = await response.json();
       
-      if (data.qr) {
+      // If manually called (not from interval), show a toast with the status
+      console.log(`[WhatsApp] Status response for ${userId}:`, data);
+      
+      // Log for debugging (user can see this in console)
+      const isConnected = 
+        data.status === "connected" || 
+        data.status === "open" || 
+        data.status === "online" || 
+        data.status === "ready" || 
+        data.status === "authenticated" || 
+        data.authenticated === true;
+      
+      if (isConnected && status !== "connected") {
+        console.log(`[WhatsApp] Session connected for userId: ${userId}. Full data:`, data);
+        if (manual) toast.success("Conectado com sucesso!");
+      }
+
+      if (isConnected) {
+        setStatus("connected");
+        if (data.me) setMe(data.me);
+        setQr(null);
+        setPairingCode(null);
+      } else if (data.qr) {
         if (status !== "qr") {
           console.log(`[WhatsApp] QR Code received for userId: ${userId}`);
         }
         setQr(data.qr);
         setStatus("qr");
-      } else if (data.status === "connected") {
-        setStatus("connected");
-        setMe(data.me);
-      } else {
+        setPairingCode(null);
+        if (manual) toast.info("Aguardando leitura do QR Code.");
+      } else if (data.pairingCode) {
+        setPairingCode(data.pairingCode);
+        setStatus("pairing");
+        setQr(null);
+        if (manual) toast.info("Aguardando pareamento com o código.");
+      } else if (data.status === "connecting") {
         setStatus("connecting");
+        if (manual) toast.info("Iniciando conexão... Aguarde.");
+      } else {
+        // Fallback or other statuses
+        setStatus(data.status || "connecting");
+        if (manual) toast.info(`Status atual: ${data.status || "conectando"}`);
       }
       
       setError(null);
@@ -169,6 +202,11 @@ export default function Dashboard() {
   };
 
   const connect = async () => {
+    if (status === "connected") {
+      toast.info("Você já está conectado!");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
@@ -185,13 +223,17 @@ export default function Dashboard() {
         throw new Error("URL da API inválida configurada.");
       }
 
-      console.log(`[WhatsApp] Connecting for userId: ${uId}`);
+      console.log(`[WhatsApp] Connecting for userId: ${uId} (Method: ${connectMethod})`);
       
-      const response = await fetch(`${apiUrl}/connect/${uId}`);
+      const url = connectMethod === "number" && phoneNumber 
+        ? `${apiUrl}/connect/${uId}?phone=${phoneNumber}` 
+        : `${apiUrl}/connect/${uId}`;
+      
+      const response = await fetch(url);
       if (!response.ok) throw new Error(`Erro ao conectar: status ${response.status}`);
       
       setStatus("connecting");
-      toast.info("Iniciando conexão... Aguarde o QR Code.");
+      toast.info(connectMethod === "qr" ? "Iniciando conexão... Aguarde o QR Code." : "Iniciando conexão... Aguarde o código de pareamento.");
     } catch (err: any) {
       const errMsg = err?.message || String(err);
       if (errMsg.includes("The string did not match the expected pattern")) {
@@ -549,7 +591,7 @@ export default function Dashboard() {
                   <p className="font-semibold text-slate-900">Escaneie o QR Code</p>
                   <p className="text-sm text-slate-500">Abra o WhatsApp {">"} Aparelhos Conectados.</p>
                 </div>
-                <Button variant="ghost" size="sm" className="gap-2" onClick={() => userId && checkStatus(userId)}>
+                <Button variant="ghost" size="sm" className="gap-2" onClick={() => userId && checkStatus(userId, true)}>
                   <RefreshCw size={14} />
                   Atualizar
                 </Button>
@@ -677,6 +719,19 @@ export default function Dashboard() {
                     </Button>
                   </div>
                 )}
+
+                <div className="pt-4 border-t border-slate-100 flex flex-col gap-2 w-full">
+                  <p className="text-[10px] text-slate-400">Já escaneou no seu celular?</p>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 text-xs gap-2"
+                    onClick={() => userId && checkStatus(userId, true)}
+                  >
+                    <RefreshCw size={14} />
+                    Verificar Conexão Manualmente
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>
