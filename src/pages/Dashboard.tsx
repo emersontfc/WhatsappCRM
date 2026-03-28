@@ -112,29 +112,59 @@ export default function Dashboard() {
 
   const checkStatus = async (userId: string) => {
     try {
-      if (!userId) {
-        return;
+      if (!userId || userId === "guest-user") return;
+      
+      // Ensure we have a valid absolute URL
+      let apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl || apiUrl.trim() === "" || apiUrl === "undefined") {
+        apiUrl = 'https://whatsappcrm-sfr2.onrender.com';
       }
       
-      console.log("Checking status for:", userId);
-      const data = await apiFetch(`/api/whatsapp/status`);
-      console.log("Status data:", data);
-      setStatus(data.status);
-      setQr(data.qr);
-      setPairingCode(data.pairingCode);
-      setMe(data.me);
-      setError(null); // Clear any previous errors on success
+      apiUrl = apiUrl.trim().replace(/\/$/, "");
+      
+      if (!apiUrl.startsWith('http')) {
+        // If it's still not a full URL, don't attempt fetch to avoid "pattern" error
+        return;
+      }
+
+      const response = await fetch(`${apiUrl}/qr/${userId}`);
+      
+      // Handle 404 gracefully - it likely means no session exists yet
+      if (response.status === 404) {
+        setStatus("disconnected");
+        return;
+      }
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
+      const data = await response.json();
+      
+      if (data.qr) {
+        if (status !== "qr") {
+          console.log(`[WhatsApp] QR Code received for userId: ${userId}`);
+        }
+        setQr(data.qr);
+        setStatus("qr");
+      } else if (data.status === "connected") {
+        setStatus("connected");
+        setMe(data.me);
+      } else {
+        setStatus("connecting");
+      }
+      
+      setError(null);
     } catch (err: any) {
-      // Ignore network errors and invalid URL errors that happen during hot reloads or disconnects
-      const errMsg = err?.message || "";
+      const errMsg = err?.message || String(err);
+      // Silently ignore expected/benign errors during polling
       if (
         errMsg.includes("Load failed") || 
         errMsg.includes("Failed to fetch") || 
-        errMsg.includes("The string did not match the expected pattern")
+        errMsg.includes("The string did not match the expected pattern") ||
+        errMsg.includes("status: 404")
       ) {
         return;
       }
-      console.error("Failed to check status:", err);
+      console.error("[WhatsApp] Failed to check status:", err);
     }
   };
 
@@ -142,18 +172,33 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch("/api/whatsapp/connect", {
-        method: "POST",
-        body: JSON.stringify({ 
-          phoneNumber: connectMethod === "number" ? phoneNumber : undefined 
-        }),
-      });
-      setStatus(data.status);
-      setQr(data.qr);
-      setPairingCode(data.pairingCode);
-      setMe(data.me);
+      const uId = await getUserId();
+      if (!uId || uId === "guest-user") throw new Error("Usuário não identificado");
+      
+      let apiUrl = import.meta.env.VITE_API_URL;
+      if (!apiUrl || apiUrl.trim() === "" || apiUrl === "undefined") {
+        apiUrl = 'https://whatsappcrm-sfr2.onrender.com';
+      }
+      apiUrl = apiUrl.trim().replace(/\/$/, "");
+
+      if (!apiUrl.startsWith('http')) {
+        throw new Error("URL da API inválida configurada.");
+      }
+
+      console.log(`[WhatsApp] Connecting for userId: ${uId}`);
+      
+      const response = await fetch(`${apiUrl}/connect/${uId}`);
+      if (!response.ok) throw new Error(`Erro ao conectar: status ${response.status}`);
+      
+      setStatus("connecting");
+      toast.info("Iniciando conexão... Aguarde o QR Code.");
     } catch (err: any) {
-      console.error("Failed to connect:", err);
+      const errMsg = err?.message || String(err);
+      if (errMsg.includes("The string did not match the expected pattern")) {
+        console.warn("[WhatsApp] Connection attempt failed due to malformed URL pattern.");
+        return;
+      }
+      console.error("[WhatsApp] Failed to connect:", err);
       setError(err.message);
     } finally {
       setLoading(false);
