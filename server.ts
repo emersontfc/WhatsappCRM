@@ -2,11 +2,13 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
+
 import whatsappRoutes from "./backend/routes/whatsapp";
 import aiRoutes from "./backend/routes/ai";
 import adminRoutes from "./backend/routes/admin";
 import authRoutes from "./backend/routes/auth";
 import agentRoutes from "./backend/routes/agent";
+
 import { startScheduler } from "./backend/scheduler";
 import { authenticate } from "./backend/middleware/auth";
 
@@ -19,35 +21,29 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // API Routes
+  // ================================
+  // 🔐 ROTAS DA API
+  // ================================
+
   app.use("/api/auth", authRoutes);
-  
-  // Protected Routes
-  app.use("/api/whatsapp", authenticate, (req, res, next) => {
-    console.log(`WhatsApp API hit: ${req.method} ${req.url}`);
-    next();
-  }, whatsappRoutes);
-  
-  app.use("/api/ai", authenticate, (req, res, next) => {
-    console.log(`AI API hit: ${req.method} ${req.url}`);
-    next();
-  }, aiRoutes);
 
-  app.use("/api/admin", authenticate, (req, res, next) => {
-    console.log(`Admin API hit: ${req.method} ${req.url}`);
-    next();
-  }, adminRoutes);
-
+  app.use("/api/whatsapp", authenticate, whatsappRoutes);
+  app.use("/api/ai", authenticate, aiRoutes);
+  app.use("/api/admin", authenticate, adminRoutes);
   app.use("/api/agent", authenticate, agentRoutes);
 
-  // Start background tasks
+  // ================================
+  // ⏱ BACKGROUND TASKS
+  // ================================
   startScheduler();
 
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  // Vite middleware for development
+  // ================================
+  // ⚙️ VITE DEV MODE
+  // ================================
   if (process.env.NODE_ENV !== "production") {
     try {
       const vite = await createViteServer({
@@ -61,45 +57,92 @@ async function startServer() {
     }
   }
 
-  // New Parametres
+  // ================================
+  // 🌐 ROOT
+  // ================================
   app.get("/", (req, res) => {
-    res.send ("API NO TOLETO");
-     });
+    res.send("API NO TOLETO 🚀");
+  });
 
-  //Gerar QR
-  let currentQR = "";
+  // ================================
+  // 🔥 SESSÕES WHATSAPP (CORE DO SISTEMA)
+  // ================================
 
+  /**
+   * 📌 CRIAR SESSÃO
+   * 👉 Inicializa uma nova sessão WhatsApp para um usuário
+   * 👉 Dispara geração de QR internamente
+   */
+  app.get("/connect/:userId", async (req, res) => {
+    const { userId } = req.params;
+
+    try {
+      console.log("🟡 Criando sessão para:", userId);
+
+      await whatsappManager.createSession(userId);
+
+      res.json({
+        success: true,
+        message: "Sessão iniciada. Aguarde o QR...",
+      });
+    } catch (err) {
+      console.error("❌ Erro ao criar sessão:", err);
+
+      res.status(500).json({
+        error: "Erro ao criar sessão",
+      });
+    }
+  });
+
+  /**
+   * 📌 OBTER QR CODE
+   * 👉 Retorna o QR gerado para aquela sessão
+   */
   app.get("/qr/:userId", (req, res) => {
-  const { userId } = req.params;
+    const { userId } = req.params;
 
-  const session = whatsappManager.sessions.get(userId);
+    const session = whatsappManager.sessions.get(userId);
 
-  if (!session || !session.qr) {
-    return res.status(404).json({ error: "QR não disponível" });
-  }
+    // 🔍 DEBUG (importante)
+    console.log("🔎 Buscando QR para:", userId);
+    console.log("📦 Sessão encontrada:", !!session);
 
-  res.json({ qr: session.qr });
-});
+    if (!session || !session.qr) {
+      return res.status(404).json({
+        error: "QR não disponível",
+      });
+    }
 
-  app.post('/connect/:userId', async (req, res) => {
-  const { userId } = req.params;
+    res.json({
+      qr: session.qr,
+    });
+  });
 
-  try {
-    await whatsappManager.createSession(userId);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro ao criar sessão' });
-  }
-});
+  /**
+   * 📌 DEBUG DE SESSÕES
+   * 👉 Mostra todas sessões ativas
+   */
+  app.get("/sessions", (req, res) => {
+    const allSessions = Array.from(whatsappManager.sessions.keys());
 
+    res.json({
+      total: allSessions.length,
+      sessions: allSessions,
+    });
+  });
+
+  // ================================
+  // 🚀 START SERVER
+  // ================================
   app.listen(PORT, "0.0.0.0", async () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    
-    // Reconnect existing WhatsApp sessions
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+
+    // 🔁 Reconectar sessões existentes
     try {
       await whatsappManager.reconnectAllSessions();
+      console.log("♻️ Sessões reconectadas");
     } catch (err) {
-      console.error("Failed to reconnect WhatsApp sessions:", err);
+      console.error("❌ Failed to reconnect sessions:", err);
     }
   });
 }
