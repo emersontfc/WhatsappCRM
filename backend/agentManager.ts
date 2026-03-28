@@ -229,7 +229,7 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
       }
     }
     
-    return "Sorry, I couldn't respond right now.";
+    return "Desculpe, não consegui responder agora. Verifique sua chave de API ou tente novamente mais tarde.";
   }
 }
 
@@ -273,18 +273,27 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       }
     }
 
-    // Define limits (matching frontend PLAN_LIMITS)
-    const PLAN_LIMITS: Record<string, { max_messages: number }> = {
-      Free: { max_messages: 100 },
-      Basic: { max_messages: 1000 },
-      Pro: { max_messages: 5000 },
-      Premium: { max_messages: 20000 },
-    };
+    // Fetch dynamic plan limits
+    const { data: planData, error: planError } = await supabaseAdmin
+      .from("plans")
+      .select("max_messages_per_day, ai_enabled")
+      .eq("id", sub.plan_id)
+      .single();
 
-    const limit = PLAN_LIMITS[sub.plan]?.max_messages || 100;
+    if (planError || !planData) {
+      console.log(`[AI Engine] Plan not found for user ${userId}.`);
+      return;
+    }
+
+    if (!planData.ai_enabled) {
+      console.log(`[AI Engine] AI is disabled for user ${userId}'s plan.`);
+      return;
+    }
+
+    const limit = planData.max_messages_per_day;
     const currentUsed = sub.messages_used || 0;
     if (currentUsed >= limit) {
-      console.log(`[AI Engine] User ${userId} reached message limit.`);
+      console.log(`[AI Engine] User ${userId} reached message limit (${currentUsed}/${limit}).`);
       return;
     }
 

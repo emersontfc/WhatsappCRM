@@ -33,8 +33,37 @@ export default function Settings() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [keys, setKeys] = useState<LicenseKey[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [activeTab, setActiveTab] = useState<"profile" | "keys" | "users">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "keys" | "users" | "plans">("profile");
   const [newKey, setNewKey] = useState({ duration: "30", plan: "Premium" });
+  const [plans, setPlans] = useState<any[]>([]);
+
+  const fetchPlans = async () => {
+    try {
+      const response = await apiFetch("/api/admin/plans");
+      if (response.success) {
+        setPlans(response.data);
+      }
+    } catch (err) {
+      console.error("Error fetching plans:", err);
+    }
+  };
+
+  const updatePlan = async (id: string, updates: any) => {
+    try {
+      const response = await apiFetch(`/api/admin/plans/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(updates),
+      });
+      if (response.success) {
+        toast.success("Plano atualizado com sucesso!");
+        fetchPlans();
+      } else {
+        toast.error(response.error || "Erro ao atualizar plano");
+      }
+    } catch (err) {
+      toast.error("Erro ao atualizar plano");
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
@@ -72,6 +101,7 @@ export default function Settings() {
               setIsAdmin(true);
               await fetchKeys();
               await fetchUsers();
+              await fetchPlans();
             } else {
               setIsAdmin(false);
             }
@@ -265,7 +295,7 @@ export default function Settings() {
               onClick={() => setActiveTab("keys")}
               className="h-8 text-xs"
             >
-              Senhas Premium
+              Senhas de Acesso
             </Button>
             <Button 
               variant={activeTab === "users" ? "primary" : "ghost"} 
@@ -273,6 +303,13 @@ export default function Settings() {
               className="h-8 text-xs"
             >
               Usuários
+            </Button>
+            <Button 
+              variant={activeTab === "plans" ? "primary" : "ghost"} 
+              onClick={() => setActiveTab("plans")}
+              className="h-8 text-xs"
+            >
+              Planos
             </Button>
           </>
         )}
@@ -359,7 +396,7 @@ export default function Settings() {
                   className="w-full border-amber-200 text-amber-700 hover:bg-amber-50"
                   onClick={() => navigate("/activate")}
                 >
-                  Fazer Upgrade para Premium
+                  Fazer Upgrade de Plano
                 </Button>
               )}
             </CardContent>
@@ -371,7 +408,7 @@ export default function Settings() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Key className="text-emerald-600" />
-                Gerador de Senhas Premium
+                Gerador de Senhas de Acesso
               </CardTitle>
               <CardDescription>
                 Crie novas senhas de ativação para vender aos usuários.
@@ -394,9 +431,9 @@ export default function Settings() {
                     value={newKey.plan}
                     onChange={e => setNewKey({...newKey, plan: e.target.value})}
                   >
+                    <option>Starter</option>
+                    <option>Pro</option>
                     <option>Premium</option>
-                    <option>Enterprise</option>
-                    <option>Basic</option>
                   </select>
                 </div>
                 <Button onClick={generateKey} disabled={loading} className="gap-2">
@@ -488,13 +525,12 @@ export default function Settings() {
                         <td className="px-6 py-4">
                           <select 
                             className="bg-transparent border-none text-xs font-bold uppercase focus:ring-0 cursor-pointer text-slate-700"
-                            value={user.plan || "Free"}
+                            value={user.plan || "Starter"}
                             onChange={(e) => updateUserSubscription(user.id, e.target.value, user.expires_at)}
                           >
-                            <option value="Free">Gratuito</option>
+                            <option value="Starter">Starter</option>
+                            <option value="Pro">Pro</option>
                             <option value="Premium">Premium</option>
-                            <option value="Enterprise">Enterprise</option>
-                            <option value="Basic">Basic</option>
                           </select>
                         </td>
                         <td className="px-6 py-4">
@@ -543,6 +579,100 @@ export default function Settings() {
                   })}
                 </tbody>
               </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {activeTab === "plans" && isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Gerenciar Planos</CardTitle>
+            <CardDescription>Configure os limites e preços dos planos disponíveis.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {plans.map((plan) => (
+                <Card key={plan.id} className="border-slate-200">
+                  <CardHeader className="bg-slate-50 pb-4">
+                    <CardTitle className="text-lg">{plan.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-4 space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">Preço (MZN)</label>
+                      <Input 
+                        type="number" 
+                        value={plan.price} 
+                        onChange={(e) => {
+                          const newPlans = [...plans];
+                          const index = newPlans.findIndex(p => p.id === plan.id);
+                          newPlans[index].price = Number(e.target.value);
+                          setPlans(newPlans);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">Conexões WhatsApp</label>
+                      <Input 
+                        type="number" 
+                        value={plan.max_connections} 
+                        onChange={(e) => {
+                          const newPlans = [...plans];
+                          const index = newPlans.findIndex(p => p.id === plan.id);
+                          newPlans[index].max_connections = Number(e.target.value);
+                          setPlans(newPlans);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">Contatos Máximos</label>
+                      <Input 
+                        type="number" 
+                        value={plan.max_contacts} 
+                        onChange={(e) => {
+                          const newPlans = [...plans];
+                          const index = newPlans.findIndex(p => p.id === plan.id);
+                          newPlans[index].max_contacts = Number(e.target.value);
+                          setPlans(newPlans);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">Mensagens / Dia</label>
+                      <Input 
+                        type="number" 
+                        value={plan.max_messages_per_day} 
+                        onChange={(e) => {
+                          const newPlans = [...plans];
+                          const index = newPlans.findIndex(p => p.id === plan.id);
+                          newPlans[index].max_messages_per_day = Number(e.target.value);
+                          setPlans(newPlans);
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between pt-2">
+                      <label className="text-xs font-semibold text-slate-500 uppercase">IA Ativada</label>
+                      <input 
+                        type="checkbox" 
+                        checked={plan.ai_enabled}
+                        onChange={(e) => {
+                          const newPlans = [...plans];
+                          const index = newPlans.findIndex(p => p.id === plan.id);
+                          newPlans[index].ai_enabled = e.target.checked;
+                          setPlans(newPlans);
+                        }}
+                        className="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500"
+                      />
+                    </div>
+                    <Button 
+                      className="w-full mt-4" 
+                      onClick={() => updatePlan(plan.id, plan)}
+                    >
+                      Salvar Alterações
+                    </Button>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           </CardContent>
         </Card>

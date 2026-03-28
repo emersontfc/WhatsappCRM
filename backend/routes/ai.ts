@@ -1,5 +1,6 @@
 import express from "express";
 import { GoogleGenAI } from "@google/genai";
+import { decrypt } from "../agentManager";
 import { AuthRequest } from "../middleware/auth";
 import { supabaseAdmin } from "../supabaseAdmin";
 
@@ -15,8 +16,25 @@ router.post("/suggest", async (req: AuthRequest, res) => {
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-    const model = "gemini-3-flash-preview";
+    // Fetch user's agent config to see if they have their own API key
+    const { data: agent } = await supabaseAdmin
+      .from("agents")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("provider", "gemini")
+      .maybeSingle();
+
+    let apiKey = process.env.GEMINI_API_KEY!;
+    if (agent && agent.api_key) {
+      apiKey = decrypt(agent.api_key);
+    }
+
+    if (!apiKey) {
+      return res.status(500).json({ success: false, error: "Gemini API Key missing" });
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const model = agent?.model || "gemini-3-flash-preview";
 
     const prompt = `
       Você é um assistente de CRM para WhatsApp. 
@@ -57,7 +75,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
 
     const { data: subscription, error: subError } = await supabaseAdmin
       .from("subscriptions")
-      .select("*")
+      .select("*, plans(*)")
       .eq("user_id", userId)
       .single();
 
@@ -66,7 +84,8 @@ router.get("/subscription", async (req: AuthRequest, res) => {
       success: true, 
       data: {
         ...profile,
-        subscription: subscription || null
+        subscription: subscription || null,
+        planDetails: subscription?.plans || null
       }
     });
   } catch (err: any) {

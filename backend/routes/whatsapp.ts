@@ -1,13 +1,26 @@
 import express from "express";
 import { whatsappManager } from "../whatsappManager";
 import { AuthRequest } from "../middleware/auth";
+import { requirePlan } from "../middleware/requirePlan";
+import { supabaseAdmin } from "../supabaseAdmin";
 
 const router = express.Router();
 
-router.post("/connect", async (req: AuthRequest, res) => {
+router.post("/connect", requirePlan, async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   const { phoneNumber } = req.body;
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+  // Enforce max connections
+  const activeSessions = whatsappManager.getActiveSessionsCount(userId);
+  const maxConnections = req.plan?.max_connections || 1;
+  
+  if (activeSessions >= maxConnections && !whatsappManager.getSession(userId)) {
+    return res.status(403).json({ 
+      success: false, 
+      error: `Limite de conexões atingido. Seu plano permite ${maxConnections} conexão(ões).` 
+    });
+  }
 
   try {
     await whatsappManager.createSession(userId, phoneNumber);
@@ -68,7 +81,7 @@ router.get("/me", (req: AuthRequest, res) => {
   res.json({ success: true, me });
 });
 
-router.post("/send", async (req: AuthRequest, res) => {
+router.post("/send", requirePlan, async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   let { jid, text, to } = req.body;
   
@@ -81,6 +94,23 @@ router.post("/send", async (req: AuthRequest, res) => {
     return res.status(400).json({ success: false, error: "jid and text are required" });
   }
 
+  // Enforce max messages per day
+  const { data: sub } = await supabaseAdmin
+    .from("subscriptions")
+    .select("messages_used")
+    .eq("user_id", userId)
+    .single();
+
+  const currentUsed = sub?.messages_used || 0;
+  const maxMessages = req.plan?.max_messages_per_day || 150;
+
+  if (currentUsed >= maxMessages) {
+    return res.status(403).json({ 
+      success: false, 
+      error: `Limite de mensagens atingido. Seu plano permite ${maxMessages} mensagens por dia.` 
+    });
+  }
+
   // Ensure jid is correctly formatted for WhatsApp
   if (!jid.includes("@")) {
     jid = `${jid.replace(/\D/g, "")}@s.whatsapp.net`;
@@ -88,6 +118,13 @@ router.post("/send", async (req: AuthRequest, res) => {
 
   try {
     const result = await whatsappManager.sendMessage(userId, jid, text);
+    
+    // Increment usage
+    await supabaseAdmin
+      .from("subscriptions")
+      .update({ messages_used: currentUsed + 1 })
+      .eq("user_id", userId);
+
     res.json({ success: true, result });
   } catch (err: any) {
     console.error("Failed to send message:", err);

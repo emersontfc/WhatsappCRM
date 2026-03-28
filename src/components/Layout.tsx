@@ -12,7 +12,8 @@ import {
   Menu,
   X,
   Bot,
-  Calendar as CalendarIcon
+  Calendar as CalendarIcon,
+  Package
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -99,9 +100,14 @@ export default function Layout({ children }: LayoutProps) {
     { name: "Contatos", path: "/contacts", icon: Users },
     { name: "Mensagens", path: "/messages", icon: MessageSquare },
     { name: "Automações", path: "/automations", icon: Zap },
+    { name: "Modelos", path: "/models", icon: MessageSquare },
     { name: "Agente IA", path: "/agent", icon: Bot },
     { name: "Agendamentos", path: "/schedule", icon: CalendarIcon },
   ];
+
+  if (isAdmin) {
+    navItems.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
+  }
 
   if (!isAdmin && !isActivated) {
     navItems.push({ name: "Ativação", path: "/activate", icon: CreditCard });

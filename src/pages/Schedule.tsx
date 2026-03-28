@@ -21,6 +21,7 @@ import { Input } from "../components/ui/Input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
+import { UpgradePrompt } from "../components/UpgradePrompt";
 
 interface ScheduledMessage {
   id: string;
@@ -48,7 +49,7 @@ export default function Schedule() {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
-  const { isActivated, loading: activationLoading } = useActivation();
+  const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   
@@ -200,6 +201,11 @@ export default function Schedule() {
         }
 
         if (contactsToInsert.length > 0) {
+          if (planDetails && contacts.length + contactsToInsert.length > planDetails.max_contacts) {
+            toast.error(`Limite de contatos atingido (${planDetails.max_contacts}). Você pode importar no máximo ${planDetails.max_contacts - contacts.length} contatos.`);
+            return;
+          }
+
           let successCount = 0;
           for (const contact of contactsToInsert) {
             try {
@@ -438,6 +444,12 @@ export default function Schedule() {
 
   return (
     <div className="space-y-8">
+      {planDetails && contacts.length >= planDetails.max_contacts && (
+        <UpgradePrompt 
+          title="Limite de Contatos Atingido"
+          description={`Você atingiu o limite de ${planDetails.max_contacts} contatos do seu plano atual. Você não poderá importar novos contatos.`}
+        />
+      )}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Agendamentos</h2>

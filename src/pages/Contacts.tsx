@@ -6,6 +6,8 @@ import { supabase, getUserId, isAdmin as checkIsAdmin } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Card, CardContent } from "../components/ui/Card";
+import { useActivation } from "../lib/useActivation";
+import { UpgradePrompt } from "../components/UpgradePrompt";
 
 interface Contact {
   id: string;
@@ -17,65 +19,31 @@ interface Contact {
 
 export default function Contacts() {
   const navigate = useNavigate();
+  const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [newContact, setNewContact] = useState({ name: "", phone: "", tags: "", countryCode: "258" });
-  const [isActivated, setIsActivated] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (activationLoading) return;
     const init = async () => {
-      const checkActivation = async () => {
-        try {
-          const adminStatus = await checkIsAdmin();
-          if (adminStatus) {
-            setIsActivated(true);
-            return;
-          }
-
-          const userId = await getUserId();
-          const { data: userData } = await supabase
-            .from("users")
-            .select("*")
-            .eq("id", userId)
-            .single();
-
-          if (userData) {
-            if (userData.isActivated === true) {
-              setIsActivated(true);
-            } else if (userData.expires_at) {
-              setIsActivated(new Date(userData.expires_at) > new Date());
-            } else {
-              setIsActivated(false);
-            }
-          } else {
-            setIsActivated(userId === "guest-user");
-          }
-        } catch (err) {
-          console.error("Error checking activation:", err);
-        }
-      };
-      await checkActivation();
-
       const userId = await getUserId();
-      console.log("Contacts init - userId:", userId);
       if (!userId) return;
       
       // Initial fetch
       const { data: initialContacts, error } = await supabase
         .from("contacts")
         .select("*")
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .order("name", { ascending: true });
 
       if (error) {
         console.error("Error fetching initial contacts:", error);
       }
-
-      console.log("Initial contacts fetched:", initialContacts?.length || 0);
       
       if (initialContacts) {
-        console.log("Raw initial contacts from DB:", initialContacts.length);
         const manualContacts = initialContacts
           .map(c => ({ ...c, tags: Array.isArray(c.tags) ? c.tags : [] }))
           .filter(c => {
@@ -83,7 +51,6 @@ export default function Contacts() {
             // Show if it's explicitly manual/imported OR if it doesn't have the WhatsApp tag
             return tags.includes("Manual") || tags.includes("Importado") || !tags.includes("WhatsApp");
           });
-        console.log("Filtered manual contacts to show:", manualContacts.length);
         setContacts(manualContacts);
       }
 
@@ -99,7 +66,8 @@ export default function Contacts() {
           const { data: updatedContacts } = await supabase
             .from("contacts")
             .select("*")
-            .eq("user_id", userId);
+            .eq("user_id", userId)
+            .order("name", { ascending: true });
           
           if (updatedContacts) {
             const manualContacts = updatedContacts
@@ -122,11 +90,16 @@ export default function Contacts() {
     return () => {
       cleanupPromise.then(cleanup => cleanup && cleanup());
     };
-  }, []);
+  }, [activationLoading]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newContact.name || !newContact.phone) return;
+
+    if (planDetails && contacts.length >= planDetails.max_contacts) {
+      toast.error(`Limite de contatos atingido (${planDetails.max_contacts}). Faça upgrade do seu plano.`);
+      return;
+    }
 
     try {
       const userId = await getUserId();
@@ -200,7 +173,6 @@ export default function Contacts() {
             const tags = c.tags;
             return tags.includes("Manual") || tags.includes("Importado");
           });
-        console.log("Manual contacts after refresh:", manualContacts.length);
         setContacts(manualContacts);
       }
 
@@ -257,6 +229,11 @@ export default function Contacts() {
         }
 
         if (contactsToInsert.length > 0) {
+          if (planDetails && contacts.length + contactsToInsert.length > planDetails.max_contacts) {
+            toast.error(`Limite de contatos atingido (${planDetails.max_contacts}). Você pode importar no máximo ${planDetails.max_contacts - contacts.length} contatos.`);
+            return;
+          }
+
           let successCount = 0;
           for (const contact of contactsToInsert) {
             try {
@@ -327,6 +304,12 @@ export default function Contacts() {
 
   return (
     <div className="space-y-6">
+      {planDetails && contacts.length >= planDetails.max_contacts && (
+        <UpgradePrompt 
+          title="Limite de Contatos Atingido"
+          description={`Você atingiu o limite de ${planDetails.max_contacts} contatos do seu plano atual.`}
+        />
+      )}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div className="relative w-full sm:w-72">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />

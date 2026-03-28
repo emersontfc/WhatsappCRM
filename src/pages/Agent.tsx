@@ -21,7 +21,7 @@ interface AgentConfig {
 
 export default function Agent() {
   const navigate = useNavigate();
-  const { isActivated, loading: activationLoading } = useActivation();
+  const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [models, setModels] = useState<Record<string, string[]>>({});
@@ -149,6 +149,25 @@ export default function Agent() {
     );
   }
 
+  if (planDetails && !planDetails.ai_enabled) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-8">
+        <Card className="bg-amber-50 border-amber-200">
+          <CardContent className="py-12 text-center space-y-4">
+            <Bot size={48} className="mx-auto text-amber-400" />
+            <h3 className="text-xl font-bold text-amber-900">Recurso Indisponível</h3>
+            <p className="text-amber-700 max-w-md mx-auto">
+              O Agente de IA não está disponível no seu plano atual. Faça um upgrade para utilizar este recurso.
+            </p>
+            <Button onClick={() => navigate("/activate")} className="bg-amber-600 hover:bg-amber-700">
+              Fazer Upgrade
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -242,11 +261,39 @@ export default function Agent() {
               </div>
 
               {config.provider === "gemini" && (
-                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
-                  <Info className="text-blue-600 shrink-0" size={20} />
-                  <p className="text-xs text-blue-800 leading-relaxed">
-                    <strong>Gemini já incluído!</strong> Você não precisa de uma API Key própria para usar o Gemini. O sistema utiliza a chave padrão do servidor.
-                  </p>
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
+                    <Info className="text-blue-600 shrink-0" size={20} />
+                    <p className="text-xs text-blue-800 leading-relaxed">
+                      <strong>Dica:</strong> Por padrão, o sistema usa uma chave compartilhada. Se você estiver enfrentando erros de limite, insira sua própria <strong>Gemini API Key</strong> abaixo.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">Gemini API Key (Opcional)</label>
+                    <div className="relative">
+                      <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <Input 
+                        type="password"
+                        placeholder="Sua chave do Google AI Studio" 
+                        className="pl-10"
+                        value={config.api_key}
+                        onChange={e => setConfig({ ...config, api_key: e.target.value })}
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-500">Obtenha sua chave em <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-emerald-600 underline">Google AI Studio</a>.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">Modelo</label>
+                    <select 
+                      className="flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      value={config.model}
+                      onChange={e => setConfig({ ...config, model: e.target.value })}
+                    >
+                      {(models[config.provider] || []).map(model => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               )}
 

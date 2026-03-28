@@ -13,6 +13,8 @@ import Settings from "./pages/Settings";
 import Automations from "./pages/Automations";
 import Schedule from "./pages/Schedule";
 import Agent from "./pages/Agent";
+import AdminPacks from "./pages/AdminPacks";
+import UserModels from "./pages/UserModels";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -76,6 +78,14 @@ export default function App() {
         <Route
           path="/automations"
           element={user ? <Layout><Automations key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/models"
+          element={user ? <Layout><UserModels key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/admin/packs"
+          element={user ? <Layout><AdminPacks key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/schedule"

@@ -72,19 +72,29 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
     if (!subData) {
       console.log(`Initializing subscription for user ${user.id}`);
+      const planName = isAdminEmail ? "Premium" : "Starter";
+      const { data: planData } = await supabaseAdmin.from("plans").select("id").eq("name", planName).single();
+      
       await supabaseAdmin.from("subscriptions").insert({
         user_id: user.id,
-        plan: isAdminEmail ? "Premium" : "Free",
+        plan: planName,
+        plan_id: planData?.id,
         start_date: new Date().toISOString(),
         end_date: isAdminEmail ? "2099-12-31T23:59:59Z" : new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString(),
-        status: "active"
+        expires_at: isAdminEmail ? "2099-12-31T23:59:59Z" : new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString(),
+        status: "active",
+        is_active: true
       });
     } else if (isAdminEmail && subData.plan !== "Premium") {
       // Update subscription for admin emails
+      const { data: planData } = await supabaseAdmin.from("plans").select("id").eq("name", "Premium").single();
       await supabaseAdmin.from("subscriptions").update({
         plan: "Premium",
+        plan_id: planData?.id,
         end_date: "2099-12-31T23:59:59Z",
-        status: "active"
+        expires_at: "2099-12-31T23:59:59Z",
+        status: "active",
+        is_active: true
       }).eq("user_id", user.id);
     }
 

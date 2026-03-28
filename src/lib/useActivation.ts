@@ -5,6 +5,7 @@ import { getSubscription } from "./subscriptionService";
 export const useActivation = () => {
   const [isActivated, setIsActivated] = useState(false);
   const [plan, setPlan] = useState<string | null>(null);
+  const [planDetails, setPlanDetails] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -14,6 +15,7 @@ export const useActivation = () => {
         if (!userId || userId === "guest-user") {
           setIsActivated(false);
           setPlan(null);
+          setPlanDetails(null);
           setLoading(false);
           return;
         }
@@ -22,47 +24,56 @@ export const useActivation = () => {
         if (adminStatus) {
           setIsActivated(true);
           setPlan("Admin");
+          setPlanDetails({
+            max_connections: 999,
+            max_contacts: 999999,
+            max_messages_per_day: 999999,
+            ai_enabled: true
+          });
           setLoading(false);
           return;
         }
 
-        const subscription = await getSubscription(userId);
-        
-        if (subscription) {
-          setPlan(subscription.plan);
-          if (subscription.plan === 'Free') {
-            setIsActivated(true);
-          } else if (new Date(subscription.end_date) > new Date()) {
-            setIsActivated(true);
-          } else {
-            setIsActivated(false);
+        // Fetch from the backend API which now includes planDetails
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/ai/subscription`, {
+          headers: {
+            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`
           }
-        } else {
-          // Fallback to users table check if no subscription record
-          const { data: userData } = await supabase
-            .from("users")
-            .select("isActivated, expires_at, plan")
-            .eq("id", userId)
-            .single();
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data) {
+            const userData = data.data;
+            const subscription = userData.subscription;
             
-          if (userData) {
-            setPlan(userData.plan || "Free");
-            if (userData.isActivated === true) {
-              setIsActivated(true);
-            } else if (userData.expires_at) {
-              setIsActivated(new Date(userData.expires_at) > new Date());
+            if (subscription) {
+              setPlan(subscription.plan);
+              setPlanDetails(userData.planDetails);
+              if (subscription.plan === 'Free' || subscription.plan === 'Starter') {
+                setIsActivated(true);
+              } else if (new Date(subscription.end_date) > new Date()) {
+                setIsActivated(true);
+              } else {
+                setIsActivated(false);
+              }
             } else {
-              setIsActivated(false);
+              setPlan(userData.plan || "Starter");
+              if (userData.isActivated === true) {
+                setIsActivated(true);
+              } else if (userData.expires_at) {
+                setIsActivated(new Date(userData.expires_at) > new Date());
+              } else {
+                setIsActivated(false);
+              }
             }
-          } else {
-            setIsActivated(false);
-            setPlan(null);
           }
         }
       } catch (err) {
         console.error("Error checking activation:", err);
         setIsActivated(false);
         setPlan(null);
+        setPlanDetails(null);
       } finally {
         setLoading(false);
       }
@@ -70,5 +81,5 @@ export const useActivation = () => {
     checkActivation();
   }, []);
 
-  return { isActivated, plan, loading };
+  return { isActivated, plan, planDetails, loading };
 };

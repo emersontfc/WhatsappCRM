@@ -69,14 +69,17 @@ export default function Activate() {
     );
   }
 
+  const isActivated = subscription?.plan !== "Free" && subscription?.plan !== "Starter" && subscription?.expires_at && new Date(subscription.expires_at) > new Date();
   const isPremium = subscription?.plan === "Premium" || subscription?.role === "admin";
+  const isActivePlan = isPremium || subscription?.plan === "Pro" || (subscription?.plan === "Starter" && subscription?.isActivated);
+  
   const daysLeft = subscription?.expires_at 
     ? Math.ceil((new Date(subscription.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
     : 0;
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
-      {isPremium && (
+      {isActivePlan && (
         <Card className="bg-emerald-50 border-emerald-100">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-emerald-800">
@@ -103,7 +106,7 @@ export default function Activate() {
             {subscription.expires_at && (
               <div className="flex items-center gap-2 text-sm text-emerald-700 bg-white/50 p-3 rounded-lg">
                 <Clock size={16} />
-                <span>Você ainda tem <strong>{daysLeft} dias</strong> de acesso premium.</span>
+                <span>Você ainda tem <strong>{daysLeft} dias</strong> de acesso ao seu plano.</span>
               </div>
             )}
           </CardContent>
@@ -115,14 +118,14 @@ export default function Activate() {
         </Card>
       )}
 
-      <Card className={cn(isPremium && "opacity-50 pointer-events-none")}>
+      <Card className={cn(isActivePlan && "opacity-50 pointer-events-none")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CreditCard className="text-emerald-600" />
-            {isPremium ? "Renovar ou Alterar Senha" : "Ativar Senha Premium"}
+            {isActivePlan ? "Renovar ou Alterar Senha" : "Ativar Senha de Acesso"}
           </CardTitle>
           <CardDescription>
-            Insira a senha premium recebida após o pagamento via M-Pesa ou eMola para liberar os recursos do sistema.
+            Insira a senha de acesso recebida após o pagamento via M-Pesa ou eMola para liberar os recursos do sistema.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">

@@ -1,6 +1,6 @@
 import express from "express";
 import { supabaseAdmin } from "../supabaseAdmin";
-import { authorizeAdmin } from "../middleware/auth";
+import { authorizeAdmin, AuthRequest } from "../middleware/auth";
 
 const router = express.Router();
 
@@ -36,10 +36,22 @@ router.post("/keys", async (req, res) => {
   }
 
   try {
+    // Fetch plan_id
+    const { data: planData, error: planError } = await supabaseAdmin
+      .from("plans")
+      .select("id")
+      .eq("name", plan || "Premium")
+      .single();
+
+    if (planError || !planData) {
+      return res.status(400).json({ success: false, error: "Plano inválido." });
+    }
+
     const { data, error } = await supabaseAdmin.from("license_keys").insert({
       code,
       duration_days: duration,
       plan: plan || "Premium",
+      plan_id: planData.id,
       is_used: false,
       created_at: new Date().toISOString(),
     }).select().single();
@@ -76,6 +88,54 @@ router.delete("/keys/:id", async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     console.error("Failed to delete key:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Plan Management Routes
+router.get("/plans", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("plans")
+      .select("*")
+      .order("price", { ascending: true });
+      
+    if (error) throw error;
+    
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error("Failed to fetch plans:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put("/plans/:id", async (req, res) => {
+  const { id } = req.params;
+    const { max_connections, max_contacts, max_messages_per_day, ai_enabled, automation_level, price } = req.body;
+    
+    // Ensure we only update the fields we expect, using the correct database column names
+    const updateData = {
+      max_connections: Number(max_connections),
+      max_contacts: Number(max_contacts),
+      max_messages_per_day: Number(max_messages_per_day),
+      ai_enabled: Boolean(ai_enabled),
+      automation_level: automation_level,
+      price: Number(price)
+    };
+  
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("plans")
+      .update(updateData)
+      .eq("id", id)
+      .select()
+      .single();
+      
+    if (error) throw error;
+    
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error("Failed to update plan:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -145,12 +205,23 @@ router.patch("/users/:id/subscription", async (req, res) => {
   const { plan, expires_at } = req.body;
   
   try {
+    // Fetch plan_id
+    const { data: planData, error: planError } = await supabaseAdmin
+      .from("plans")
+      .select("id")
+      .eq("name", plan || "Starter")
+      .single();
+
+    if (planError || !planData) {
+      return res.status(400).json({ success: false, error: "Plano inválido." });
+    }
+
     const { error } = await supabaseAdmin
       .from("users")
       .update({ 
         plan, 
         expires_at,
-        isActivated: plan !== "Free"
+        isActivated: plan !== "Starter"
       })
       .eq("id", id);
       
@@ -161,8 +232,11 @@ router.patch("/users/:id/subscription", async (req, res) => {
       .from("subscriptions")
       .update({ 
         plan, 
+        plan_id: planData.id,
         end_date: expires_at,
-        status: "active"
+        expires_at: expires_at,
+        status: "active",
+        is_active: true
       })
       .eq("user_id", id);
 
@@ -171,6 +245,32 @@ router.patch("/users/:id/subscription", async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     console.error("Failed to update user subscription:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ... existing routes ...
+
+router.post("/packs/:packId/items", async (req: AuthRequest, res) => {
+  console.log("Admin pack items route hit for pack:", req.params.packId);
+  const { packId } = req.params;
+  const items = req.body; // Array of { trigger, response, match_type }
+
+  try {
+    const itemsToInsert = items.map((item: any) => ({
+      pack_id: packId,
+      trigger: item.trigger,
+      response_text: item.response, // Mapping 'response' to 'response_text'
+      match_type: item.match_type || 'exact',
+      response_type: 'text' // Defaulting to text
+    }));
+
+    const { error } = await supabaseAdmin.from("model_items").insert(itemsToInsert);
+    if (error) throw error;
+    
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Error adding items to pack:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

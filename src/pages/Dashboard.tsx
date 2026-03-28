@@ -28,10 +28,37 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { apiFetch } from "../lib/api";
+import { TemplateModal } from "../components/TemplateModal";
+
+const ConnectionStatusBadge = ({ status }: { status: string | null }) => {
+  let label = "Desconectado";
+  let bgColor = "bg-red-100";
+  let textColor = "text-red-700";
+  let dotColor = "bg-red-500";
+
+  if (status === "connected") {
+    label = "Conectado";
+    bgColor = "bg-green-100";
+    textColor = "text-green-700";
+    dotColor = "bg-green-500";
+  } else if (status === "connecting" || status === "qr") {
+    label = "Conectando";
+    bgColor = "bg-yellow-100";
+    textColor = "text-yellow-700";
+    dotColor = "bg-yellow-500";
+  }
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${bgColor} ${textColor}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+      {label}
+    </span>
+  );
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { isActivated, plan, loading: activationLoading } = useActivation();
+  const { isActivated, plan, planDetails, loading: activationLoading } = useActivation();
   const [status, setStatus] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [pairingCode, setPairingCode] = useState<string | null>(null);
@@ -50,7 +77,19 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<any[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const checkUserTemplate = async () => {
+      const user = await getUser();
+      // Only show modal if user exists and template hasn't been applied
+      if (user && user.template_applied === false) {
+        setShowTemplateModal(true);
+      }
+    };
+    checkUserTemplate();
+  }, []);
 
   const fetchStats = async (userId: string) => {
     try {
@@ -230,7 +269,16 @@ export default function Dashboard() {
         : `${apiUrl}/connect/${uId}`;
       
       const response = await fetch(url);
-      if (!response.ok) throw new Error(`Erro ao conectar: status ${response.status}`);
+      if (!response.ok) {
+        let errorMsg = `Erro ao conectar: status ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) errorMsg = errorData.error;
+        } catch (e) {
+          // Ignore JSON parse error
+        }
+        throw new Error(errorMsg);
+      }
       
       setStatus("connecting");
       toast.info(connectMethod === "qr" ? "Iniciando conexão... Aguarde o QR Code." : "Iniciando conexão... Aguarde o código de pareamento.");
@@ -473,29 +521,37 @@ export default function Dashboard() {
       {/* Plan Info Banner */}
       {isActivated && (
         <div className={cn(
-          "p-4 rounded-2xl flex items-center justify-between border",
-          plan === "Premium" ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"
+          "p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between border gap-4",
+          plan === "Premium" || plan === "Admin" ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"
         )}>
           <div className="flex items-center gap-3">
             <div className={cn(
-              "h-10 w-10 rounded-xl flex items-center justify-center",
-              plan === "Premium" ? "bg-amber-100 text-amber-600" : "bg-emerald-100 text-emerald-600"
+              "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
+              plan === "Premium" || plan === "Admin" ? "bg-amber-100 text-amber-600" : "bg-emerald-100 text-emerald-600"
             )}>
               <Zap size={20} />
             </div>
             <div>
               <p className="text-sm font-bold text-slate-900">Plano Atual: {plan}</p>
-              <p className="text-xs text-slate-500">Sua conta está ativa e pronta para uso.</p>
+              <p className="text-xs text-slate-500">
+                {planDetails ? (
+                  <>
+                    Limites: {planDetails.max_messages_per_day} msgs/dia • {planDetails.max_contacts} contatos • {planDetails.max_connections} conexão(ões)
+                  </>
+                ) : (
+                  "Sua conta está ativa e pronta para uso."
+                )}
+              </p>
             </div>
           </div>
           {plan !== "Premium" && plan !== "Admin" && (
             <Button 
               size="sm" 
               variant="outline" 
-              className="border-amber-200 text-amber-700 hover:bg-amber-100"
+              className="border-amber-200 text-amber-700 hover:bg-amber-100 shrink-0"
               onClick={() => navigate("/activate")}
             >
-              Upgrade para Premium
+              Fazer Upgrade
             </Button>
           )}
         </div>
@@ -518,13 +574,18 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* WhatsApp Connection Card */}
+      <TemplateModal isOpen={showTemplateModal} onClose={() => setShowTemplateModal(false)} />
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         {/* WhatsApp Connection Card */}
         <Card className="lg:col-span-1">
           <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <QrCode size={20} className="text-emerald-600" />
-              Conexão WhatsApp
+            <CardTitle className="text-lg flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <QrCode size={20} className="text-emerald-600" />
+                Conexão WhatsApp
+              </div>
+              <ConnectionStatusBadge status={status} />
             </CardTitle>
             <CardDescription>
               Conecte seu celular para começar a enviar mensagens.

@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "./supabaseAdmin";
 
-export async function handleIncomingMessage(whatsappManager: any, userId: string, jid: string, text: string) {
+export async function handleIncomingMessage(whatsappManager: any, userId: string, jid: string, text: string, isButton: boolean = false) {
   try {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(userId)) return;
@@ -15,12 +15,16 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
     if (!automations || automations.length === 0) {
       console.log(`No active automations found for user ${userId}`);
+      if (isButton) {
+        await whatsappManager.sendMessage(userId, jid, "Opção ainda não configurada");
+      }
       return;
     }
 
     const normalizedText = text.trim().toLowerCase();
     console.log(`Checking ${automations.length} automations for user ${userId} with text: "${normalizedText}"`);
 
+    let triggered = false;
     for (const automation of automations) {
       let shouldTrigger = false;
 
@@ -34,6 +38,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
       }
 
       if (shouldTrigger) {
+        triggered = true;
         console.log(`Triggering automation "${automation.name}" for user ${userId} with delay ${automation.delay || 0}s`);
         
         // Wait for the configured delay (plus a small random jitter for human-like behavior)
@@ -48,11 +53,15 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
         await new Promise(resolve => setTimeout(resolve, 2000)); // Base typing time
         await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
 
-        await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type);
+        if (automation.response_type === "buttons") {
+          const buttonsData = JSON.parse(automation.buttons_json);
+          await whatsappManager.sendButtonsMessage(userId, jid, buttonsData.text, buttonsData.buttons);
+          await whatsappManager.log(userId, "success", `Bot "${automation.name}" (Menu) disparado para ${jid}`, { trigger: normalizedText, buttons: buttonsData });
+        } else {
+          await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type);
+          await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: automation.media_type });
+        }
         
-        // Log the bot action
-        await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: automation.media_type });
-
         // Log the automated message to messages table
         try {
           // Find contact id first
@@ -66,7 +75,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           await supabaseAdmin.from("messages").insert({
             user_id: userId,
             contact_id: contact?.id || "automated",
-            text: automation.response,
+            text: automation.response_type === "buttons" ? JSON.parse(automation.buttons_json).text : automation.response,
             type: "outbound",
             timestamp: new Date().toISOString(),
             is_automated: true,
@@ -76,6 +85,10 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           console.error("Error logging automated message to database:", e);
         }
       }
+    }
+
+    if (!triggered && isButton) {
+      await whatsappManager.sendMessage(userId, jid, "Opção ainda não configurada");
     }
   } catch (err) {
     console.error("Automation handler error:", err);

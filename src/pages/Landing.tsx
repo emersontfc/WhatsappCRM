@@ -1,8 +1,27 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Bot, Zap, Users, MessageSquare, Calendar, ShieldCheck, CheckCircle2, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "../components/ui/Button";
+import { cn } from "../lib/utils";
 
 export default function Landing() {
+  const [plans, setPlans] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchPlans = async () => {
+      try {
+        const response = await fetch("/api/auth/plans");
+        const data = await response.json();
+        if (data.success) {
+          setPlans(data.data);
+        }
+      } catch (err) {
+        console.error("Error fetching plans:", err);
+      }
+    };
+    fetchPlans();
+  }, []);
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
       {/* Navbar */}
@@ -45,7 +64,7 @@ export default function Landing() {
           </span>
         </h1>
         <p className="text-lg md:text-xl text-slate-600 max-w-3xl mx-auto mb-10 leading-relaxed">
-          O CRM completo para WhatsApp. Organize contatos, faça disparos em massa, agende mensagens e tenha um robô inteligente atendendo seus clientes 24h por dia.
+          O CRM completo para WhatsApp. Organize contatos, crie comunicação inteligente, agende mensagens e tenha um robô inteligente atendendo seus clientes 24h por dia.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <Link to="/login">
@@ -102,8 +121,8 @@ export default function Landing() {
               <div className="w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center mb-6">
                 <MessageSquare className="w-6 h-6 text-emerald-600" />
               </div>
-              <h3 className="text-xl font-bold text-slate-900 mb-3">Disparos em Massa</h3>
-              <p className="text-slate-600 leading-relaxed">Envie promoções, avisos e novidades para centenas de contatos de uma só vez, segmentando por tags específicas.</p>
+              <h3 className="text-xl font-bold text-slate-900 mb-3">Comunicação Inteligente</h3>
+              <p className="text-slate-600 leading-relaxed">Envie promoções, avisos e novidades para centenas de contatos de forma programada, segmentando por tags específicas.</p>
             </div>
 
             {/* Feature 3 */}
@@ -212,105 +231,56 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Planos simples e transparentes</h2>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto">Escolha o plano ideal para o momento do seu negócio. Sem fidelidade, cancele quando quiser.</p>
+            <p className="text-lg text-slate-600 max-w-2xl mx-auto">Escolha o plano ideal para o momento do seu negócio. Sem fidelidade. Cancele quando quiser.</p>
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            {/* Basic Plan */}
-            <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm hover:shadow-xl transition-shadow flex flex-col">
-              <h3 className="text-xl font-bold text-slate-900 mb-2">Básico</h3>
-              <p className="text-slate-500 text-sm mb-6">Para quem está começando a organizar o atendimento.</p>
-              <div className="mb-6">
-                <span className="text-4xl font-extrabold text-slate-900">MT 97</span>
-                <span className="text-slate-500">/mês</span>
-              </div>
-              <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>1 Conexão WhatsApp</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>CRM e Gestão de Tags</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>Disparos em Massa (Ilimitados)</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>Automações Simples (Palavras-chave)</span>
-                </li>
-              </ul>
-              <Link to="/login" className="w-full">
-                <Button variant="outline" className="w-full rounded-full h-12">Assinar Básico</Button>
-              </Link>
-            </div>
-
-            {/* Pro Plan */}
-            <div className="bg-emerald-600 rounded-3xl p-8 border border-emerald-500 shadow-2xl transform md:-translate-y-4 flex flex-col relative">
-              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-amber-400 to-orange-500 text-white px-4 py-1 rounded-full text-xs font-bold uppercase tracking-wider">
-                Mais Popular
-              </div>
-              <h3 className="text-xl font-bold text-white mb-2">Pro</h3>
-              <p className="text-emerald-100 text-sm mb-6">A revolução completa com Inteligência Artificial.</p>
-              <div className="mb-6">
-                <span className="text-4xl font-extrabold text-white">MT 197</span>
-                <span className="text-emerald-200">/mês</span>
-              </div>
-              <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-3 text-sm text-white">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-300 flex-shrink-0" />
-                  <span>Tudo do plano Básico</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-white">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-300 flex-shrink-0" />
-                  <span className="font-bold">Agente de Inteligência Artificial</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-white">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-300 flex-shrink-0" />
-                  <span>Agendamento de Mensagens</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-white">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-300 flex-shrink-0" />
-                  <span>Integração ChatGPT e Gemini</span>
-                </li>
-              </ul>
-              <Link to="/login" className="w-full">
-                <Button className="w-full rounded-full h-12 bg-white text-emerald-700 hover:bg-slate-50">Assinar Pro</Button>
-              </Link>
-            </div>
-
-            {/* Enterprise Plan */}
-            <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm hover:shadow-xl transition-shadow flex flex-col">
-              <h3 className="text-xl font-bold text-slate-900 mb-2">Enterprise</h3>
-              <p className="text-slate-500 text-sm mb-6">Para operações robustas e múltiplas conexões.</p>
-              <div className="mb-6">
-                <span className="text-4xl font-extrabold text-slate-900">MT 497</span>
-                <span className="text-slate-500">/mês</span>
-              </div>
-              <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>Tudo do plano Pro</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>Até 5 Conexões WhatsApp</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>Suporte Prioritário via WhatsApp</span>
-                </li>
-                <li className="flex items-center gap-3 text-sm text-slate-700">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                  <span>Treinamento da Equipe</span>
-                </li>
-              </ul>
-              <Link to="/login" className="w-full">
-                <Button variant="outline" className="w-full rounded-full h-12">Falar com Consultor</Button>
-              </Link>
-            </div>
+            {plans.map((plan, index) => {
+              const isPopular = plan.name === "Pro";
+              return (
+                <div key={plan.id} className={cn(
+                  "rounded-3xl p-8 border shadow-sm hover:shadow-xl transition-shadow flex flex-col relative",
+                  isPopular ? "bg-emerald-600 border-emerald-500 shadow-2xl transform md:-translate-y-4 text-white" : "bg-white border-slate-200"
+                )}>
+                  {isPopular && (
+                    <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-amber-400 to-orange-500 text-white px-4 py-1 rounded-full text-xs font-bold uppercase tracking-wider whitespace-nowrap">
+                      Mais Popular ⭐
+                    </div>
+                  )}
+                  <h3 className={cn("text-xl font-bold mb-2", isPopular ? "text-white" : "text-slate-900")}>{plan.name}</h3>
+                  <p className={cn("text-sm mb-6", isPopular ? "text-emerald-100" : "text-slate-500")}>
+                    {plan.name === "Starter" ? "Para começar com organização e automação básica" : 
+                     plan.name === "Pro" ? "Para atendimento profissional e crescimento" : 
+                     "Para empresas e operação completa"}
+                  </p>
+                  <div className="mb-6">
+                    <span className={cn("text-4xl font-extrabold", isPopular ? "text-white" : "text-slate-900")}>{plan.price} MZN</span>
+                    <span className={cn(isPopular ? "text-emerald-200" : "text-slate-500")}> / mês</span>
+                  </div>
+                  <ul className="space-y-4 mb-8 flex-1">
+                    <li className="flex items-center gap-3 text-sm">
+                      <CheckCircle2 className={cn("w-5 h-5 flex-shrink-0", isPopular ? "text-emerald-300" : "text-emerald-500")} />
+                      <span>{plan.max_connections} conexão WhatsApp</span>
+                    </li>
+                    <li className="flex items-center gap-3 text-sm">
+                      <CheckCircle2 className={cn("w-5 h-5 flex-shrink-0", isPopular ? "text-emerald-300" : "text-emerald-500")} />
+                      <span>{plan.max_contacts === 999999 ? "Contatos ilimitados" : `Até ${plan.max_contacts} contatos`}</span>
+                    </li>
+                    <li className="flex items-center gap-3 text-sm">
+                      <CheckCircle2 className={cn("w-5 h-5 flex-shrink-0", isPopular ? "text-emerald-300" : "text-emerald-500")} />
+                      <span>Até {plan.max_messages_per_day} mensagens por dia</span>
+                    </li>
+                    <li className="flex items-center gap-3 text-sm">
+                      <CheckCircle2 className={cn("w-5 h-5 flex-shrink-0", isPopular ? "text-emerald-300" : "text-emerald-500")} />
+                      <span>{plan.ai_enabled ? <span className="font-bold">IA integrada</span> : <span className="text-slate-500">Sem IA inteligente</span>}</span>
+                    </li>
+                  </ul>
+                  <Link to="/login" className="w-full">
+                    <Button className={cn("w-full rounded-full h-12", isPopular ? "bg-white text-emerald-700 hover:bg-slate-50" : "bg-slate-900 text-white hover:bg-slate-800")}>Começar Agora</Button>
+                  </Link>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>

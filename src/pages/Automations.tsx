@@ -17,18 +17,19 @@ import {
   Image as ImageIcon,
   FileText,
   Music,
-  X
+  X,
+  AlertTriangle,
+  CheckCircle2
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId, getUser, isAdmin as checkIsAdmin } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
-import { cn } from "../lib/utils";
+import { cn, slugify } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { useSubscription } from "../lib/useSubscription";
 import { UpgradePrompt } from "../components/UpgradePrompt";
-import { PLAN_LIMITS } from "../types";
 
 interface Automation {
   id: string;
@@ -41,11 +42,13 @@ interface Automation {
   created_at: string;
   media_url?: string;
   media_type?: string;
+  response_type?: "text" | "audio" | "buttons";
+  buttons_json?: string;
 }
 
 export default function Automations() {
   const navigate = useNavigate();
-  const { isActivated, loading: activationLoading } = useActivation();
+  const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const { subscription, loading: subLoading } = useSubscription();
   const [loading, setLoading] = useState(true);
   const [automations, setAutomations] = useState<Automation[]>([]);
@@ -53,6 +56,7 @@ export default function Automations() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const responseTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [newAutomation, setNewAutomation] = useState<Partial<Automation>>({
     name: "",
     trigger: "keyword",
@@ -61,8 +65,26 @@ export default function Automations() {
     active: true,
     delay: 2,
     media_url: "",
-    media_type: ""
+    media_type: "",
+    response_type: "text",
+    buttons_json: JSON.stringify({ text: "", buttons: [] })
   });
+
+  const createResponseForButton = (label: string) => {
+    const slug = slugify(label);
+    setNewAutomation({
+      name: `Resposta para: ${label}`,
+      trigger: "keyword",
+      keyword: slug,
+      response: "",
+      active: true,
+      delay: 2,
+      response_type: "text",
+    });
+    setIsAdding(true);
+    setEditingId(null);
+    setTimeout(() => responseTextareaRef.current?.focus(), 100);
+  };
 
   useEffect(() => {
     if (activationLoading) return;
@@ -162,12 +184,13 @@ export default function Automations() {
   };
 
   const handleAdd = async () => {
-    if (subscription && automations.length >= PLAN_LIMITS[subscription.plan].max_automations) {
+    const maxAutomations = planDetails?.automation_level === 'basic' ? 5 : 100;
+    if (automations.length >= maxAutomations) {
       toast.error("Limite de automações atingido!");
       return;
     }
     
-    if (!newAutomation.name || !newAutomation.response) {
+    if (!newAutomation.name || (!newAutomation.response && newAutomation.response_type !== 'buttons')) {
       toast.error("Preencha o nome e a resposta.");
       return;
     }
@@ -233,7 +256,9 @@ export default function Automations() {
       active: auto.active,
       delay: auto.delay,
       media_url: auto.media_url,
-      media_type: auto.media_type
+      media_type: auto.media_type,
+      response_type: auto.response_type || "text",
+      buttons_json: auto.buttons_json || JSON.stringify({ text: "", buttons: [] })
     });
     setEditingId(auto.id);
     setIsAdding(true);
@@ -334,8 +359,8 @@ export default function Automations() {
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Automações</h2>
           <p className="text-slate-500">Crie fluxos automáticos para responder seus clientes.</p>
-          {subscription && automations.length >= PLAN_LIMITS[subscription.plan].max_automations && (
-            <UpgradePrompt message={`Você atingiu o limite de ${PLAN_LIMITS[subscription.plan].max_automations} automações do seu plano ${subscription.plan}.`} />
+          {planDetails && automations.length >= (planDetails.automation_level === 'basic' ? 5 : 100) && (
+            <UpgradePrompt message={`Você atingiu o limite de ${planDetails.automation_level === 'basic' ? 5 : 100} automações do seu plano.`} />
           )}
         </div>
         <Button onClick={() => setIsAdding(true)} className="gap-2">
@@ -412,14 +437,94 @@ export default function Automations() {
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-500">Resposta Automática</label>
-              <textarea 
-                className="flex min-h-[100px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                placeholder="Digite a mensagem que será enviada..."
-                value={newAutomation.response}
-                onChange={e => setNewAutomation({...newAutomation, response: e.target.value})}
-              />
+              <label className="text-xs font-bold uppercase text-slate-500">Tipo de Resposta</label>
+              <select 
+                className="flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                value={newAutomation.response_type || "text"}
+                onChange={e => setNewAutomation({...newAutomation, response_type: e.target.value as any})}
+              >
+                <option value="text">Texto</option>
+                <option value="audio">Áudio</option>
+                <option value="buttons">Menu de Botões</option>
+              </select>
             </div>
+
+            {newAutomation.response_type === "buttons" ? (
+              <div className="space-y-4 border p-4 rounded-lg bg-slate-50">
+                <Input 
+                  placeholder="Título do Menu (Ex: Como posso ajudar?)" 
+                  value={JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}').text}
+                  onChange={e => {
+                    const current = JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}');
+                    setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, text: e.target.value})});
+                  }}
+                />
+                {JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}').buttons.map((btn: any, index: number) => {
+                  const slug = slugify(btn.label);
+                  const automationExists = automations.some(a => a.trigger === 'keyword' && a.keyword === slug);
+                  
+                  return (
+                    <div key={index} className="flex flex-col gap-2 p-3 border rounded-lg bg-white">
+                      <div className="flex items-center justify-between">
+                        <Input 
+                          placeholder="Label do Botão" 
+                          value={btn.label}
+                          onChange={e => {
+                            const current = JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}');
+                            const newButtons = [...current.buttons];
+                            newButtons[index].label = e.target.value;
+                            newButtons[index].id = slugify(e.target.value);
+                            setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: newButtons})});
+                          }}
+                        />
+                        <Button variant="ghost" className="shrink-0" onClick={() => {
+                            const current = JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}');
+                            const newButtons = current.buttons.filter((_: any, i: number) => i !== index);
+                            setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: newButtons})});
+                        }}>
+                          <X size={16} />
+                        </Button>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 text-xs">
+                        {automationExists ? (
+                          <span className="flex items-center gap-1 text-emerald-600 font-medium">
+                            <CheckCircle2 size={14} /> Configurado
+                          </span>
+                        ) : (
+                          <div className="flex flex-col gap-1 w-full">
+                            <span className="flex items-center gap-1 text-red-600 font-medium">
+                              <AlertTriangle size={14} /> Sem resposta
+                            </span>
+                            <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => createResponseForButton(btn.label)}>
+                              Criar resposta para este botão
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}').buttons.length < 3 && (
+                  <Button variant="outline" onClick={() => {
+                    const current = JSON.parse(newAutomation.buttons_json || '{"text": "", "buttons": []}');
+                    setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: [...current.buttons, {id: "", label: ""}]})});
+                  }}>
+                    Adicionar Botão
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-slate-500">Resposta Automática</label>
+                <textarea 
+                  className="flex min-h-[100px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  placeholder="Digite a mensagem que será enviada..."
+                  value={newAutomation.response}
+                  onChange={e => setNewAutomation({...newAutomation, response: e.target.value})}
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase text-slate-500">Anexo (Opcional)</label>

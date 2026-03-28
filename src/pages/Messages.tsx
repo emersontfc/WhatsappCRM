@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, User, Phone, Search, Sparkles, MessageSquare, ChevronLeft } from "lucide-react";
+import { Send, User, Phone, Search, Sparkles, MessageSquare, ChevronLeft, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId } from "../supabase";
 import { Button } from "../components/ui/Button";
@@ -8,6 +8,8 @@ import { Input } from "../components/ui/Input";
 import { Card, CardContent } from "../components/ui/Card";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/api";
+import { useActivation } from "../lib/useActivation";
+import { UpgradePrompt } from "../components/UpgradePrompt";
 
 interface Contact {
   id: string;
@@ -22,38 +24,48 @@ interface Message {
   timestamp: string;
 }
 
+const getInitials = (name: string) => {
+  return name
+    .split(' ')
+    .map(n => n[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || '?';
+};
+
+const getColorClass = (name: string) => {
+  const colors = [
+    'bg-blue-100 text-blue-700',
+    'bg-emerald-100 text-emerald-700',
+    'bg-amber-100 text-amber-700',
+    'bg-purple-100 text-purple-700',
+    'bg-rose-100 text-rose-700',
+    'bg-indigo-100 text-indigo-700',
+    'bg-cyan-100 text-cyan-700',
+    'bg-fuchsia-100 text-fuchsia-700',
+  ];
+  const index = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return colors[index % colors.length];
+};
+
 export default function Messages() {
   const [searchParams] = useSearchParams();
+  const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [isActivated, setIsActivated] = useState(true);
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (activationLoading) return;
     let isMounted = true;
 
     const init = async () => {
       try {
-        const response = await apiFetch("/api/ai/subscription");
-        if (isMounted && response.success && response.data) {
-          const sub = response.data;
-          if (sub?.role === "admin") {
-            setIsActivated(true);
-          } else {
-            if (sub?.isActivated === true) {
-              setIsActivated(true);
-            } else if (sub?.expires_at) {
-              setIsActivated(new Date(sub.expires_at) > new Date());
-            } else {
-              setIsActivated(false);
-            }
-          }
-        }
-
         const userId = await getUserId();
         if (!userId) return;
 
@@ -61,7 +73,8 @@ export default function Messages() {
         const { data: initialContacts } = await supabase
           .from("contacts")
           .select("*")
-          .eq("user_id", userId);
+          .eq("user_id", userId)
+          .order("name", { ascending: true });
         
         if (isMounted && initialContacts) {
           setContacts(initialContacts);
@@ -104,7 +117,7 @@ export default function Messages() {
 
     init();
     return () => { isMounted = false; };
-  }, []);
+  }, [activationLoading]);
 
   useEffect(() => {
     if (!selectedContact) return;
@@ -160,6 +173,22 @@ export default function Messages() {
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const refreshContacts = async () => {
+    const userId = await getUserId();
+    if (!userId) return;
+    
+    const { data: updatedContacts } = await supabase
+      .from("contacts")
+      .select("*")
+      .eq("user_id", userId)
+      .order("name", { ascending: true });
+    
+    if (updatedContacts) {
+      setContacts(updatedContacts);
+      toast.success("Contatos atualizados!");
+    }
+  };
 
   const handleSelectContact = (contact: Contact) => {
     setSelectedContact(contact);
@@ -225,28 +254,40 @@ export default function Messages() {
         "w-full lg:w-80 flex flex-col overflow-hidden transition-all duration-300",
         showChatOnMobile ? "hidden lg:flex" : "flex"
       )}>
-        <div className="p-4 border-b border-slate-100">
-          <div className="relative">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-2">
+          <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <Input placeholder="Buscar chat..." className="pl-9 h-9 text-xs" />
+            <Input 
+              placeholder="Buscar chat..." 
+              className="pl-9 h-9 text-xs" 
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
+          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={refreshContacts}>
+            <Zap size={16} className="text-emerald-600" />
+          </Button>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {contacts.map((contact) => (
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {contacts
+            .filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search))
+            .map((contact) => (
             <button
               key={contact.id}
               onClick={() => handleSelectContact(contact)}
               className={cn(
-                "w-full p-4 flex items-center gap-3 hover:bg-slate-50 transition-colors text-left border-b border-slate-50",
-                selectedContact?.id === contact.id && "bg-emerald-50/50 border-emerald-100"
+                "w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-all text-left rounded-xl border border-transparent",
+                selectedContact?.id === contact.id ? "bg-emerald-50/80 border-emerald-100 shadow-sm" : "hover:border-slate-100"
               )}
             >
-              <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
-                <User size={20} />
+              <div className={cn("h-11 w-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 shadow-sm", getColorClass(contact.name))}>
+                {getInitials(contact.name)}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm text-slate-900 truncate">{contact.name}</p>
-                <p className="text-xs text-slate-500 truncate">{contact.phone}</p>
+                <p className={cn("font-semibold text-sm truncate", selectedContact?.id === contact.id ? "text-emerald-900" : "text-slate-900")}>
+                  {contact.name}
+                </p>
+                <p className="text-xs text-slate-500 truncate font-medium mt-0.5">{contact.phone}</p>
               </div>
             </button>
           ))}
@@ -270,12 +311,12 @@ export default function Messages() {
                 >
                   <ChevronLeft size={20} />
                 </Button>
-                <div className="h-10 w-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 shrink-0">
-                  <User size={20} />
+                <div className={cn("h-10 w-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 shadow-sm", getColorClass(selectedContact.name))}>
+                  {getInitials(selectedContact.name)}
                 </div>
                 <div className="min-w-0">
                   <p className="font-bold text-sm truncate">{selectedContact.name}</p>
-                  <p className="text-xs text-emerald-600 flex items-center gap-1">
+                  <p className="text-xs text-emerald-600 flex items-center gap-1 font-medium mt-0.5">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
                     Online
                   </p>

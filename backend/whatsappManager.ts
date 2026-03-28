@@ -87,6 +87,13 @@ class WhatsAppManager {
     }
   }
 
+  public getActiveSessionsCount(userId: string): number {
+    // Currently, the system only supports 1 session per user ID.
+    // If we expand to multiple sessions, this would count them.
+    const session = this.sessions.get(userId);
+    return session && session.status === "connected" ? 1 : 0;
+  }
+
   async createSession(userId: string, phoneNumber?: string, onUpdate?: (status: string, data?: string) => void) {
     try {
       const existingSession = this.sessions.get(userId);
@@ -294,11 +301,13 @@ class WhatsAppManager {
                        msg.message?.extendedTextMessage?.text || 
                        msg.message?.imageMessage?.caption ||
                        msg.message?.videoMessage?.caption ||
+                       msg.message?.buttonsResponseMessage?.selectedButtonId ||
                        "";
           
           if (!msg.key.fromMe && text) {
             console.log(`Processing incoming message from ${msg.key.remoteJid} for automation: "${text}"`);
-            await handleIncomingMessage(this, userId, msg.key.remoteJid!, text);
+            const isButton = !!msg.message?.buttonsResponseMessage?.selectedButtonId;
+            await handleIncomingMessage(this, userId, msg.key.remoteJid!, text, isButton);
             await handleAgentMessage(this, userId, msg.key.remoteJid!, text);
           }
           
@@ -388,6 +397,33 @@ class WhatsAppManager {
         .maybeSingle();
 
       if (!existingContact) {
+        // Enforce max_contacts limit
+        const { data: sub } = await supabaseAdmin
+          .from("subscriptions")
+          .select("plan_id")
+          .eq("user_id", userId)
+          .single();
+
+        if (sub?.plan_id) {
+          const { data: planData } = await supabaseAdmin
+            .from("plans")
+            .select("max_contacts")
+            .eq("id", sub.plan_id)
+            .single();
+
+          if (planData) {
+            const { count } = await supabaseAdmin
+              .from("contacts")
+              .select("*", { count: 'exact', head: true })
+              .eq("user_id", userId);
+
+            if (count !== null && count >= planData.max_contacts) {
+              console.log(`[WhatsApp] User ${userId} reached max contacts limit (${count}/${planData.max_contacts}). Skipping contact sync.`);
+              return;
+            }
+          }
+        }
+
         await supabaseAdmin.from("contacts").insert({
           user_id: userId,
           name,
@@ -460,10 +496,32 @@ class WhatsAppManager {
   }
 
   async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string) {
-    const session = this.sessions.get(userId);
+    let session = this.sessions.get(userId);
+    
+    // Attempt auto-reconnect if session files exist but session is not in memory or not connected
+    if (!session || session.status !== "connected") {
+      const sessionDir = path.join(process.cwd(), "sessions", userId);
+      if (fs.existsSync(sessionDir)) {
+        const isPaused = fs.existsSync(path.join(sessionDir, "paused.txt"));
+        if (!isPaused) {
+          console.log(`Auto-reconnecting session for user ${userId} before sending message.`);
+          await this.createSession(userId);
+          
+          // Wait up to 10 seconds for connection
+          let attempts = 0;
+          while (attempts < 20) {
+            session = this.sessions.get(userId);
+            if (session?.status === "connected") break;
+            await new Promise(resolve => setTimeout(resolve, 500));
+            attempts++;
+          }
+        }
+      }
+    }
+
     if (!session || session.status !== "connected") {
       await this.log(userId, "error", "Falha ao enviar mensagem: Sessão não conectada.");
-      throw new Error("WhatsApp session not connected");
+      throw new Error("WhatsApp session not connected. Please go to the WhatsApp tab and reconnect.");
     }
     
     if (mediaUrl && mediaType) {
@@ -472,7 +530,7 @@ class WhatsAppManager {
         if (mediaType === 'image') {
           return await session.socket.sendMessage(jid, { image: { url: mediaUrl }, caption: text });
         } else if (mediaType === 'audio') {
-          return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: 'audio/mp4', ptt: true });
+          return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: 'audio/ogg', ptt: true });
         } else if (mediaType === 'document') {
           // Extract filename from URL or use a default
           const fileName = mediaUrl.split('/').pop() || 'documento';
@@ -488,6 +546,50 @@ class WhatsAppManager {
 
     await this.log(userId, "info", `Enviando mensagem para ${jid}: "${text.substring(0, 50)}..."`);
     return await session.socket.sendMessage(jid, { text });
+  }
+
+  async sendButtonsMessage(userId: string, jid: string, text: string, buttons: { id: string, label: string }[]) {
+    let session = this.sessions.get(userId);
+    
+    // Attempt auto-reconnect if session files exist but session is not in memory or not connected
+    if (!session || session.status !== "connected") {
+      const sessionDir = path.join(process.cwd(), "sessions", userId);
+      if (fs.existsSync(sessionDir)) {
+        const isPaused = fs.existsSync(path.join(sessionDir, "paused.txt"));
+        if (!isPaused) {
+          console.log(`Auto-reconnecting session for user ${userId} before sending buttons.`);
+          await this.createSession(userId);
+          
+          // Wait up to 10 seconds for connection
+          let attempts = 0;
+          while (attempts < 20) {
+            session = this.sessions.get(userId);
+            if (session?.status === "connected") break;
+            await new Promise(resolve => setTimeout(resolve, 500));
+            attempts++;
+          }
+        }
+      }
+    }
+
+    if (!session || session.status !== "connected") {
+      await this.log(userId, "error", "Falha ao enviar botões: Sessão não conectada.");
+      throw new Error("WhatsApp session not connected. Please go to the WhatsApp tab and reconnect.");
+    }
+
+    const buttonMessage = {
+      text: text,
+      footer: "Selecione uma opção",
+      buttons: buttons.map(b => ({
+        buttonId: b.id,
+        buttonText: { displayText: b.label },
+        type: 1
+      })),
+      headerType: 1
+    };
+
+    await this.log(userId, "info", `Enviando menu de botões para ${jid}: "${text.substring(0, 50)}..."`);
+    return await session.socket.sendMessage(jid, buttonMessage);
   }
 
   async sendPresenceUpdate(userId: string, jid: string, presence: "composing" | "recording" | "paused") {

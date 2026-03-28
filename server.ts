@@ -7,6 +7,8 @@ import aiRoutes from "./backend/routes/ai";
 import adminRoutes from "./backend/routes/admin";
 import authRoutes from "./backend/routes/auth";
 import agentRoutes from "./backend/routes/agent";
+import templateRoutes from "./backend/routes/templates";
+import packRoutes from "./backend/routes/packs";
 import { startScheduler } from "./backend/scheduler";
 import { authenticate } from "./backend/middleware/auth";
 
@@ -39,6 +41,8 @@ async function startServer() {
   }, adminRoutes);
 
   app.use("/api/agent", authenticate, agentRoutes);
+  app.use("/api/templates", authenticate, templateRoutes);
+  app.use("/api/packs", authenticate, packRoutes);
 
   // Start background tasks
   startScheduler();
