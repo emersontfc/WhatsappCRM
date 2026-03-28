@@ -59,13 +59,12 @@ async function startServer() {
     } catch (err) {
       console.error("Failed to initialize Vite server:", err);
     }
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
   }
+
+  // New Parametres
+  app.get("/", (req, res) => {
+    res.send ("API NO TOLETO");
+     });
 
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://localhost:${PORT}`);
