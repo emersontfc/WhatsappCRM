@@ -81,6 +81,17 @@ async function startServer() {
   res.json({ qr: session.qr });
 });
 
+  app.post('/connect/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    await whatsappManager.createSession(userId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao criar sessão' });
+  }
+});
+
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
