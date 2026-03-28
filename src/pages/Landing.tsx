@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Bot, Zap, Users, MessageSquare, Calendar, ShieldCheck, CheckCircle2, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { cn } from "../lib/utils";
+import { apiFetch } from "../lib/api";
 
 export default function Landing() {
   const [plans, setPlans] = useState<any[]>([]);
@@ -10,8 +11,7 @@ export default function Landing() {
   useEffect(() => {
     const fetchPlans = async () => {
       try {
-        const response = await fetch("/api/auth/plans");
-        const data = await response.json();
+        const data = await apiFetch("/api/auth/plans");
         if (data.success) {
           setPlans(data.data);
         }

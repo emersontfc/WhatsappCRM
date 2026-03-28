@@ -360,7 +360,10 @@ export default function Automations() {
           <h2 className="text-2xl font-bold text-slate-900">Automações</h2>
           <p className="text-slate-500">Crie fluxos automáticos para responder seus clientes.</p>
           {planDetails && automations.length >= (planDetails.automation_level === 'basic' ? 5 : 100) && (
-            <UpgradePrompt message={`Você atingiu o limite de ${planDetails.automation_level === 'basic' ? 5 : 100} automações do seu plano.`} />
+            <UpgradePrompt 
+              title="Limite de Automações Atingido"
+              description={`Você atingiu o limite de ${planDetails.automation_level === 'basic' ? 5 : 100} automações do seu plano.`} 
+            />
           )}
         </div>
         <Button onClick={() => setIsAdding(true)} className="gap-2">

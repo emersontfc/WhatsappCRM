@@ -1,76 +1,141 @@
 import express from "express";
 import { whatsappManager } from "../whatsappManager";
 import { AuthRequest } from "../middleware/auth";
-import { requirePlan } from "../middleware/requirePlan";
+import { requirePlan, PlanRequest } from "../middleware/requirePlan";
 import { supabaseAdmin } from "../supabaseAdmin";
 
 const router = express.Router();
 
-router.post("/connect", requirePlan, async (req: AuthRequest, res) => {
+// Debug middleware for this router
+router.use((req, res, next) => {
+  console.log(`[WhatsApp Router] ${req.method} ${req.url}`);
+  next();
+});
+
+router.post("/connect", requirePlan, async (req: PlanRequest, res) => {
   const userId = req.user?.id;
   const { phoneNumber } = req.body;
+  
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
-  // Enforce max connections
-  const activeSessions = whatsappManager.getActiveSessionsCount(userId);
-  const maxConnections = req.plan?.max_connections || 1;
-  
-  if (activeSessions >= maxConnections && !whatsappManager.getSession(userId)) {
-    return res.status(403).json({ 
-      success: false, 
-      error: `Limite de conexões atingido. Seu plano permite ${maxConnections} conexão(ões).` 
-    });
-  }
-
   try {
+    await whatsappManager.deleteSession(userId);
     await whatsappManager.createSession(userId, phoneNumber);
-    
-    // Wait for QR or Pairing Code
-    let session = whatsappManager.getSession(userId);
-    let attempts = 0;
-    while (attempts < 10 && session?.status === "connecting" && !session?.qr && !session?.pairingCode) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      session = whatsappManager.getSession(userId);
-      attempts++;
-    }
-    
-    res.json({ 
-      success: true,
-      status: session?.status || "connecting", 
-      qr: session?.qr,
-      pairingCode: session?.pairingCode
-    });
-  } catch (err: any) {
-    console.error("Failed to connect WhatsApp:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const session = whatsappManager.getSession(userId);
+    res.json({ success: true, status: session?.status || "connecting" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-import fs from "fs";
-import path from "path";
+router.post("/connect/:userId", requirePlan, async (req: PlanRequest, res) => {
+  const userId = req.params.userId;
+  const { phoneNumber } = req.body;
+  
+  if (req.user?.id !== userId && req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, error: "Unauthorized" });
+  }
 
-router.get("/status", (req: AuthRequest, res) => {
+  try {
+    await whatsappManager.deleteSession(userId);
+    await whatsappManager.createSession(userId, phoneNumber);
+    const session = whatsappManager.getSession(userId);
+    res.json({ success: true, status: session?.status || "connecting" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get("/qr", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
   const session = whatsappManager.getSession(userId);
-  let status = session?.status || "disconnected";
+  if (!session) return res.json({ success: true, status: "disconnected" });
 
-  // Check if session is paused
-  if (status === "disconnected") {
-    const pausedFile = path.join(process.cwd(), "sessions", userId as string, "paused.txt");
-    if (fs.existsSync(pausedFile)) {
-      status = "paused";
-    }
+  res.json({
+    success: true,
+    qr: session.qr,
+    status: session.status,
+    pairingCode: session.pairingCode
+  });
+});
+
+router.get("/qr/:userId", (req: AuthRequest, res) => {
+  const userId = req.params.userId;
+  if (req.user?.id !== userId && req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, error: "Unauthorized" });
   }
 
-  res.json({ 
+  const session = whatsappManager.getSession(userId);
+  if (!session) return res.json({ success: true, status: "disconnected" });
+
+  res.json({
     success: true,
-    status, 
-    qr: session?.qr,
-    pairingCode: session?.pairingCode,
-    me: whatsappManager.getMe(userId as string)
+    qr: session.qr,
+    status: session.status,
+    pairingCode: session.pairingCode
   });
+});
+
+router.get("/status", (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  console.log(`[WhatsApp Status] Checking status for user: ${userId}`);
+  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+  const session = whatsappManager.getSession(userId);
+  const status = session?.status || "disconnected";
+
+  res.json({
+    success: true,
+    status,
+    connected: status === "connected"
+  });
+});
+
+router.get("/status/:userId", (req: AuthRequest, res) => {
+  const userId = req.params.userId;
+  console.log(`[WhatsApp Status] Checking status for specific user: ${userId} (Requested by: ${req.user?.id})`);
+  if (req.user?.id !== userId && req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, error: "Unauthorized" });
+  }
+
+  const session = whatsappManager.getSession(userId);
+  const status = session?.status || "disconnected";
+
+  res.json({
+    success: true,
+    status,
+    connected: status === "connected"
+  });
+});
+
+router.post("/reset", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+  try {
+    await whatsappManager.deleteSession(userId);
+    await whatsappManager.createSession(userId);
+    res.json({ success: true, message: "Sessão resetada com sucesso" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post("/reset/:userId", async (req: AuthRequest, res) => {
+  const userId = req.params.userId;
+  if (req.user?.id !== userId && req.user?.role !== 'admin') {
+    return res.status(403).json({ success: false, error: "Unauthorized" });
+  }
+
+  try {
+    await whatsappManager.deleteSession(userId);
+    await whatsappManager.createSession(userId);
+    res.json({ success: true, message: "Sessão resetada com sucesso" });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 router.get("/me", (req: AuthRequest, res) => {
@@ -81,8 +146,8 @@ router.get("/me", (req: AuthRequest, res) => {
   res.json({ success: true, me });
 });
 
-router.post("/send", requirePlan, async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
+router.post("/send/:userId", requirePlan, async (req: PlanRequest, res) => {
+  const { userId } = req.params;
   let { jid, text, to } = req.body;
   
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
@@ -132,9 +197,8 @@ router.post("/send", requirePlan, async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/test", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+router.post("/test/:userId", async (req: AuthRequest, res) => {
+  const { userId } = req.params;
 
   try {
     const me = whatsappManager.getMe(userId);
@@ -150,22 +214,8 @@ router.post("/test", async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/reset", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
-
-  try {
-    const result = await whatsappManager.resetSession(userId);
-    res.json({ success: true, ...result });
-  } catch (err: any) {
-    console.error("Failed to reset WhatsApp:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post("/pause", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+router.post("/pause/:userId", async (req: AuthRequest, res) => {
+  const { userId } = req.params;
 
   try {
     const result = await whatsappManager.pauseSession(userId);
@@ -174,6 +224,15 @@ router.post("/pause", async (req: AuthRequest, res) => {
     console.error("Failed to pause WhatsApp:", err);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// Catch-all for unmatched WhatsApp routes to help debug 404s
+router.use((req, res) => {
+  console.warn(`[WhatsApp Route Not Found] ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ 
+    success: false, 
+    error: `Rota não encontrada: ${req.method} ${req.originalUrl}` 
+  });
 });
 
 export default router;

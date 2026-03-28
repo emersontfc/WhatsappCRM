@@ -4,6 +4,7 @@ import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle } from "lucide-re
 import { supabase } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
+import { apiFetch } from "../lib/api";
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
@@ -20,16 +21,10 @@ export default function Login() {
     setError(null);
     try {
       if (isRegistering) {
-        const res = await fetch("/api/auth/register", {
+        const data = await apiFetch("/api/auth/register", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, password, name }),
         });
-
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => ({}));
-          throw new Error(errorData.error || "Falha ao criar conta.");
-        }
 
         // After successful registration, sign in automatically
         const { error: signInError } = await supabase.auth.signInWithPassword({

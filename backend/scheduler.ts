@@ -7,7 +7,8 @@ export function startScheduler() {
   setInterval(async () => {
     try {
       // Keep-alive ping
-      await fetch("http://localhost:3000/api/health").catch(() => {});
+      const port = process.env.PORT || 3000;
+      await fetch(`http://localhost:${port}/api/health`).catch(() => {});
 
       const now = new Date().toISOString();
       

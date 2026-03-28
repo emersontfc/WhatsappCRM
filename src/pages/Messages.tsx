@@ -57,6 +57,7 @@ export default function Messages() {
   const [newMessage, setNewMessage] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -66,14 +67,15 @@ export default function Messages() {
 
     const init = async () => {
       try {
-        const userId = await getUserId();
-        if (!userId) return;
+        const uId = await getUserId();
+        if (!uId || uId === "guest-user") return;
+        setUserId(uId);
 
         // Initial contacts fetch
         const { data: initialContacts } = await supabase
           .from("contacts")
           .select("*")
-          .eq("user_id", userId)
+          .eq("user_id", uId)
           .order("name", { ascending: true });
         
         if (isMounted && initialContacts) {
@@ -97,12 +99,12 @@ export default function Messages() {
             event: '*', 
             schema: 'public', 
             table: 'contacts',
-            filter: `user_id=eq.${userId}`
+            filter: `user_id=eq.${uId}`
           }, async () => {
             const { data: updatedContacts } = await supabase
               .from("contacts")
               .select("*")
-              .eq("user_id", userId);
+              .eq("user_id", uId);
             if (isMounted && updatedContacts) setContacts(updatedContacts);
           })
           .subscribe();
@@ -124,7 +126,6 @@ export default function Messages() {
     let isMounted = true;
 
     const initMessages = async () => {
-      const userId = await getUserId();
       if (!userId) return;
 
       // Initial messages fetch
@@ -168,7 +169,7 @@ export default function Messages() {
 
     initMessages();
     return () => { isMounted = false; };
-  }, [selectedContact]);
+  }, [selectedContact, userId]);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -197,13 +198,13 @@ export default function Messages() {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedContact) return;
+    if (!newMessage.trim() || !selectedContact || !userId) return;
     if (!isActivated) return;
 
     setLoading(true);
     try {
       const phone = selectedContact.phone.replace(/\D/g, "");
-      const response = await apiFetch("/api/whatsapp/send", {
+      const response = await apiFetch(`/api/whatsapp/send/${userId}`, {
         method: "POST",
         body: JSON.stringify({
           jid: `${phone}@s.whatsapp.net`,

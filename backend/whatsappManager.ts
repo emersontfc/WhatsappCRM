@@ -22,7 +22,7 @@ interface Session {
   socket: WASocket;
   qr?: string;
   pairingCode?: string;
-  status: "connecting" | "qr" | "pairing" | "connected" | "disconnected" | "paused";
+  status: "connecting" | "qr" | "pairing" | "connected" | "disconnected";
 }
 
 class WhatsAppManager {
@@ -184,81 +184,45 @@ class WhatsAppManager {
     socket.ev.on("connection.update", async (update) => {
       try {
         const { connection, lastDisconnect, qr } = update;
+        const session = this.sessions.get(userId);
+        if (!session) return;
 
-        if (qr && !phoneNumber) {
-          const qrDataUrl = await QRCode.toDataURL(qr);
-          const session = this.sessions.get(userId);
-          if (session) {
+        if (qr) {
+          try {
+            const qrDataUrl = await QRCode.toDataURL(qr);
             session.qr = qrDataUrl;
             session.status = "qr";
             onUpdate?.("qr", qrDataUrl);
-            await this.log(userId, "info", "QR Code gerado com sucesso.");
+            await this.log(userId, "info", "QR Code gerado.");
+          } catch (err) {
+            console.error(`Failed to generate QR Data URL for ${userId}:`, err);
           }
+        }
+
+        if (connection === "open") {
+          session.status = "connected";
+          session.qr = undefined;
+          await this.log(userId, "success", "WhatsApp conectado!");
+          onUpdate?.("connected");
         }
 
         if (connection === "close") {
           const boomErr = lastDisconnect?.error as Boom;
           const statusCode = boomErr?.output?.statusCode;
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-          console.error(`[WhatsApp] Conexão fechada para ${userId}. Motivo: ${boomErr?.message || "Desconhecido"} (Code: ${statusCode}). Reconectando: ${shouldReconnect}`);
           
-          const isPaused = fs.existsSync(path.join(process.cwd(), "sessions", userId, "paused.txt"));
-          let reconnectDelay = 2000;
-          
-          if (!isPaused) {
-            const isQrTimeout = boomErr?.message === "QR refs attempts ended";
-            const isRestartRequired = statusCode === 515 || statusCode === DisconnectReason.restartRequired;
-            
-            let logLevel = "error";
-            let logMsg = `Conexão fechada: ${boomErr?.message || "Desconhecido"}. Reconectando: ${shouldReconnect}`;
+          console.log(`[WhatsApp] Connection closed for ${userId}. Reconnecting: ${shouldReconnect}`);
+          session.status = "disconnected";
+          onUpdate?.("disconnected");
 
-            if (statusCode === DisconnectReason.loggedOut) {
-              logLevel = "warning";
-            } else if (isQrTimeout) {
-              logLevel = "warning";
-              logMsg = "Tempo limite do QR Code excedido. Gerando novo...";
-            } else if (isRestartRequired) {
-              logLevel = "warning";
-              logMsg = "Conexão instável (Stream Errored). Tentando reconectar em 5 segundos...";
-              reconnectDelay = 5000; // More time for 515 errors
-            }
-
-            await this.log(userId, logLevel, logMsg);
-          }
-          
+          // Reset session safely
           this.sessions.delete(userId);
-          
-          // Clear session data if bad session or connection failed
-          if (statusCode === DisconnectReason.badSession || statusCode === 405) {
-            console.log(`Clearing corrupted session for ${userId}`);
-            const sessionDir = path.join(process.cwd(), "sessions", userId);
-            if (fs.existsSync(sessionDir)) {
-              fs.rmSync(sessionDir, { recursive: true, force: true });
-            }
-          }
 
-          if (shouldReconnect && statusCode !== DisconnectReason.badSession && statusCode !== 405) {
-            if (!isPaused) {
-              setTimeout(() => {
-                console.log(`[WhatsApp] Attempting reconnection for ${userId} (Reason: ${statusCode})`);
-                this.createSession(userId, phoneNumber, onUpdate);
-              }, reconnectDelay);
-            } else {
-              console.log(`Session for ${userId} is paused, not reconnecting automatically.`);
-              onUpdate?.("disconnected");
-            }
-          } else {
-            onUpdate?.("disconnected");
-          }
-        } else if (connection === "open") {
-          console.log(`Connection opened for ${userId}`);
-          await this.log(userId, "success", "WhatsApp conectado com sucesso!");
-          const session = this.sessions.get(userId);
-          if (session) {
-            session.status = "connected";
-            session.qr = undefined;
-            session.pairingCode = undefined;
-            onUpdate?.("connected");
+          if (shouldReconnect) {
+            setTimeout(() => {
+              console.log(`[WhatsApp] Auto-reconnecting for ${userId}...`);
+              this.createSession(userId, phoneNumber, onUpdate);
+            }, 3000);
           }
         }
       } catch (err) {
@@ -598,20 +562,29 @@ class WhatsAppManager {
     return await session.socket.sendPresenceUpdate(presence, jid);
   }
 
-  async resetSession(userId: string) {
+  async deleteSession(userId: string) {
     const session = this.sessions.get(userId);
     if (session) {
       try {
-        await session.socket.logout();
+        session.socket.end(undefined);
       } catch (e) {}
       this.sessions.delete(userId);
     }
-    await this.log(userId, "warning", "Sessão resetada pelo usuário.");
+    
+    // Clear session files if needed
     const sessionDir = path.join(process.cwd(), "sessions", userId);
     if (fs.existsSync(sessionDir)) {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch (e) {
+        console.error(`Failed to delete session directory for ${userId}:`, e);
+      }
     }
-    return { success: true };
+  }
+
+  getSessionStatus(userId: string) {
+    const session = this.sessions.get(userId);
+    return session?.status || "disconnected";
   }
 
   async pauseSession(userId: string) {

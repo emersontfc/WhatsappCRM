@@ -149,145 +149,92 @@ export default function Dashboard() {
     }
   };
 
-  const checkStatus = async (userId: string, manual = false) => {
-    // console.log(`[WhatsApp] Checking status for userId: ${userId}`);
+  const isCheckingStatus = useRef(false);
+
+  const checkStatus = async (uId: string, manual = false) => {
+    if (!uId || uId === "guest-user" || isCheckingStatus.current) return;
+    
+    isCheckingStatus.current = true;
     try {
-      if (!userId || userId === "guest-user") return;
+      // Use the simplified status endpoint
+      const data = await apiFetch(`/api/whatsapp/status/${uId}`);
       
-      // Ensure we have a valid absolute URL
-      let apiUrl = import.meta.env.VITE_API_URL;
-      if (!apiUrl || apiUrl.trim() === "" || apiUrl === "undefined") {
-        apiUrl = 'https://whatsappcrm-sfr2.onrender.com';
-      }
-      
-      apiUrl = apiUrl.trim().replace(/\/$/, "");
-      
-      if (!apiUrl.startsWith('http')) {
-        // If it's still not a full URL, don't attempt fetch to avoid "pattern" error
-        return;
-      }
-
-      const response = await fetch(`${apiUrl}/qr/${userId}`);
-      
-      // Handle 404 gracefully - it likely means no session exists yet
-      if (response.status === 404) {
-        setStatus("disconnected");
-        if (manual) toast.info("Nenhuma sessão encontrada. Inicie uma nova conexão.");
-        return;
-      }
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const data = await response.json();
-      
-      // If manually called (not from interval), show a toast with the status
-      console.log(`[WhatsApp] Status response for ${userId}:`, data);
-      
-      // Log for debugging (user can see this in console)
-      const isConnected = 
-        data.status === "connected" || 
-        data.status === "open" || 
-        data.status === "online" || 
-        data.status === "ready" || 
-        data.status === "authenticated" || 
-        data.authenticated === true;
-      
-      if (isConnected && status !== "connected") {
-        console.log(`[WhatsApp] Session connected for userId: ${userId}. Full data:`, data);
-        if (manual) toast.success("Conectado com sucesso!");
-      }
-
-      if (isConnected) {
+      if (data.status === "connected") {
         setStatus("connected");
-        if (data.me) setMe(data.me);
         setQr(null);
         setPairingCode(null);
-      } else if (data.qr) {
-        if (status !== "qr") {
-          console.log(`[WhatsApp] QR Code received for userId: ${userId}`);
+        if (manual) toast.success("Conectado com sucesso!");
+        
+        // Fetch 'me' info if connected
+        try {
+          const meData = await apiFetch(`/api/whatsapp/me`);
+          if (meData.me) setMe(meData.me);
+        } catch (e) {}
+      } else if (data.status === "qr" || data.status === "pairing") {
+        setStatus(data.status);
+        
+        // Fetch QR/Pairing code specifically
+        const qrData = await apiFetch(`/api/whatsapp/qr/${uId}`);
+        if (qrData.qr) {
+          setQr(qrData.qr);
+          setPairingCode(null);
+        } else if (qrData.pairingCode) {
+          setPairingCode(qrData.pairingCode);
+          setQr(null);
+        } else if (qrData.status === "connecting" || !qrData.qr) {
+          // If in QR/Pairing state but no code, try to reconnect
+          if (manual) toast.info("Gerando novo código...");
+          await connect();
         }
-        setQr(data.qr);
-        setStatus("qr");
-        setPairingCode(null);
-        if (manual) toast.info("Aguardando leitura do QR Code.");
-      } else if (data.pairingCode) {
-        setPairingCode(data.pairingCode);
-        setStatus("pairing");
-        setQr(null);
-        if (manual) toast.info("Aguardando pareamento com o código.");
-      } else if (data.status === "connecting") {
-        setStatus("connecting");
-        if (manual) toast.info("Iniciando conexão... Aguarde.");
+        if (manual) toast.info(data.status === "qr" ? "Aguardando leitura do QR Code." : "Aguardando pareamento.");
       } else {
-        // Fallback or other statuses
-        setStatus(data.status || "connecting");
-        if (manual) toast.info(`Status atual: ${data.status || "conectando"}`);
+        setStatus(data.status || "disconnected");
+        setQr(null);
+        setPairingCode(null);
+        if (manual && data.status === "disconnected") toast.info("Desconectado.");
       }
       
       setError(null);
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
+      const errMsg = (err?.message || String(err)).toLowerCase();
       // Silently ignore expected/benign errors during polling
-      if (
-        errMsg.includes("Load failed") || 
-        errMsg.includes("Failed to fetch") || 
-        errMsg.includes("The string did not match the expected pattern") ||
-        errMsg.includes("status: 404")
-      ) {
+      const isExpectedError = 
+        errMsg.includes("load failed") || 
+        errMsg.includes("failed to fetch") || 
+        errMsg.includes("demorou muito para responder") ||
+        errMsg.includes("erro de conexão") ||
+        errMsg.includes("status 404") ||
+        errMsg.includes("not found") ||
+        errMsg.includes("aborted") ||
+        errMsg.includes("status 401") ||
+        errMsg.includes("unauthorized") ||
+        errMsg.includes("html error") ||
+        errMsg.includes("404");
+
+      if (isExpectedError) {
+        if (manual) console.warn(`[WhatsApp] Expected error during manual check: ${errMsg}`);
         return;
       }
-      console.error("[WhatsApp] Failed to check status:", err);
+      console.error(`[WhatsApp] Failed to check status for ${uId}:`, err);
+      if (manual) toast.error(`Erro ao verificar status: ${err.message}`);
+    } finally {
+      isCheckingStatus.current = false;
     }
   };
 
   const connect = async () => {
-    if (status === "connected") {
-      toast.info("Você já está conectado!");
-      return;
-    }
-
+    if (!userId) return;
     setLoading(true);
     setError(null);
     try {
-      const uId = await getUserId();
-      if (!uId || uId === "guest-user") throw new Error("Usuário não identificado");
+      const data = await apiFetch(`/api/whatsapp/connect/${userId}`, {
+        method: "POST",
+        body: JSON.stringify({ phoneNumber: connectMethod === "number" ? phoneNumber : undefined })
+      });
       
-      let apiUrl = import.meta.env.VITE_API_URL;
-      if (!apiUrl || apiUrl.trim() === "" || apiUrl === "undefined") {
-        apiUrl = 'https://whatsappcrm-sfr2.onrender.com';
-      }
-      apiUrl = apiUrl.trim().replace(/\/$/, "");
-
-      if (!apiUrl.startsWith('http')) {
-        throw new Error("URL da API inválida configurada.");
-      }
-
-      console.log(`[WhatsApp] Connecting for userId: ${uId} (Method: ${connectMethod})`);
-      
-      const url = connectMethod === "number" && phoneNumber 
-        ? `${apiUrl}/connect/${uId}?phone=${phoneNumber}` 
-        : `${apiUrl}/connect/${uId}`;
-      
-      const response = await fetch(url);
-      if (!response.ok) {
-        let errorMsg = `Erro ao conectar: status ${response.status}`;
-        try {
-          const errorData = await response.json();
-          if (errorData.error) errorMsg = errorData.error;
-        } catch (e) {
-          // Ignore JSON parse error
-        }
-        throw new Error(errorMsg);
-      }
-      
-      setStatus("connecting");
-      toast.info(connectMethod === "qr" ? "Iniciando conexão... Aguarde o QR Code." : "Iniciando conexão... Aguarde o código de pareamento.");
+      setStatus(data.status || "connecting");
+      toast.info("Iniciando conexão...");
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      if (errMsg.includes("The string did not match the expected pattern")) {
-        console.warn("[WhatsApp] Connection attempt failed due to malformed URL pattern.");
-        return;
-      }
       console.error("[WhatsApp] Failed to connect:", err);
       setError(err.message);
     } finally {
@@ -296,10 +243,11 @@ export default function Dashboard() {
   };
 
   const resetSession = async () => {
+    if (!userId) return;
     setLoading(true);
     setError(null);
     try {
-      await apiFetch("/api/whatsapp/reset", {
+      await apiFetch(`/api/whatsapp/reset/${userId}`, {
         method: "POST",
       });
       setStatus("disconnected");
@@ -320,7 +268,7 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      await apiFetch("/api/whatsapp/pause", {
+      await apiFetch(`/api/whatsapp/pause/${userId}`, {
         method: "POST",
       });
       setStatus("paused");
@@ -358,7 +306,7 @@ export default function Dashboard() {
     try {
       if (!me?.id) throw new Error("WhatsApp não conectado");
       
-      await apiFetch("/api/whatsapp/send", {
+      await apiFetch(`/api/whatsapp/send/${userId}`, {
         method: "POST",
         body: JSON.stringify({ 
           jid: me.id, 
@@ -469,10 +417,10 @@ export default function Dashboard() {
     const cleanupPromise = init();
 
     const interval = setInterval(async () => {
-      const userId = await getUserId();
-      if (userId && userId !== "guest-user") {
-        await checkStatus(userId);
-        await fetchStats(userId);
+      const uId = await getUserId();
+      if (uId && uId !== "guest-user") {
+        await checkStatus(uId);
+        await fetchStats(uId);
       }
     }, 5000);
 
