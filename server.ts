@@ -69,12 +69,17 @@ async function startServer() {
   //Gerar QR
   let currentQR = "";
 
-  app.get("/qr", (req, res) => {
-    if (!currentQR) {
-      return res.status(404).json({ error: "QR nao gerado ainda" });
-      }
-    res.json({ qr: currentQR });
-     });
+  app.get("/qr/:userId", (req, res) => {
+  const { userId } = req.params;
+
+  const session = whatsappManager.sessions.get(userId);
+
+  if (!session || !session.qr) {
+    return res.status(404).json({ error: "QR não disponível" });
+  }
+
+  res.json({ qr: session.qr });
+});
 
   app.listen(PORT, "0.0.0.0", async () => {
     console.log(`Server running on http://localhost:${PORT}`);
