@@ -9,8 +9,10 @@ import authRoutes from "./backend/routes/auth";
 import agentRoutes from "./backend/routes/agent";
 import templateRoutes from "./backend/routes/templates";
 import packRoutes from "./backend/routes/packs";
+import mediaRoutes from "./backend/routes/media";
 import { startScheduler } from "./backend/scheduler";
 import { authenticate } from "./backend/middleware/auth";
+import fs from "fs";
 
 import { whatsappManager } from "./backend/whatsappManager";
 
@@ -61,6 +63,14 @@ async function startServer() {
   app.use("/api/agent", authenticate, agentRoutes);
   app.use("/api/templates", authenticate, templateRoutes);
   app.use("/api/packs", authenticate, packRoutes);
+  app.use("/api/media", authenticate, mediaRoutes);
+
+  // Serve uploads directory
+  const uploadsDir = path.join(process.cwd(), "uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  app.use("/uploads", express.static(uploadsDir));
 
   // Catch-all for unmatched API routes
   app.all("/api/*", (req, res) => {

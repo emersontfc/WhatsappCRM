@@ -148,15 +148,15 @@ router.get("/me", (req: AuthRequest, res) => {
 
 router.post("/send/:userId", requirePlan, async (req: PlanRequest, res) => {
   const { userId } = req.params;
-  let { jid, text, to } = req.body;
+  let { jid, text, to, mediaUrl, mediaType } = req.body;
   
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
   // Handle both 'jid' and 'to' for backward compatibility
   if (!jid && to) jid = to;
 
-  if (!jid || !text) {
-    return res.status(400).json({ success: false, error: "jid and text are required" });
+  if (!jid || (!text && !mediaUrl)) {
+    return res.status(400).json({ success: false, error: "jid and (text or mediaUrl) are required" });
   }
 
   // Enforce max messages per day
@@ -182,7 +182,7 @@ router.post("/send/:userId", requirePlan, async (req: PlanRequest, res) => {
   }
 
   try {
-    const result = await whatsappManager.sendMessage(userId, jid, text);
+    const result = await whatsappManager.sendMessage(userId, jid, text || "", mediaUrl, mediaType);
     
     // Increment usage
     await supabaseAdmin

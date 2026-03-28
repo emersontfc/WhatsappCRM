@@ -10,6 +10,8 @@ import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/api";
 import { useActivation } from "../lib/useActivation";
 import { UpgradePrompt } from "../components/UpgradePrompt";
+import { VoiceRecorder } from "../components/VoiceRecorder";
+import { Mic } from "lucide-react";
 
 interface Contact {
   id: string;
@@ -68,6 +70,7 @@ export default function Messages() {
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const [isRecording, setIsRecording] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -219,9 +222,9 @@ export default function Messages() {
     setShowChatOnMobile(true);
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !selectedContact || !userId) return;
+  const handleSend = async (e?: React.FormEvent, mediaUrl?: string, mediaType?: string) => {
+    if (e) e.preventDefault();
+    if ((!newMessage.trim() && !mediaUrl) || !selectedContact || !userId) return;
     if (!isActivated) return;
 
     setLoading(true);
@@ -232,6 +235,8 @@ export default function Messages() {
         body: JSON.stringify({
           jid: `${phone}@s.whatsapp.net`,
           text: newMessage,
+          mediaUrl,
+          mediaType
         }),
       });
 
@@ -240,7 +245,8 @@ export default function Messages() {
       }
 
       setNewMessage("");
-      toast.success("Mensagem enviada!");
+      setIsRecording(false);
+      toast.success(mediaUrl ? "Áudio enviado!" : "Mensagem enviada!");
     } catch (err: any) {
       console.error("Failed to send message:", err);
       toast.error(err.message || "Erro ao enviar mensagem.");
@@ -403,18 +409,37 @@ export default function Messages() {
               <div ref={scrollRef} />
             </div>
 
-            <form onSubmit={handleSend} className="p-3 sm:p-4 bg-white border-t border-slate-100 flex gap-2">
-              <Input
-                placeholder={isActivated ? "Digite sua mensagem..." : "Ative sua conta"}
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                className="flex-1 h-10 text-sm"
-                disabled={loading || !isActivated}
-              />
-              <Button type="submit" size="icon" className="h-10 w-10 shrink-0" disabled={loading || !newMessage.trim() || !isActivated}>
-                <Send size={18} />
-              </Button>
-            </form>
+            <div className="p-3 sm:p-4 bg-white border-t border-slate-100">
+              {isRecording ? (
+                <VoiceRecorder 
+                  onSend={(url) => handleSend(undefined, url, "audio")} 
+                  onCancel={() => setIsRecording(false)} 
+                />
+              ) : (
+                <form onSubmit={handleSend} className="flex gap-2">
+                  <Button 
+                    type="button"
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-10 w-10 shrink-0 text-slate-400 hover:text-emerald-500"
+                    onClick={() => setIsRecording(true)}
+                    disabled={!isActivated}
+                  >
+                    <Mic size={20} />
+                  </Button>
+                  <Input
+                    placeholder={isActivated ? "Digite sua mensagem..." : "Ative sua conta"}
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    className="flex-1 h-10 text-sm"
+                    disabled={loading || !isActivated}
+                  />
+                  <Button type="submit" size="icon" className="h-10 w-10 shrink-0" disabled={loading || !newMessage.trim() || !isActivated}>
+                    <Send size={18} />
+                  </Button>
+                </form>
+              )}
+            </div>
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-400 space-y-4 p-8 text-center">
