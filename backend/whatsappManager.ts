@@ -271,8 +271,11 @@ class WhatsAppManager {
           if (!msg.key.fromMe && text) {
             console.log(`Processing incoming message from ${msg.key.remoteJid} for automation: "${text}"`);
             const isButton = !!msg.message?.buttonsResponseMessage?.selectedButtonId;
-            await handleIncomingMessage(this, userId, msg.key.remoteJid!, text, isButton);
-            await handleAgentMessage(this, userId, msg.key.remoteJid!, text);
+            const triggered = await handleIncomingMessage(this, userId, msg.key.remoteJid!, text, isButton);
+            
+            if (!triggered) {
+              await handleAgentMessage(this, userId, msg.key.remoteJid!, text);
+            }
           }
           
           await this.syncMessage(userId, msg);
@@ -541,19 +544,65 @@ class WhatsAppManager {
       throw new Error("WhatsApp session not connected. Please go to the WhatsApp tab and reconnect.");
     }
 
-    const buttonMessage = {
-      text: text,
-      footer: "Selecione uma opção",
-      buttons: buttons.map(b => ({
-        buttonId: b.id,
-        buttonText: { displayText: b.label },
-        type: 1
-      })),
-      headerType: 1
-    };
+    try {
+      // Modern Baileys Buttons (Interactive Message - Native Flow)
+      // This is the most compatible way for modern WhatsApp versions
+      const buttonMessage: any = {
+        viewOnceMessage: {
+          message: {
+            interactiveMessage: {
+              header: { title: "", hasMediaAttachment: false },
+              body: { text: text },
+              footer: { text: "Selecione uma opção" },
+              nativeFlowMessage: {
+                buttons: buttons.map(b => ({
+                  name: "quick_reply",
+                  buttonParamsJson: JSON.stringify({
+                    display_text: b.label,
+                    id: b.id
+                  })
+                }))
+              }
+            }
+          }
+        }
+      };
 
-    await this.log(userId, "info", `Enviando menu de botões para ${jid}: "${text.substring(0, 50)}..."`);
-    return await session.socket.sendMessage(jid, buttonMessage);
+      await this.log(userId, "info", `Enviando botões interativos para ${jid}`);
+      return await session.socket.sendMessage(jid, buttonMessage);
+    } catch (err) {
+      console.error("Error sending interactive buttons, falling back to list/text:", err);
+      
+      try {
+        // Fallback 1: List Message
+        const listMessage: any = {
+          text: text,
+          footer: "Selecione uma opção",
+          title: "Menu",
+          buttonText: "Ver Opções",
+          sections: [
+            {
+              title: "Opções Disponíveis",
+              rows: buttons.map(b => ({ title: b.label, rowId: b.id }))
+            }
+          ]
+        };
+        await this.log(userId, "warn", `Botões falharam, tentando List Message para ${jid}`);
+        return await session.socket.sendMessage(jid, listMessage);
+      } catch (listErr) {
+        console.error("List message also failed, falling back to plain text:", listErr);
+        
+        // Fallback 2: Plain Text with numbered options
+        let fallbackText = `*${text}*\n\n`;
+        buttons.forEach((b, i) => {
+          fallbackText += `${i + 1}. ${b.label}\n`;
+        });
+        fallbackText += "\n_Responda com o número ou o texto da opção._";
+        
+        await this.log(userId, "warn", `List Message falhou, enviando fallback de texto para ${jid}`);
+        return await session.socket.sendMessage(jid, { text: fallbackText });
+      }
+    }
   }
 
   async sendPresenceUpdate(userId: string, jid: string, presence: "composing" | "recording" | "paused") {

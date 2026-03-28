@@ -10,6 +10,7 @@ export default function AdminPacks() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [jsonInput, setJsonInput] = useState<Record<string, string>>({});
+  const [importJson, setImportJson] = useState("");
 
   useEffect(() => {
     fetchPacks();
@@ -18,6 +19,30 @@ export default function AdminPacks() {
   const fetchPacks = async () => {
     const res = await apiFetch("/api/packs/list");
     if (res.success) setPacks(res.data);
+  };
+
+  const handleImportPack = async () => {
+    try {
+      const data = JSON.parse(importJson);
+      if (!data.name || !data.items || !Array.isArray(data.items)) {
+        return toast.error("JSON deve conter 'name' e 'items' (array)");
+      }
+
+      const res = await apiFetch("/api/admin/packs/import", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+
+      if (res.success) {
+        toast.success("Pack importado com sucesso!");
+        setImportJson("");
+        fetchPacks();
+      } else {
+        toast.error(res.error || "Erro ao importar pack");
+      }
+    } catch (e) {
+      toast.error("JSON inválido");
+    }
   };
 
   const handleCreatePack = async () => {
@@ -66,6 +91,20 @@ export default function AdminPacks() {
         <Input placeholder="Nome do Pack" value={name} onChange={(e) => setName(e.target.value)} />
         <Input placeholder="Descrição" value={description} onChange={(e) => setDescription(e.target.value)} />
         <Button onClick={handleCreatePack}>Criar Pack</Button>
+      </Card>
+
+      <Card className="p-6 space-y-4">
+        <h2 className="text-lg font-semibold">Importar Pack (JSON)</h2>
+        <textarea
+          className="w-full p-2 border rounded text-sm font-mono"
+          rows={5}
+          placeholder='{"name": "...", "description": "...", "items": [{"trigger": "...", "response": "..."}]}'
+          value={importJson}
+          onChange={(e) => setImportJson(e.target.value)}
+        />
+        <Button onClick={handleImportPack} variant="outline" className="w-full">
+          Importar Pack Completo
+        </Button>
       </Card>
 
       <div className="grid gap-4">

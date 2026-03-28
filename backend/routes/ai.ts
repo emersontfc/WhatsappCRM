@@ -1,10 +1,59 @@
 import express from "express";
 import { GoogleGenAI } from "@google/genai";
-import { decrypt } from "../agentManager";
+import { decrypt, runAI } from "../agentManager";
 import { AuthRequest } from "../middleware/auth";
 import { supabaseAdmin } from "../supabaseAdmin";
 
 const router = express.Router();
+
+router.post("/chat", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+  const { message, agentId } = req.body;
+  if (!message) return res.status(400).json({ success: false, error: "Message is required" });
+
+  try {
+    let agent;
+    if (agentId) {
+      const { data } = await supabaseAdmin
+        .from("agents")
+        .select("*")
+        .eq("id", agentId)
+        .eq("user_id", userId)
+        .single();
+      agent = data;
+    } else {
+      const { data } = await supabaseAdmin
+        .from("agents")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      agent = data;
+    }
+
+    if (!agent) {
+      console.log("Agent not found, using default fallback");
+      agent = {
+        provider: "gemini",
+        model: "gemini-3-flash-preview",
+        instructions: "Você é um assistente útil."
+      };
+    }
+
+    console.log("Using AI model:", agent.model || agent.provider);
+    console.log("Prompt:", agent.instructions);
+
+    const reply = await runAI(agent, message, []);
+    res.json({ reply });
+  } catch (err: any) {
+    console.error("AI chat error:", err);
+    res.json({ reply: "Desculpe, estou com dificuldade para responder agora." });
+  }
+});
 
 router.post("/suggest", async (req: AuthRequest, res) => {
   const userId = req.user?.id;

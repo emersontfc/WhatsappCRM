@@ -251,6 +251,48 @@ router.patch("/users/:id/subscription", async (req, res) => {
 
 // ... existing routes ...
 
+router.post("/packs/import", async (req: AuthRequest, res) => {
+  const { name, description, is_public, items } = req.body;
+
+  if (!name || !items || !Array.isArray(items)) {
+    return res.status(400).json({ success: false, error: "Nome e lista de itens são obrigatórios." });
+  }
+
+  try {
+    // 1. Create the pack
+    const { data: pack, error: packError } = await supabaseAdmin
+      .from("model_packs")
+      .insert({
+        name,
+        description: description || "",
+        is_public: is_public !== undefined ? is_public : true,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (packError) throw packError;
+
+    // 2. Insert items
+    const itemsToInsert = items.map((item: any) => ({
+      pack_id: pack.id,
+      trigger: item.trigger,
+      response_text: item.response || item.response_text,
+      match_type: item.match_type || 'exact',
+      response_type: item.response_type || 'text',
+      audio_url: item.audio_url || null
+    }));
+
+    const { error: itemsError } = await supabaseAdmin.from("model_items").insert(itemsToInsert);
+    if (itemsError) throw itemsError;
+
+    res.json({ success: true, data: pack });
+  } catch (err: any) {
+    console.error("Error importing pack:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.post("/packs/:packId/items", async (req: AuthRequest, res) => {
   console.log("Admin pack items route hit for pack:", req.params.packId);
   const { packId } = req.params;

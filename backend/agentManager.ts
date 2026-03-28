@@ -214,6 +214,8 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
   }
 
   try {
+    console.log("Using AI model:", agent.model || agent.provider);
+    console.log("Prompt:", systemInstruction);
     console.log(`[AI Engine] Requesting ${agent.provider}...`);
     return await handler(agent, prompt, systemInstruction);
   } catch (err: any) {
@@ -229,7 +231,7 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
       }
     }
     
-    return "Desculpe, não consegui responder agora. Verifique sua chave de API ou tente novamente mais tarde.";
+    return "Desculpe, estou com dificuldade para responder agora.";
   }
 }
 

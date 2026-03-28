@@ -90,7 +90,10 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     if (!triggered && isButton) {
       await whatsappManager.sendMessage(userId, jid, "Opção ainda não configurada");
     }
+
+    return triggered;
   } catch (err) {
     console.error("Automation handler error:", err);
+    return false;
   }
 }

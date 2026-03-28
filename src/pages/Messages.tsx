@@ -17,6 +17,13 @@ interface Contact {
   phone: string;
 }
 
+interface Agent {
+  id: string;
+  provider: string;
+  model: string;
+  instructions: string;
+}
+
 interface Message {
   id: string;
   text: string;
@@ -59,6 +66,8 @@ export default function Messages() {
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,6 +79,20 @@ export default function Messages() {
         const uId = await getUserId();
         if (!uId || uId === "guest-user") return;
         setUserId(uId);
+
+        // Fetch agents
+        const { data: agentsData } = await supabase
+          .from("agents")
+          .select("*")
+          .eq("user_id", uId)
+          .eq("is_active", true);
+        
+        if (isMounted && agentsData) {
+          setAgents(agentsData);
+          if (agentsData.length > 0) {
+            setSelectedAgentId(agentsData[0].id);
+          }
+        }
 
         // Initial contacts fetch
         const { data: initialContacts } = await supabase
@@ -230,16 +253,17 @@ export default function Messages() {
     if (!selectedContact || messages.length === 0) return;
     setLoading(true);
     try {
-      const response = await apiFetch("/api/ai/suggest", {
+      const lastMessage = messages[messages.length - 1];
+      const response = await apiFetch("/api/ai/chat", {
         method: "POST",
         body: JSON.stringify({
-          messages: messages.slice(-5),
-          context: { contactName: selectedContact.name }
+          message: lastMessage.text,
+          agentId: selectedAgentId
         }),
       });
       
-      if (response.success && response.data.suggestion) {
-        setNewMessage(response.data.suggestion);
+      if (response.reply) {
+        setNewMessage(response.reply);
       }
     } catch (err) {
       console.error("AI error:", err);
@@ -323,7 +347,20 @@ export default function Messages() {
                   </p>
                 </div>
               </div>
-              <div className="flex gap-1 sm:gap-2">
+              <div className="flex items-center gap-1 sm:gap-2">
+                {agents.length > 1 && (
+                  <select 
+                    className="h-9 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    value={selectedAgentId}
+                    onChange={(e) => setSelectedAgentId(e.target.value)}
+                  >
+                    {agents.map(agent => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.provider} - {agent.model}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <Button variant="ghost" size="icon" className="h-9 w-9 hidden sm:flex">
                   <Phone size={18} />
                 </Button>
@@ -332,7 +369,7 @@ export default function Messages() {
                   size="icon" 
                   className="h-9 w-9 text-amber-500 hover:text-amber-600 hover:bg-amber-50"
                   onClick={getAiSuggestion}
-                  disabled={loading || messages.length === 0 || !isActivated}
+                  disabled={loading || messages.length === 0 || !isActivated || !selectedAgentId}
                 >
                   <Sparkles size={18} />
                 </Button>
