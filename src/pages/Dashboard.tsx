@@ -1,3 +1,11 @@
+import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useActivation } from "../lib/useActivation";
+import { getUserId } from "../supabase";
+
+
+
+
 // 🔥 IMPORTANTE: só alterei lógica de conexão e QR — resto mantido
 
 // ... (imports iguais, NÃO MUDE)
