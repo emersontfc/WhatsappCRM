@@ -15,6 +15,8 @@ if (supabaseUrl && !supabaseUrl.startsWith("http")) {
 // Initialize only if keys are present to avoid crash
 const isValidServiceRoleKey = supabaseServiceRoleKey && supabaseServiceRoleKey.split('.').length === 3;
 
+console.log(`[Supabase Admin] Debug: URL=${!!supabaseUrl}, Key=${!!supabaseServiceRoleKey}, KeyLength=${supabaseServiceRoleKey?.length}`);
+
 if (!supabaseUrl) {
   console.warn("[Supabase Admin] SUPABASE_URL is missing. Please configure it in Settings.");
 }

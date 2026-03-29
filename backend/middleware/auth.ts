@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { supabaseAuth } from "../supabaseAuth";
 import { supabaseAdmin } from "../supabaseAdmin";
 
 export interface AuthRequest extends Request {
@@ -18,23 +19,12 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   const token = authHeader.split(" ")[1];
 
   try {
-    // 1. Verify token and get user from Supabase Auth
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+    // 1. Verify token and get user using Auth client
+    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
 
     if (error || !user) {
-      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "NOT_SET";
-      const urlPreview = supabaseUrl.length > 10 ? `${supabaseUrl.substring(0, 10)}...` : supabaseUrl;
-      
-      let tokenPayload = {};
-      try {
-        const base64Payload = token.split('.')[1];
-        tokenPayload = JSON.parse(Buffer.from(base64Payload, 'base64').toString());
-      } catch (e) {}
-
-      console.error(`[Auth Middleware] Token verification failed for URL ${urlPreview}:`, {
-        error: error?.message || "No user found",
-        tokenAud: (tokenPayload as any).aud,
-        tokenIss: (tokenPayload as any).iss
+      console.error(`[Auth Middleware] Token verification failed:`, {
+        error: error?.message || "No user found"
       });
       return res.status(401).json({ error: "Invalid or expired token" });
     }
