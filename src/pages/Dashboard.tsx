@@ -74,11 +74,8 @@ export default function Dashboard() {
     automations: 0
   });
   const [recentMessages, setRecentMessages] = useState<any[]>([]);
-  const [logs, setLogs] = useState<any[]>([]);
-  const [autoScroll, setAutoScroll] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const checkUserTemplate = async () => {
@@ -317,46 +314,6 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    if (autoScroll) {
-      logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [logs, autoScroll]);
-
-  const clearLogs = async () => {
-    try {
-      const userId = await getUserId();
-      const { error } = await supabase.from("logs").delete().eq("user_id", userId);
-      if (error) throw error;
-      setLogs([]);
-      toast.success("Logs limpos!");
-    } catch (err) {
-      toast.error("Erro ao limpar logs.");
-    }
-  };
-
-  const testBot = async () => {
-    setLoading(true);
-    try {
-      if (!me?.id) throw new Error("WhatsApp não conectado");
-      
-      await apiFetch(`/api/whatsapp/send`, {
-        method: "POST",
-        body: JSON.stringify({ 
-          jid: me.id, 
-          text: "🤖 Teste do WhatsCRM: Bot funcionando corretamente!" 
-        }),
-      });
-      
-      toast.success("Mensagem de teste enviada para você mesmo!");
-    } catch (err: any) {
-      setError(err.message);
-      toast.error(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
     if (activationLoading || !isActivated) return;
     const init = async () => {
       const uId = await getUserId();
@@ -368,7 +325,7 @@ export default function Dashboard() {
         await checkStatus(uId);
         await fetchStats(uId);
         
-        console.log("Fetching messages and logs for:", uId);
+        console.log("Fetching messages for:", uId);
         // Initial fetch for recent messages
         const { data: initialMessages, error: msgError } = await supabase
           .from("messages")
@@ -382,21 +339,6 @@ export default function Dashboard() {
         
         if (initialMessages) {
           setRecentMessages(initialMessages);
-        }
-
-        // Initial fetch for logs
-        const { data: initialLogs, error: logError } = await supabase
-          .from("logs")
-          .select("*")
-          .eq("user_id", uId)
-          .order("created_at", { ascending: false })
-          .limit(10);
-        
-        if (logError) console.error("Error fetching logs:", logError);
-        else console.log("Fetched logs:", initialLogs?.length);
-        
-        if (initialLogs) {
-          setLogs(initialLogs);
         }
         
         // Real-time subscription for messages
@@ -418,30 +360,9 @@ export default function Dashboard() {
             if (updatedMessages) setRecentMessages(updatedMessages);
           })
           .subscribe();
-
-        // Real-time subscription for logs
-        const logsSubscription = supabase
-          .channel('public:logs')
-          .on('postgres_changes', { 
-            event: '*', 
-            schema: 'public', 
-            table: 'logs',
-            filter: `user_id=eq.${uId}`
-          }, async () => {
-            // Re-fetch top 10 when changes occur
-            const { data: updatedLogs } = await supabase
-              .from("logs")
-              .select("*")
-              .eq("user_id", uId)
-              .order("created_at", { ascending: false })
-              .limit(10);
-            if (updatedLogs) setLogs(updatedLogs);
-          })
-          .subscribe();
         
         return () => {
           supabase.removeChannel(messagesSubscription);
-          supabase.removeChannel(logsSubscription);
         };
       }
       return () => {};
@@ -601,10 +522,6 @@ export default function Dashboard() {
                   </p>
                 </div>
                 <div className="flex flex-col gap-2 w-full">
-                  <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700" onClick={testBot} disabled={loading}>
-                    <Zap size={18} />
-                    Testar Bot (Enviar para mim)
-                  </Button>
                   <div className="flex gap-2">
                     <Button variant="outline" className="flex-1 gap-2" onClick={pauseSession} disabled={loading}>
                       <Pause size={18} />
@@ -777,57 +694,21 @@ export default function Dashboard() {
             <div>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Terminal size={20} className="text-slate-600" />
-                Logs em Tempo Real
+                Mensagens Recentes
               </CardTitle>
-              <CardDescription>Acompanhe o que o bot está fazendo agora.</CardDescription>
-            </div>
-            <div className="flex items-center gap-2">
-              <button 
-                onClick={() => setAutoScroll(!autoScroll)}
-                className={cn(
-                  "px-2 py-1 rounded text-[10px] font-bold uppercase transition-colors",
-                  autoScroll ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
-                )}
-              >
-                Auto-scroll: {autoScroll ? "ON" : "OFF"}
-              </button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-500" onClick={clearLogs}>
-                <Trash2 size={14} />
-              </Button>
+              <CardDescription>Acompanhe as últimas mensagens.</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
             <div className="bg-slate-950 rounded-xl p-4 font-mono text-[10px] sm:text-xs h-[300px] overflow-y-auto space-y-2 border border-slate-800 shadow-2xl custom-scrollbar">
-              {logs.length === 0 ? (
-                <p className="text-slate-600 italic">Aguardando eventos...</p>
+              {recentMessages.length === 0 ? (
+                <p className="text-slate-500 italic">Nenhuma mensagem recente.</p>
               ) : (
-                <div className="space-y-2">
-                  {[...logs].reverse().map((log, i) => (
-                    <div key={log.id || i} className="flex gap-2 border-b border-slate-900 pb-2 last:border-0">
-                      <span className="text-slate-500 shrink-0">
-                        [{new Date(log.created_at).toLocaleTimeString()}]
-                      </span>
-                      <span className={cn(
-                        "font-bold uppercase shrink-0 w-16",
-                        log.level === "success" ? "text-emerald-400" :
-                        log.level === "error" ? "text-red-400" :
-                        log.level === "warning" ? "text-amber-400" :
-                        "text-blue-400"
-                      )}>
-                        {log.level}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-slate-300 break-words">{log.message}</p>
-                        {log.details && (
-                          <pre className="mt-1 text-[10px] text-slate-500 overflow-x-auto bg-slate-900/50 p-1 rounded">
-                            {typeof log.details === 'string' ? log.details : JSON.stringify(log.details, null, 2)}
-                          </pre>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  <div ref={logsEndRef} />
-                </div>
+                recentMessages.map((msg) => (
+                  <div key={msg.id} className="text-slate-300">
+                    <span className="text-slate-500">[{new Date(msg.timestamp).toLocaleTimeString()}]</span> {msg.text}
+                  </div>
+                ))
               )}
             </div>
           </CardContent>

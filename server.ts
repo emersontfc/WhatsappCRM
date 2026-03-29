@@ -10,10 +10,8 @@ import agentRoutes from "./backend/routes/agent";
 import templateRoutes from "./backend/routes/templates";
 import packRoutes from "./backend/routes/packs";
 import mediaRoutes from "./backend/routes/media";
-import logsRoutes from "./backend/routes/logs";
 import { startScheduler } from "./backend/scheduler";
 import { authenticate } from "./backend/middleware/auth";
-import { logError, LogCategory } from "./backend/lib/logger";
 import fs from "fs";
 
 import { whatsappManager } from "./backend/whatsappManager";
@@ -79,7 +77,6 @@ async function startServer() {
   app.use("/api/templates", authenticate, templateRoutes);
   app.use("/api/packs", authenticate, packRoutes);
   app.use("/api/media", authenticate, mediaRoutes);
-  app.use("/api/logs", authenticate, logsRoutes);
 
   // Serve uploads directory
   const uploadsDir = path.join(process.cwd(), "uploads");
@@ -127,18 +124,6 @@ async function startServer() {
 
   // Global Error Handler
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    logError(`Global error handler caught: ${err.message}`, err, {
-      userId: (req as any).user?.id,
-      category: LogCategory.SYSTEM,
-      details: {
-        path: req.path,
-        method: req.method,
-        query: req.query,
-        ip: req.ip
-      }
-    }).catch(console.error);
-
-
     console.error("Global error handler caught:", err);
     res.status(err.status || 500).json({
       success: false,
@@ -149,25 +134,11 @@ async function startServer() {
 
   // Global Process Error Handlers
   process.on("unhandledRejection", (reason, promise) => {
-    const { logError } = require("./backend/lib/logger");
-    logError(`Unhandled Rejection: ${String(reason)}`, reason, {
-      category: "system",
-      details: { promise }
-    }).catch(console.error);
-    
     console.error("CRITICAL: Unhandled Rejection at:", promise, "reason:", reason);
   });
 
   process.on("uncaughtException", (err) => {
-    const { logError } = require("./backend/lib/logger");
-    // We use a sync log here if possible, but our logger is async.
-    // In a real app, we might want to use a sync logger for uncaughtException.
-    logError(`Uncaught Exception: ${err.message}`, err, {
-      category: "system"
-    }).then(() => {
-      console.error("CRITICAL: Uncaught Exception:", err);
-      // process.exit(1);
-    }).catch(console.error);
+    console.error("CRITICAL: Uncaught Exception:", err);
   });
 
   app.listen(Number(PORT), "0.0.0.0", () => {
