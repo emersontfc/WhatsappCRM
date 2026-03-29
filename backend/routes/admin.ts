@@ -11,7 +11,7 @@ router.get("/keys", async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from("license_keys")
-      .select("*")
+      .select("id, code, duration_days, plan, is_used, created_at")
       .order("created_at", { ascending: false });
       
     if (error) throw error;
@@ -51,10 +51,9 @@ router.post("/keys", async (req, res) => {
       code,
       duration_days: duration,
       plan: plan || "Premium",
-      plan_id: planData.id,
       is_used: false,
       created_at: new Date().toISOString(),
-    }).select().single();
+    }).select("id, code, duration_days, plan, is_used, created_at").single();
 
     if (error) {
       if (error.code === "23505") {
@@ -220,8 +219,7 @@ router.patch("/users/:id/subscription", async (req, res) => {
       .from("users")
       .update({ 
         plan, 
-        expires_at,
-        isActivated: plan !== "Starter"
+        expires_at
       })
       .eq("id", id);
       

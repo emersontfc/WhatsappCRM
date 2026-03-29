@@ -14,6 +14,7 @@ import Automations from "./pages/Automations";
 import Schedule from "./pages/Schedule";
 import Agent from "./pages/Agent";
 import AdminPacks from "./pages/AdminPacks";
+import AdminLogs from "./pages/AdminLogs";
 import UserModels from "./pages/UserModels";
 import Layout from "./components/Layout";
 
@@ -86,6 +87,10 @@ export default function App() {
         <Route
           path="/admin/packs"
           element={user ? <Layout><AdminPacks key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/admin/logs"
+          element={user ? <Layout><AdminLogs key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/schedule"

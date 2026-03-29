@@ -15,6 +15,8 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     fullUrl = `${apiUrl.slice(0, -4)}${url}`;
   }
 
+  console.log(`[apiFetch] Requesting: ${fullUrl}`, { method: fetchOptions.method || "GET" });
+
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token;
 
@@ -43,7 +45,8 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     if (contentType && contentType.includes("application/json")) {
       data = await response.json();
     } else {
-      data = { success: response.ok, message: await response.text() };
+      const text = await response.text();
+      data = { success: response.ok, message: text };
     }
 
     if (!response.ok) {
@@ -56,11 +59,13 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     return data;
   } catch (error: any) {
     clearTimeout(id);
+    console.error(`[apiFetch] Error for ${fullUrl}:`, error);
+    
     if (error.name === "AbortError") {
       throw new Error(`O servidor demorou muito para responder (${url}). Por favor, tente novamente.`);
     }
-    if (error.message === "Load failed" || error.message === "Failed to fetch") {
-      throw new Error(`Erro de conexão com o servidor em ${url}. Verifique sua internet ou tente novamente.`);
+    if (error.message === "Load failed" || error.message === "Failed to fetch" || error.message.includes("NetworkError")) {
+      throw new Error(`Erro de conexão com o servidor em ${url}. Verifique sua internet ou tente novamente. (URL: ${fullUrl})`);
     }
     throw error;
   }

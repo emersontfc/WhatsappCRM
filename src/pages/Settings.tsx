@@ -370,10 +370,10 @@ export default function Settings() {
               <div className="space-y-1">
                 <p className="text-xs font-bold uppercase text-slate-500">Status</p>
                 <p className="text-sm font-medium">
-                  {profile.plan === "Premium" || profile.role === "admin" ? (
-                    <span className="text-emerald-600">Ativo</span>
+                  {profile.plan === "Free" ? (
+                    <span className="text-slate-600">Ativo (Plano Gratuito)</span>
                   ) : (
-                    <span className="text-slate-500">Inativo / Gratuito</span>
+                    <span className="text-emerald-600">Ativo</span>
                   )}
                 </p>
               </div>
@@ -385,7 +385,7 @@ export default function Settings() {
                     {new Date(profile.expires_at).toLocaleDateString()}
                   </p>
                   <p className="text-[10px] text-slate-500">
-                    {Math.ceil((new Date(profile.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} dias restantes
+                    {Math.max(0, Math.ceil((new Date(profile.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} dias restantes
                   </p>
                 </div>
               )}
@@ -511,7 +511,7 @@ export default function Settings() {
                 <tbody className="divide-y divide-slate-100">
                   {users.map((user) => {
                     const daysLeft = user.expires_at 
-                      ? Math.ceil((new Date(user.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
+                      ? Math.max(0, Math.ceil((new Date(user.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))
                       : 0;
                     
                     return (

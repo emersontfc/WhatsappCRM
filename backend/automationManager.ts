@@ -22,7 +22,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     }
 
     const normalizedText = text.trim().toLowerCase();
-    console.log(`Checking ${automations.length} automations for user ${userId} with text: "${normalizedText}"`);
+    console.log(`[Automation] Checking ${automations.length} automations for user ${userId} with text: "${normalizedText}" (isButton: ${isButton})`);
 
     let triggered = false;
     for (const automation of automations) {
@@ -31,9 +31,11 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
       if (automation.trigger === "keyword") {
         const keywordStr = automation.keyword || "";
         const keywords = keywordStr.toLowerCase().split(",").map((k: string) => k.trim()).filter(Boolean);
+        console.log(`[Automation] Testing keywords for "${automation.name}": [${keywords.join(", ")}] against "${normalizedText}"`);
         // Fuzzy matching: check if message contains any of the keywords
         if (keywords.some((k: string) => normalizedText.includes(k))) {
           shouldTrigger = true;
+          console.log(`[Automation] MATCH FOUND for "${automation.name}"`);
         }
       }
 

@@ -41,7 +41,7 @@ router.post("/register", async (req, res) => {
     if (authUser.user) {
       const isAdminEmail = email === "alcindacharles@gmail.com" || email === "emersontorres42@gmail.com";
       
-      const planName = isAdminEmail ? "Premium" : "Starter";
+      const planName = isAdminEmail ? "Premium" : "Free";
       const { data: planData } = await supabaseAdmin.from("plans").select("id").eq("name", planName).single();
 
       // Create profile in public.users
@@ -54,7 +54,6 @@ router.post("/register", async (req, res) => {
           role: isAdminEmail ? "admin" : "user",
           created_at: new Date().toISOString(),
           expires_at: isAdminEmail ? "2099-12-31T23:59:59Z" : null,
-          isActivated: true, // New users are activated by default on Starter plan
           plan: planName
         });
 
@@ -102,7 +101,7 @@ router.post("/activate-license", authenticate, async (req, res) => {
     // 1. Find the license key
     const { data: keyData, error: keyFetchError } = await supabaseAdmin
       .from("license_keys")
-      .select("*")
+      .select("id, code, duration_days, plan, is_used")
       .eq("code", code.trim())
       .eq("is_used", false)
       .single();
@@ -148,7 +147,6 @@ router.post("/activate-license", authenticate, async (req, res) => {
     const { error: userUpdateError } = await supabaseAdmin
       .from("users")
       .update({
-        isActivated: true,
         expires_at: endDate.toISOString(),
         plan: keyData.plan
       })

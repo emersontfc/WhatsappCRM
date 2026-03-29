@@ -44,23 +44,12 @@ export const useActivation = () => {
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.data) {
-            const userData = data.data;
-            const subscription = userData.subscription;
+            const subData = data.data;
             
-            // Activation rule: isActivated = !!plan OR isAdmin
-            if (subscription && subscription.plan) {
-              setPlan(subscription.plan);
-              setPlanDetails(userData.planDetails);
-              setIsActivated(true);
-            } else if (userData.plan) {
-              setPlan(userData.plan);
-              setIsActivated(true);
-            } else if (userData.isActivated === true) {
-              setPlan("Starter");
-              setIsActivated(true);
-            } else {
-              setIsActivated(false);
-            }
+            // Standardized: plan is always present, active is always true
+            setPlan(subData.plan);
+            setPlanDetails(subData.planDetails);
+            setIsActivated(true); // All users are "activated" now
           }
         }
       } catch (err) {

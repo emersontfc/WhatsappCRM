@@ -452,65 +452,50 @@ export default function Dashboard() {
     );
   }
 
-  if (!isActivated) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-8">
-        <Card className="bg-amber-50 border-amber-200">
-          <CardContent className="py-12 text-center space-y-4">
-            <Zap size={48} className="mx-auto text-amber-400" />
-            <h3 className="text-xl font-bold text-amber-900">Conta não Ativada</h3>
-            <p className="text-amber-700 max-w-md mx-auto">
-              Você precisa ativar sua conta com um código de licença para usar o Dashboard.
-            </p>
-            <Button onClick={() => navigate("/activate")} className="bg-amber-600 hover:bg-amber-700">
-              Ativar Agora
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  const isFree = plan === "Free";
 
   return (
     <div className="space-y-8">
       {/* Plan Info Banner */}
-      {isActivated && (
-        <div className={cn(
-          "p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between border gap-4",
-          plan === "Premium" || plan === "Admin" ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100"
-        )}>
-          <div className="flex items-center gap-3">
-            <div className={cn(
-              "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
-              plan === "Premium" || plan === "Admin" ? "bg-amber-100 text-amber-600" : "bg-emerald-100 text-emerald-600"
-            )}>
-              <Zap size={20} />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-slate-900">Plano Atual: {plan}</p>
-              <p className="text-xs text-slate-500">
-                {planDetails ? (
-                  <>
-                    Limites: {planDetails.max_messages_per_day} msgs/dia • {planDetails.max_contacts} contatos • {planDetails.max_connections} conexão(ões)
-                  </>
-                ) : (
-                  "Sua conta está ativa e pronta para uso."
-                )}
-              </p>
-            </div>
+      <div className={cn(
+        "p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between border gap-4",
+        isFree ? "bg-slate-50 border-slate-200" : (plan === "Premium" || plan === "Admin" ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100")
+      )}>
+        <div className="flex items-center gap-3">
+          <div className={cn(
+            "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
+            isFree ? "bg-slate-200 text-slate-600" : (plan === "Premium" || plan === "Admin" ? "bg-amber-100 text-amber-600" : "bg-emerald-100 text-emerald-600")
+          )}>
+            <Zap size={20} />
           </div>
-          {plan !== "Premium" && plan !== "Admin" && (
-            <Button 
-              size="sm" 
-              variant="outline" 
-              className="border-amber-200 text-amber-700 hover:bg-amber-100 shrink-0"
-              onClick={() => navigate("/activate")}
-            >
-              Fazer Upgrade
-            </Button>
-          )}
+          <div>
+            <p className="text-sm font-bold text-slate-900">
+              {isFree ? "Plano Free Ativo" : `Plano Atual: ${plan}`}
+            </p>
+            <p className="text-xs text-slate-500">
+              {isFree ? (
+                "Faça upgrade para desbloquear mais conexões, contatos e recursos de IA."
+              ) : planDetails ? (
+                <>
+                  Limites: {planDetails.max_messages_per_day} msgs/dia • {planDetails.max_contacts} contatos • {planDetails.max_connections} conexão(ões)
+                </>
+              ) : (
+                "Sua conta está ativa e pronta para uso."
+              )}
+            </p>
+          </div>
         </div>
-      )}
+        {(isFree || (plan !== "Premium" && plan !== "Admin")) && (
+          <Button 
+            size="sm" 
+            variant={isFree ? "primary" : "outline"}
+            className={isFree ? "bg-emerald-600 hover:bg-emerald-700" : "border-amber-200 text-amber-700 hover:bg-amber-100 shrink-0"}
+            onClick={() => navigate("/activate")}
+          >
+            Fazer Upgrade
+          </Button>
+        )}
+      </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">

@@ -13,7 +13,8 @@ import {
   X,
   Bot,
   Calendar as CalendarIcon,
-  Package
+  Package,
+  Terminal
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -62,8 +63,8 @@ export default function Layout({ children }: LayoutProps) {
           const plan = sub?.plan || sub?.subscription?.plan;
           setUserPlan(plan || "Free");
           
-          // Activation rule: isActivated = !!plan OR isAdmin
-          setIsActivated(adminStatus || !!plan || sub?.isActivated === true);
+          // Standardized: plan is always present
+          setIsActivated(true);
         }
       } catch (err) {
         console.error("Layout status check failed:", err);
@@ -107,10 +108,11 @@ export default function Layout({ children }: LayoutProps) {
 
   if (isAdmin) {
     navItems.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
+    navItems.push({ name: "Logs do Sistema", path: "/admin/logs", icon: Terminal });
   }
 
-  if (!isAdmin && !isActivated) {
-    navItems.push({ name: "Ativação", path: "/activate", icon: CreditCard });
+  if (userPlan === "Free") {
+    navItems.push({ name: "Upgrade", path: "/activate", icon: CreditCard });
   }
 
   if (isAdmin) {
@@ -178,15 +180,15 @@ export default function Layout({ children }: LayoutProps) {
           ))}
         </nav>
 
-        {!isActivated && location.pathname !== "/activate" && (
-          <div className="p-4 m-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
-            <p className="text-xs text-amber-800 font-medium">Sua conta não está ativa. Ative agora para liberar todos os recursos.</p>
+        {userPlan === "Free" && location.pathname !== "/activate" && (
+          <div className="p-4 m-4 bg-emerald-50 rounded-xl border border-emerald-100 space-y-3">
+            <p className="text-xs text-emerald-800 font-medium">Você está no Plano Free. Faça upgrade para liberar todos os recursos.</p>
             <Button 
               size="sm" 
-              className="w-full bg-amber-600 hover:bg-amber-700 text-[10px] h-7"
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-[10px] h-7"
               onClick={() => navigate("/activate")}
             >
-              Ativar Agora
+              Fazer Upgrade
             </Button>
           </div>
         )}

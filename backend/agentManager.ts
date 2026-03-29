@@ -254,17 +254,32 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     }
 
     const agent = agents && agents.length > 0 ? agents[0] : null;
-    if (!agent) return;
-    if (jid.includes("@g.us") || text.trim().length < 3) return;
+    if (!agent) {
+      console.log(`[AI Engine] No active agent found for user ${userId}`);
+      return;
+    }
+    
+    if (jid.includes("@g.us")) {
+      console.log(`[AI Engine] Skipping group message from ${jid}`);
+      return;
+    }
+    
+    if (text.trim().length < 2) {
+      console.log(`[AI Engine] Message too short: "${text}"`);
+      return;
+    }
 
     // Check subscription
     const { data: sub } = await supabaseAdmin
       .from("subscriptions")
       .select("*")
       .eq("user_id", userId)
-      .single();
+      .maybeSingle();
 
-    if (!sub) return;
+    if (!sub) {
+      console.log(`[AI Engine] No subscription found for user ${userId}`);
+      return;
+    }
 
     // Check if subscription is expired (unless it's a Free plan)
     if (sub.plan !== 'Free' && sub.end_date) {
@@ -280,7 +295,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       .from("plans")
       .select("max_messages_per_day, ai_enabled")
       .eq("id", sub.plan_id)
-      .single();
+      .maybeSingle();
 
     if (planError || !planData) {
       console.log(`[AI Engine] Plan not found for user ${userId}.`);

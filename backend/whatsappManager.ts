@@ -16,7 +16,7 @@ import { supabaseAdmin } from "./supabaseAdmin";
 import { handleIncomingMessage } from "./automationManager";
 import { handleAgentMessage } from "./agentManager";
 
-const logger = pino({ level: "silent" });
+const logger = pino({ level: "info" }); // Set to info to see Baileys logs for debugging crashes
 
 interface Session {
   socket: WASocket;
@@ -27,29 +27,40 @@ interface Session {
 
 class WhatsAppManager {
   private sessions: Map<string, Session> = new Map();
+  private activeTasks: number = 0;
+  private maxConcurrentTasks: number = 10;
 
   async reconnectAllSessions() {
     const sessionsDir = path.join(process.cwd(), "sessions");
     if (!fs.existsSync(sessionsDir)) return;
 
-    const userDirs = fs.readdirSync(sessionsDir);
-    console.log(`Found ${userDirs.length} potential sessions to reconnect.`);
+    try {
+      const userDirs = await fs.promises.readdir(sessionsDir);
+      console.log(`Found ${userDirs.length} potential sessions to reconnect.`);
 
-    for (const userId of userDirs) {
-      const userSessionDir = path.join(sessionsDir, userId);
-      if (fs.statSync(userSessionDir).isDirectory()) {
-        const isPaused = fs.existsSync(path.join(userSessionDir, "paused.txt"));
-        if (isPaused) {
-          console.log(`Skipping paused session for user: ${userId}`);
-          continue;
-        }
-        console.log(`Attempting to reconnect session for user: ${userId}`);
-        try {
-          await this.createSession(userId);
-        } catch (err) {
-          console.error(`Failed to reconnect session for user ${userId}:`, err);
+      for (const userId of userDirs) {
+        const userSessionDir = path.join(sessionsDir, userId);
+        const stats = await fs.promises.stat(userSessionDir);
+        
+        if (stats.isDirectory()) {
+          const isPaused = fs.existsSync(path.join(userSessionDir, "paused.txt"));
+          if (isPaused) {
+            console.log(`Skipping paused session for user: ${userId}`);
+            continue;
+          }
+          
+          // Add a small delay between reconnections to prevent overwhelming the server
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          console.log(`Attempting to reconnect session for user: ${userId}`);
+          // Don't await each session creation to avoid long sequential startup
+          this.createSession(userId).catch(err => {
+            console.error(`Failed to reconnect session for user ${userId}:`, err);
+          });
         }
       }
+    } catch (err) {
+      console.error("Error during reconnectAllSessions:", err);
     }
   }
 
@@ -150,12 +161,16 @@ class WhatsAppManager {
     const socket = makeWASocket({
       version,
       printQRInTerminal: false,
-      browser: Browsers.ubuntu("Chrome"),
+      browser: Browsers.macOS("Desktop"),
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
       logger,
+      // Add some performance and stability options
+      generateHighQualityLinkPreview: false,
+      syncFullHistory: false,
+      markOnlineOnConnect: true,
     });
 
     this.sessions.set(userId, { socket, status: "connecting" });
@@ -185,7 +200,10 @@ class WhatsAppManager {
       try {
         const { connection, lastDisconnect, qr } = update;
         const session = this.sessions.get(userId);
-        if (!session) return;
+        if (!session) {
+          console.warn(`[WhatsApp] Connection update for ${userId} but no session found in map.`);
+          return;
+        }
 
         if (qr) {
           try {
@@ -203,6 +221,7 @@ class WhatsAppManager {
           session.status = "connected";
           session.qr = undefined;
           await this.log(userId, "success", "WhatsApp conectado!");
+          console.log(`[WhatsApp] Session ${userId} is now OPEN and READY.`);
           onUpdate?.("connected");
         }
 
@@ -211,7 +230,7 @@ class WhatsAppManager {
           const statusCode = boomErr?.output?.statusCode;
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
           
-          console.log(`[WhatsApp] Connection closed for ${userId}. Reconnecting: ${shouldReconnect}`);
+          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}. Should reconnect: ${shouldReconnect}. Error:`, boomErr);
           session.status = "disconnected";
           onUpdate?.("disconnected");
 
@@ -219,10 +238,18 @@ class WhatsAppManager {
           this.sessions.delete(userId);
 
           if (shouldReconnect) {
+            const delay = 5000; // 5 seconds delay before reconnecting
+            console.log(`[WhatsApp] Auto-reconnecting for ${userId} in ${delay}ms...`);
             setTimeout(() => {
-              console.log(`[WhatsApp] Auto-reconnecting for ${userId}...`);
-              this.createSession(userId, phoneNumber, onUpdate);
-            }, 3000);
+              // Double check if session was already recreated by another event
+              if (!this.sessions.has(userId)) {
+                this.createSession(userId, phoneNumber, onUpdate).catch(err => {
+                  console.error(`[WhatsApp] Auto-reconnect failed for ${userId}:`, err);
+                });
+              } else {
+                console.log(`[WhatsApp] Skipping auto-reconnect for ${userId} as session already exists.`);
+              }
+            }, delay);
           }
         }
       } catch (err) {
@@ -241,50 +268,105 @@ class WhatsAppManager {
     */
 
     socket.ev.on("messaging-history.set", async ({ contacts, messages }) => {
-      console.log(`Received history for ${userId}: ${contacts?.length || 0} contacts, ${messages?.length || 0} messages`);
-      /*
-      if (contacts) {
-        for (const contact of contacts) {
-          await this.syncContact(userId, contact);
+      try {
+        console.log(`Received history for ${userId}: ${contacts?.length || 0} contacts, ${messages?.length || 0} messages`);
+        if (messages) {
+          for (const msg of messages) {
+            await this.syncMessage(userId, msg);
+          }
         }
-      }
-      */
-      if (messages) {
-        for (const msg of messages) {
-          await this.syncMessage(userId, msg);
-        }
+      } catch (err) {
+        console.error(`[WhatsApp] Error in messaging-history.set for user ${userId}:`, err);
       }
     });
 
       // Sync Messages
       socket.ev.on("messages.upsert", async ({ messages, type }) => {
-        if (type !== "notify" && type !== "append") return;
+        try {
+          if (type !== "notify" && type !== "append") return;
 
-        for (const msg of messages) {
-          const text = msg.message?.conversation || 
-                       msg.message?.extendedTextMessage?.text || 
-                       msg.message?.imageMessage?.caption ||
-                       msg.message?.videoMessage?.caption ||
-                       msg.message?.buttonsResponseMessage?.selectedButtonId ||
-                       msg.message?.templateButtonReplyMessage?.selectedId ||
-                       msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ? 
-                         JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson).id : 
-                       msg.message?.interactiveResponseMessage?.body?.text ||
-                       "";
-          
-          if (!msg.key.fromMe && text) {
-            console.log(`Processing incoming message from ${msg.key.remoteJid} for automation: "${text}"`);
-            const isButton = !!(msg.message?.buttonsResponseMessage || 
-                               msg.message?.templateButtonReplyMessage || 
-                               msg.message?.interactiveResponseMessage);
-            const triggered = await handleIncomingMessage(this, userId, msg.key.remoteJid!, text, isButton);
-            
-            if (!triggered) {
-              await handleAgentMessage(this, userId, msg.key.remoteJid!, text);
+          for (const msg of messages) {
+            try {
+              let text = "";
+              
+              if (msg.message?.conversation) {
+                text = msg.message.conversation;
+              } else if (msg.message?.extendedTextMessage?.text) {
+                text = msg.message.extendedTextMessage.text;
+              } else if (msg.message?.imageMessage?.caption) {
+                text = msg.message.imageMessage.caption;
+              } else if (msg.message?.videoMessage?.caption) {
+                text = msg.message.videoMessage.caption;
+              } else if (msg.message?.buttonsResponseMessage?.selectedButtonId) {
+                text = msg.message.buttonsResponseMessage.selectedButtonId;
+              } else if (msg.message?.templateButtonReplyMessage?.selectedId) {
+                text = msg.message.templateButtonReplyMessage.selectedId;
+              } else if (msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+                try {
+                  const params = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+                  text = params.id || params.selectedId || "";
+                } catch (e) {
+                  console.error("[WhatsApp] Error parsing nativeFlowResponseMessage paramsJson:", e);
+                }
+              } else if (msg.message?.interactiveResponseMessage?.body?.text) {
+                text = msg.message.interactiveResponseMessage.body.text;
+              } else if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) {
+                text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+              }
+              
+              if (!msg.key.fromMe && text) {
+                const remoteJid = msg.key.remoteJid;
+                if (!remoteJid) {
+                  console.warn(`[WhatsApp] Incoming message for user ${userId} has no remoteJid. Skipping.`);
+                  continue;
+                }
+
+                const isGroup = remoteJid.includes("@g.us");
+                if (isGroup) {
+                  console.log(`[WhatsApp] Skipping group message from ${remoteJid} for user ${userId}`);
+                  await this.syncMessage(userId, msg);
+                  continue;
+                }
+
+                console.log(`[WhatsApp] Incoming message from ${remoteJid} for user ${userId}: "${text}"`);
+                const isButton = !!(msg.message?.buttonsResponseMessage || 
+                                   msg.message?.templateButtonReplyMessage || 
+                                   msg.message?.interactiveResponseMessage);
+                
+                // Run automation/agent in background to not block the message loop
+                (async () => {
+                  if (this.activeTasks >= this.maxConcurrentTasks) {
+                    console.warn(`[WhatsApp] Max concurrent tasks reached (${this.activeTasks}). Skipping background processing for this message.`);
+                    return;
+                  }
+
+                  this.activeTasks++;
+                  try {
+                    console.log(`[WhatsApp] Processing message for user ${userId}: "${text}" (isButton: ${isButton}) (Active Tasks: ${this.activeTasks})`);
+                    const triggered = await handleIncomingMessage(this, userId, remoteJid, text, isButton);
+                    if (!triggered) {
+                      console.log(`[WhatsApp] No automation triggered for user ${userId}, calling AI agent.`);
+                      await handleAgentMessage(this, userId, remoteJid, text);
+                    } else {
+                      console.log(`[WhatsApp] Automation triggered for user ${userId}.`);
+                    }
+                  } catch (err) {
+                    console.error(`[WhatsApp] Error in message processing for user ${userId}:`, err);
+                  } finally {
+                    this.activeTasks--;
+                  }
+                })();
+              } else if (!msg.key.fromMe && !text) {
+                console.log(`[WhatsApp] Incoming message from ${msg.key.remoteJid} for user ${userId} has no text content. Raw:`, JSON.stringify(msg.message, null, 2));
+              }
+              
+              await this.syncMessage(userId, msg);
+            } catch (innerErr) {
+              console.error(`[WhatsApp] Error processing individual message for user ${userId}:`, innerErr);
             }
           }
-          
-          await this.syncMessage(userId, msg);
+        } catch (outerErr) {
+          console.error(`[WhatsApp] Critical error in messages.upsert for user ${userId}:`, outerErr);
         }
       });
 

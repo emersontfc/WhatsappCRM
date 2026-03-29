@@ -114,32 +114,49 @@ router.get("/subscription", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
   try {
-    const { data: profile, error: profileError } = await supabaseAdmin
-      .from("users")
-      .select("*")
-      .eq("id", userId)
-      .single();
+    console.log(`[AI API] Fetching subscription for user ${userId}`);
+    
+    // Run queries in parallel for better performance
+    const [profileResult, subResult] = await Promise.all([
+      supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("id", userId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from("subscriptions")
+        .select("*, plans(*)")
+        .eq("user_id", userId)
+        .maybeSingle()
+    ]);
 
-    if (profileError) throw profileError;
+    if (profileResult.error) {
+      console.error("[AI API] Profile fetch error:", profileResult.error);
+      throw profileResult.error;
+    }
 
-    const { data: subscription, error: subError } = await supabaseAdmin
-      .from("subscriptions")
-      .select("*, plans(*)")
-      .eq("user_id", userId)
-      .single();
+    const profile = profileResult.data;
+    const subscription = subResult.data;
 
-    // It's okay if subscription doesn't exist yet, we'll return the profile
+    // Standardized response according to requirements
+    const plan = profile?.role === "admin" ? "Admin" : (subscription?.plan || profile?.plan || "Free");
+    const expiresAt = profile?.role === "admin" ? null : (subscription?.expires_at || null);
+
     res.json({ 
       success: true, 
       data: {
-        ...profile,
-        subscription: subscription || null,
+        plan,
+        active: true, // All users have access now
+        expires_at: expiresAt,
+        // Include original data for backward compatibility if needed
+        profile: profile,
+        subscription: subscription,
         planDetails: subscription?.plans || null
       }
     });
   } catch (err: any) {
-    console.error("Failed to fetch subscription:", err);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("[AI API] Failed to fetch subscription:", err);
+    res.status(500).json({ success: false, error: err.message || "Erro ao buscar assinatura" });
   }
 });
 

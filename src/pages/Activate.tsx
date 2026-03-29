@@ -69,12 +69,12 @@ export default function Activate() {
     );
   }
 
-  const isActivated = subscription?.plan !== "Free" && subscription?.plan !== "Starter" && subscription?.expires_at && new Date(subscription.expires_at) > new Date();
+  const isFree = subscription?.plan === "Free";
+  const isActivePlan = !isFree;
   const isPremium = subscription?.plan === "Premium" || subscription?.role === "admin";
-  const isActivePlan = isPremium || subscription?.plan === "Pro" || (subscription?.plan === "Starter" && subscription?.isActivated);
   
   const daysLeft = subscription?.expires_at 
-    ? Math.ceil((new Date(subscription.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
+    ? Math.max(0, Math.ceil((new Date(subscription.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))
     : 0;
 
   return (
@@ -118,7 +118,7 @@ export default function Activate() {
         </Card>
       )}
 
-      <Card className={cn(isActivePlan && "opacity-50 pointer-events-none")}>
+      <Card className={cn(isActivePlan && "border-emerald-200 bg-emerald-50/10")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CreditCard className="text-emerald-600" />
