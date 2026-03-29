@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from "express";
-import { supabaseAuth } from "../supabaseAuth";
 import { supabaseAdmin } from "../supabaseAdmin";
 
 export interface AuthRequest extends Request {
@@ -19,8 +18,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   const token = authHeader.split(" ")[1];
 
   try {
-    // 1. Verify token and get user using Auth client
-    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
+    // 1. Verify token and get user using Admin client
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
       console.error(`[Auth Middleware] Token verification failed:`, {
