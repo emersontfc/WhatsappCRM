@@ -33,6 +33,19 @@ async function startServer() {
     next();
   });
 
+  app.get("/api/debug/auth", (req, res) => {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || "NOT_SET";
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "NOT_SET";
+    
+    res.json({
+      success: true,
+      supabaseUrl: supabaseUrl.substring(0, 15) + "...",
+      hasServiceRoleKey: serviceRoleKey !== "NOT_SET" && serviceRoleKey.length > 50,
+      nodeEnv: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // API Routes
   app.use("/api/whatsapp", (req, res, next) => {
     console.log(`[WhatsApp Route Attempt] ${req.method} ${req.url}`);
@@ -65,7 +78,7 @@ async function startServer() {
   app.use("/api/templates", authenticate, templateRoutes);
   app.use("/api/packs", authenticate, packRoutes);
   app.use("/api/media", authenticate, mediaRoutes);
-  app.use("/api/logs", logsRoutes);
+  app.use("/api/logs", authenticate, logsRoutes);
 
   // Serve uploads directory
   const uploadsDir = path.join(process.cwd(), "uploads");

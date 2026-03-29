@@ -3,8 +3,8 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-let supabaseUrl = (process.env.VITE_SUPABASE_URL || "").trim();
-const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+let supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
+const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
 // Handle case where user only provides the project ref
 if (supabaseUrl && !supabaseUrl.startsWith("http")) {

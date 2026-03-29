@@ -91,6 +91,32 @@ export default function Dashboard() {
     checkUserTemplate();
   }, []);
 
+  const debugAuth = async () => {
+    try {
+      const frontendUrl = (import.meta.env.VITE_SUPABASE_URL || "NOT_SET").substring(0, 15) + "...";
+      const backendResponse = await apiFetch("/api/debug/auth");
+      
+      const backendUrl = backendResponse.supabaseUrl;
+      const match = frontendUrl === backendUrl;
+      
+      if (match) {
+        toast.success("Configuração de Auth consistente entre Frontend e Backend.");
+      } else {
+        toast.error(`Inconsistência de Auth detectada! Frontend: ${frontendUrl}, Backend: ${backendUrl}. Verifique as variáveis de ambiente no Render.`);
+      }
+      
+      console.log("Debug Auth Result:", {
+        frontendUrl,
+        backendUrl,
+        match,
+        backendInfo: backendResponse
+      });
+    } catch (err: any) {
+      console.error("Debug auth failed:", err);
+      toast.error("Falha ao verificar configuração de auth: " + err.message);
+    }
+  };
+
   const fetchStats = async (userId: string) => {
     try {
       if (!userId) return;
@@ -524,6 +550,13 @@ export default function Dashboard() {
               <div className="flex items-center gap-2">
                 <QrCode size={20} className="text-emerald-600" />
                 Conexão WhatsApp
+                <button 
+                  onClick={debugAuth}
+                  className="p-1 hover:bg-slate-100 rounded text-slate-400"
+                  title="Debug Auth Configuration"
+                >
+                  <ShieldAlert size={14} />
+                </button>
               </div>
               <ConnectionStatusBadge status={status} />
             </CardTitle>

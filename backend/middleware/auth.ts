@@ -13,7 +13,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ success: false, error: "No token provided" });
+    return res.status(401).json({ error: "No token provided" });
   }
 
   const token = authHeader.split(" ")[1];
@@ -23,7 +23,21 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
-      return res.status(401).json({ success: false, error: "Invalid or expired token" });
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "NOT_SET";
+      const urlPreview = supabaseUrl.length > 10 ? `${supabaseUrl.substring(0, 10)}...` : supabaseUrl;
+      
+      let tokenPayload = {};
+      try {
+        const base64Payload = token.split('.')[1];
+        tokenPayload = JSON.parse(Buffer.from(base64Payload, 'base64').toString());
+      } catch (e) {}
+
+      console.error(`[Auth Middleware] Token verification failed for URL ${urlPreview}:`, {
+        error: error?.message || "No user found",
+        tokenAud: (tokenPayload as any).aud,
+        tokenIss: (tokenPayload as any).iss
+      });
+      return res.status(401).json({ error: "Invalid or expired token" });
     }
 
     const isAdminEmail = user.email === "alcindacharles@gmail.com" || user.email === "emersontorres42@gmail.com";
