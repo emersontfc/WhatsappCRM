@@ -112,42 +112,44 @@ export default function Settings() {
         }
       };
       await checkAdmin();
-
-      // Real-time subscription for keys (only if admin)
-      let keysSubscription: any;
-      let usersSubscription: any;
-
-      if (isAdmin) {
-        keysSubscription = supabase
-          .channel('public:license_keys')
-          .on('postgres_changes', { 
-            event: '*', 
-            schema: 'public', 
-            table: 'license_keys'
-          }, async () => {
-            await fetchKeys();
-          })
-          .subscribe();
-
-        usersSubscription = supabase
-          .channel('public:users')
-          .on('postgres_changes', { 
-            event: '*', 
-            schema: 'public', 
-            table: 'users'
-          }, async () => {
-            await fetchUsers();
-          })
-          .subscribe();
-      }
-
-      return () => {
-        if (keysSubscription) supabase.removeChannel(keysSubscription);
-        if (usersSubscription) supabase.removeChannel(usersSubscription);
-      };
     };
 
     init();
+  }, []);
+
+  useEffect(() => {
+    // Real-time subscription for keys (only if admin)
+    let keysSubscription: any;
+    let usersSubscription: any;
+
+    if (isAdmin) {
+      keysSubscription = supabase
+        .channel('public:license_keys')
+        .on('postgres_changes', { 
+          event: '*', 
+          schema: 'public', 
+          table: 'license_keys'
+        }, async () => {
+          await fetchKeys();
+        })
+        .subscribe();
+
+      usersSubscription = supabase
+        .channel('public:users')
+        .on('postgres_changes', { 
+          event: '*', 
+          schema: 'public', 
+          table: 'users'
+        }, async () => {
+          await fetchUsers();
+        })
+        .subscribe();
+    }
+
+    return () => {
+      if (keysSubscription) supabase.removeChannel(keysSubscription);
+      if (usersSubscription) supabase.removeChannel(usersSubscription);
+    };
   }, [isAdmin]);
 
   const generateKey = async () => {
