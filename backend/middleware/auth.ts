@@ -40,6 +40,8 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
+    console.log("User authenticated:", user.id);
+
     const isAdminEmail = user.email === "alcindacharles@gmail.com" || user.email === "emersontorres42@gmail.com";
 
     // 2. Fetch profile and subscription in parallel to reduce latency
@@ -188,9 +190,15 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     };
 
     next();
-  } catch (err) {
+  } catch (err: any) {
     console.error("[Auth] Middleware error:", err);
-    return res.status(401).json({ success: false, error: "Authentication failed" });
+    // If it's an initialization error, report it more clearly
+    const errMsg = err?.message || "Invalid or expired token";
+    const isInitError = errMsg.includes("not initialized") || errMsg.includes("Missing");
+    
+    return res.status(401).json({ 
+      error: isInitError ? errMsg : "Invalid or expired token" 
+    });
   }
 };
 

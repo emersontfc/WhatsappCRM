@@ -190,7 +190,7 @@ export default function Dashboard() {
     isCheckingStatus.current = true;
     try {
       // Use the simplified status endpoint
-      const data = await apiFetch(`/api/whatsapp/status/${uId}`);
+      const data = await apiFetch(`/api/whatsapp/status`);
       
       if (data.status === "connected") {
         setStatus("connected");
@@ -207,7 +207,7 @@ export default function Dashboard() {
         setStatus(data.status);
         
         // Fetch QR/Pairing code specifically
-        const qrData = await apiFetch(`/api/whatsapp/qr/${uId}`);
+        const qrData = await apiFetch(`/api/whatsapp/qr`);
         if (qrData.qr) {
           setQr(qrData.qr);
           setPairingCode(null);
@@ -260,7 +260,7 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiFetch(`/api/whatsapp/connect/${userId}`, {
+      const data = await apiFetch(`/api/whatsapp/connect`, {
         method: "POST",
         body: JSON.stringify({ phoneNumber: connectMethod === "number" ? phoneNumber : undefined })
       });
@@ -280,7 +280,7 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      await apiFetch(`/api/whatsapp/reset/${userId}`, {
+      await apiFetch(`/api/whatsapp/reset`, {
         method: "POST",
       });
       setStatus("disconnected");
@@ -301,7 +301,7 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      await apiFetch(`/api/whatsapp/pause/${userId}`, {
+      await apiFetch(`/api/whatsapp/pause`, {
         method: "POST",
       });
       setStatus("paused");
@@ -339,7 +339,7 @@ export default function Dashboard() {
     try {
       if (!me?.id) throw new Error("WhatsApp não conectado");
       
-      await apiFetch(`/api/whatsapp/send/${userId}`, {
+      await apiFetch(`/api/whatsapp/send`, {
         method: "POST",
         body: JSON.stringify({ 
           jid: me.id, 

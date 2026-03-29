@@ -34,12 +34,12 @@ async function startServer() {
   });
 
   app.get("/api/debug/auth", (req, res) => {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || "NOT_SET";
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "NOT_SET";
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "NOT_SET";
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "NOT_SET";
     
     res.json({
       success: true,
-      supabaseUrl: supabaseUrl.substring(0, 15) + "...",
+      supabaseUrl: supabaseUrl === "NOT_SET" ? "NOT_SET" : supabaseUrl.substring(0, 15) + "...",
       hasServiceRoleKey: serviceRoleKey !== "NOT_SET" && serviceRoleKey.length > 50,
       nodeEnv: process.env.NODE_ENV,
       timestamp: new Date().toISOString()
@@ -171,6 +171,10 @@ async function startServer() {
 
   app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`[Startup] SUPABASE_URL present: ${!!process.env.SUPABASE_URL}`);
+    console.log(`[Startup] VITE_SUPABASE_URL present: ${!!process.env.VITE_SUPABASE_URL}`);
+    console.log(`[Startup] SUPABASE_SERVICE_ROLE_KEY present: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY}`);
+    console.log(`[Startup] SUPABASE_SERVICE_KEY present: ${!!process.env.SUPABASE_SERVICE_KEY}`);
     
     // Reconnect existing WhatsApp sessions in background
     whatsappManager.reconnectAllSessions().catch(err => {

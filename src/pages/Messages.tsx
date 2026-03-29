@@ -230,7 +230,7 @@ export default function Messages() {
     setLoading(true);
     try {
       const phone = selectedContact.phone.replace(/\D/g, "");
-      const response = await apiFetch(`/api/whatsapp/send/${userId}`, {
+      const response = await apiFetch(`/api/whatsapp/send`, {
         method: "POST",
         body: JSON.stringify({
           jid: `${phone}@s.whatsapp.net`,

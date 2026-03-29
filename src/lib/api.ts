@@ -86,14 +86,18 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
             const backendUrl = (debugData.supabaseUrl || "").substring(0, 15);
             
             if (frontendUrl !== backendUrl) {
-              const mismatchMsg = `CRITICAL: Supabase Project Mismatch detected! Frontend: ${frontendUrl}..., Backend: ${backendUrl}...`;
+              const backendDisplay = backendUrl === "NOT_SET" ? "NÃO CONFIGURADO" : `${backendUrl}...`;
+              const mismatchMsg = `CRITICAL: Supabase Project Mismatch detected! Frontend: ${frontendUrl}..., Backend: ${backendDisplay}`;
               console.error(`[apiFetch] ${mismatchMsg}`);
-              console.error(`[apiFetch] Please ensure VITE_SUPABASE_URL is identical in both Frontend and Backend settings.`);
+              
+              const toastMsg = backendUrl === "NOT_SET" 
+                ? "Erro de Configuração: O Backend não possui as variáveis SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY configuradas em Settings."
+                : "Erro de Configuração: O Backend está configurado para um projeto Supabase diferente do Frontend. Verifique as variáveis de ambiente.";
               
               // Only toast once per session to avoid spamming
               if (!(window as any)._authMismatchToasted) {
                 import("sonner").then(({ toast }) => {
-                  toast.error("Erro de Configuração: O Backend está configurado para um projeto Supabase diferente do Frontend. Verifique as variáveis de ambiente.", {
+                  toast.error(toastMsg, {
                     duration: 10000,
                     id: "auth-mismatch-toast"
                   });

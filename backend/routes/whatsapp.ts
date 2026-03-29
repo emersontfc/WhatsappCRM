@@ -16,25 +16,7 @@ router.post("/connect", requirePlan, async (req: PlanRequest, res) => {
   const userId = req.user?.id;
   const { phoneNumber } = req.body;
   
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
-
-  try {
-    await whatsappManager.deleteSession(userId);
-    await whatsappManager.createSession(userId, phoneNumber);
-    const session = whatsappManager.getSession(userId);
-    res.json({ success: true, status: session?.status || "connecting" });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.post("/connect/:userId", requirePlan, async (req: PlanRequest, res) => {
-  const userId = req.params.userId;
-  const { phoneNumber } = req.body;
-  
-  if (req.user?.id !== userId && req.user?.role !== 'admin') {
-    return res.status(403).json({ success: false, error: "Unauthorized" });
-  }
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     await whatsappManager.deleteSession(userId);
@@ -48,24 +30,7 @@ router.post("/connect/:userId", requirePlan, async (req: PlanRequest, res) => {
 
 router.get("/qr", (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
-
-  const session = whatsappManager.getSession(userId);
-  if (!session) return res.json({ success: true, status: "disconnected" });
-
-  res.json({
-    success: true,
-    qr: session.qr,
-    status: session.status,
-    pairingCode: session.pairingCode
-  });
-});
-
-router.get("/qr/:userId", (req: AuthRequest, res) => {
-  const userId = req.params.userId;
-  if (req.user?.id !== userId && req.user?.role !== 'admin') {
-    return res.status(403).json({ success: false, error: "Unauthorized" });
-  }
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const session = whatsappManager.getSession(userId);
   if (!session) return res.json({ success: true, status: "disconnected" });
@@ -81,24 +46,7 @@ router.get("/qr/:userId", (req: AuthRequest, res) => {
 router.get("/status", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   console.log(`[WhatsApp Status] Checking status for user: ${userId}`);
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
-
-  const session = whatsappManager.getSession(userId);
-  const status = session?.status || "disconnected";
-
-  res.json({
-    success: true,
-    status,
-    connected: status === "connected"
-  });
-});
-
-router.get("/status/:userId", (req: AuthRequest, res) => {
-  const userId = req.params.userId;
-  console.log(`[WhatsApp Status] Checking status for specific user: ${userId} (Requested by: ${req.user?.id})`);
-  if (req.user?.id !== userId && req.user?.role !== 'admin') {
-    return res.status(403).json({ success: false, error: "Unauthorized" });
-  }
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const session = whatsappManager.getSession(userId);
   const status = session?.status || "disconnected";
@@ -112,22 +60,7 @@ router.get("/status/:userId", (req: AuthRequest, res) => {
 
 router.post("/reset", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
-
-  try {
-    await whatsappManager.deleteSession(userId);
-    await whatsappManager.createSession(userId);
-    res.json({ success: true, message: "Sessão resetada com sucesso" });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.post("/reset/:userId", async (req: AuthRequest, res) => {
-  const userId = req.params.userId;
-  if (req.user?.id !== userId && req.user?.role !== 'admin') {
-    return res.status(403).json({ success: false, error: "Unauthorized" });
-  }
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     await whatsappManager.deleteSession(userId);
@@ -140,17 +73,17 @@ router.post("/reset/:userId", async (req: AuthRequest, res) => {
 
 router.get("/me", (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const me = whatsappManager.getMe(userId);
   res.json({ success: true, me });
 });
 
-router.post("/send/:userId", requirePlan, async (req: PlanRequest, res) => {
-  const { userId } = req.params;
+router.post("/send", requirePlan, async (req: PlanRequest, res) => {
+  const userId = req.user?.id;
   let { jid, text, to, mediaUrl, mediaType } = req.body;
   
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   // Handle both 'jid' and 'to' for backward compatibility
   if (!jid && to) jid = to;
@@ -197,8 +130,9 @@ router.post("/send/:userId", requirePlan, async (req: PlanRequest, res) => {
   }
 });
 
-router.post("/test/:userId", async (req: AuthRequest, res) => {
-  const { userId } = req.params;
+router.post("/test", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     const me = whatsappManager.getMe(userId);
@@ -214,8 +148,9 @@ router.post("/test/:userId", async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/pause/:userId", async (req: AuthRequest, res) => {
-  const { userId } = req.params;
+router.post("/pause", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
     const result = await whatsappManager.pauseSession(userId);
