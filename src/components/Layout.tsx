@@ -58,21 +58,12 @@ export default function Layout({ children }: LayoutProps) {
           const sub = response.data;
           const adminStatus = sub?.role === "admin";
           setIsAdmin(adminStatus);
-          setUserPlan(sub?.plan || "Free");
           
-          if (adminStatus) {
-            setIsActivated(true);
-          } else {
-            // Check activation status
-            if (sub?.isActivated === true) {
-              setIsActivated(true);
-            } else if (sub?.expires_at) {
-              const expiresAt = new Date(sub.expires_at);
-              setIsActivated(expiresAt > new Date());
-            } else {
-              setIsActivated(false);
-            }
-          }
+          const plan = sub?.plan || sub?.subscription?.plan;
+          setUserPlan(plan || "Free");
+          
+          // Activation rule: isActivated = !!plan OR isAdmin
+          setIsActivated(adminStatus || !!plan || sub?.isActivated === true);
         }
       } catch (err) {
         console.error("Layout status check failed:", err);
@@ -91,8 +82,17 @@ export default function Layout({ children }: LayoutProps) {
   }, [location.pathname]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/login");
+    try {
+      await supabase.auth.signOut();
+      // Clear all local storage and session storage to prevent cache issues
+      localStorage.clear();
+      sessionStorage.clear();
+      // Force reload to clear all React state and redirect
+      window.location.href = "/login";
+    } catch (err) {
+      console.error("Logout failed:", err);
+      window.location.href = "/login";
+    }
   };
 
   const navItems = [

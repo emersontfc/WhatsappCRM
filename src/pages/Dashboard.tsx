@@ -154,6 +154,13 @@ export default function Dashboard() {
   const checkStatus = async (uId: string, manual = false) => {
     if (!uId || uId === "guest-user" || isCheckingStatus.current) return;
     
+    // Check if we have a valid session before calling the API to avoid 401s
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      if (manual) toast.error("Sessão expirada. Por favor, faça login novamente.");
+      return;
+    }
+    
     isCheckingStatus.current = true;
     try {
       // Use the simplified status endpoint

@@ -47,25 +47,19 @@ export const useActivation = () => {
             const userData = data.data;
             const subscription = userData.subscription;
             
-            if (subscription) {
+            // Activation rule: isActivated = !!plan OR isAdmin
+            if (subscription && subscription.plan) {
               setPlan(subscription.plan);
               setPlanDetails(userData.planDetails);
-              if (subscription.plan === 'Free' || subscription.plan === 'Starter') {
-                setIsActivated(true);
-              } else if (new Date(subscription.end_date) > new Date()) {
-                setIsActivated(true);
-              } else {
-                setIsActivated(false);
-              }
+              setIsActivated(true);
+            } else if (userData.plan) {
+              setPlan(userData.plan);
+              setIsActivated(true);
+            } else if (userData.isActivated === true) {
+              setPlan("Starter");
+              setIsActivated(true);
             } else {
-              setPlan(userData.plan || "Starter");
-              if (userData.isActivated === true) {
-                setIsActivated(true);
-              } else if (userData.expires_at) {
-                setIsActivated(new Date(userData.expires_at) > new Date());
-              } else {
-                setIsActivated(false);
-              }
+              setIsActivated(false);
             }
           }
         }

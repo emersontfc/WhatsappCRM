@@ -17,8 +17,13 @@ export default function AdminPacks() {
   }, []);
 
   const fetchPacks = async () => {
-    const res = await apiFetch("/api/packs/list");
-    if (res.success) setPacks(res.data);
+    try {
+      const res = await apiFetch("/api/packs/list");
+      if (res.success) setPacks(res.data);
+    } catch (error: any) {
+      console.error("Failed to fetch packs:", error);
+      toast.error(error.message || "Erro ao carregar packs");
+    }
   };
 
   const handleImportPack = async () => {

@@ -25,49 +25,72 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-router.post("/upload-audio", authenticate, upload.single("audio"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: "Nenhum arquivo enviado" });
+router.post("/upload-audio", authenticate, (req, res) => {
+  upload.single("audio")(req, res, async (err) => {
+    if (err instanceof multer.MulterError) {
+      console.error("[Media] Multer error:", err);
+      return res.status(400).json({ success: false, error: `Erro no upload: ${err.message}` });
+    } else if (err) {
+      console.error("[Media] Unknown upload error:", err);
+      return res.status(500).json({ success: false, error: "Erro interno no upload" });
     }
 
-    const inputPath = req.file.path;
-    const outputFilename = `audio-${Date.now()}.ogg`;
-    const outputPath = path.join(uploadsDir, outputFilename);
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: "Nenhum arquivo enviado" });
+      }
 
-    console.log(`[Media] Converting ${inputPath} to ${outputPath}`);
+      const inputPath = req.file.path;
+      const outputFilename = `audio-${Date.now()}.ogg`;
+      const outputPath = path.join(uploadsDir, outputFilename);
 
-    ffmpeg(inputPath)
-      .toFormat("ogg")
-      .audioCodec("libopus")
-      .on("error", (err) => {
-        console.error("[Media] Error during conversion:", err);
-        res.status(500).json({ success: false, error: "Erro na conversão do áudio" });
-      })
-      .on("end", () => {
-        console.log("[Media] Conversion finished");
-        
-        // Delete original webm file
-        fs.unlink(inputPath, (err) => {
-          if (err) console.error("[Media] Error deleting temp file:", err);
-        });
+      console.log(`[Media] Converting ${inputPath} to ${outputPath}`);
 
-        const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-        const host = req.headers["x-forwarded-host"] || req.get("host");
-        const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
+      // Check if ffmpeg is available
+      ffmpeg(inputPath)
+        .toFormat("ogg")
+        .audioCodec("libopus")
+        .on("error", (err) => {
+          console.error("[Media] ffmpeg error:", err.message);
+          // If ffmpeg fails, we might want to return the original file if it's already ogg, 
+          // but here we expect webm from browser. 
+          // Let's try to provide a helpful error.
+          res.status(500).json({ 
+            success: false, 
+            error: "Erro na conversão do áudio. Certifique-se que o ffmpeg está instalado no servidor.",
+            details: err.message
+          });
+          
+          // Cleanup
+          if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+        })
+        .on("end", () => {
+          console.log("[Media] Conversion finished");
+          
+          // Delete original webm file
+          if (fs.existsSync(inputPath)) {
+            fs.unlink(inputPath, (err) => {
+              if (err) console.error("[Media] Error deleting temp file:", err);
+            });
+          }
 
-        res.json({ 
-          success: true, 
-          url: audioUrl,
-          filename: outputFilename
-        });
-      })
-      .save(outputPath);
+          const protocol = req.headers["x-forwarded-proto"] || req.protocol;
+          const host = req.headers["x-forwarded-host"] || req.get("host");
+          const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
 
-  } catch (err: any) {
-    console.error("[Media] Upload error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
+          res.json({ 
+            success: true, 
+            url: audioUrl,
+            filename: outputFilename
+          });
+        })
+        .save(outputPath);
+
+    } catch (err: any) {
+      console.error("[Media] General error:", err);
+      res.status(500).json({ success: false, error: err.message || "Erro interno no processamento de mídia" });
+    }
+  });
 });
 
 export default router;

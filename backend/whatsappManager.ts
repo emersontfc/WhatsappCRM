@@ -266,11 +266,17 @@ class WhatsAppManager {
                        msg.message?.imageMessage?.caption ||
                        msg.message?.videoMessage?.caption ||
                        msg.message?.buttonsResponseMessage?.selectedButtonId ||
+                       msg.message?.templateButtonReplyMessage?.selectedId ||
+                       msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ? 
+                         JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson).id : 
+                       msg.message?.interactiveResponseMessage?.body?.text ||
                        "";
           
           if (!msg.key.fromMe && text) {
             console.log(`Processing incoming message from ${msg.key.remoteJid} for automation: "${text}"`);
-            const isButton = !!msg.message?.buttonsResponseMessage?.selectedButtonId;
+            const isButton = !!(msg.message?.buttonsResponseMessage || 
+                               msg.message?.templateButtonReplyMessage || 
+                               msg.message?.interactiveResponseMessage);
             const triggered = await handleIncomingMessage(this, userId, msg.key.remoteJid!, text, isButton);
             
             if (!triggered) {
@@ -548,33 +554,34 @@ class WhatsAppManager {
       // Modern Baileys Buttons (Interactive Message - Native Flow)
       // This is the most compatible way for modern WhatsApp versions
       const buttonMessage: any = {
-        viewOnceMessage: {
-          message: {
-            interactiveMessage: {
-              header: { title: "", hasMediaAttachment: false },
-              body: { text: text },
-              footer: { text: "Selecione uma opção" },
-              nativeFlowMessage: {
-                buttons: buttons.map(b => ({
-                  name: "quick_reply",
-                  buttonParamsJson: JSON.stringify({
-                    display_text: b.label,
-                    id: b.id
-                  })
-                }))
-              }
-            }
+        interactiveMessage: {
+          header: { title: "", hasMediaAttachment: false },
+          body: { text: text },
+          footer: { text: "Selecione uma opção" },
+          nativeFlowMessage: {
+            buttons: buttons.map(b => ({
+              name: "quick_reply",
+              buttonParamsJson: JSON.stringify({
+                display_text: b.label,
+                id: b.id
+              })
+            }))
           }
         }
       };
 
       await this.log(userId, "info", `Enviando botões interativos para ${jid}`);
-      return await session.socket.sendMessage(jid, buttonMessage);
+      // Note: Baileys requires wrapping interactiveMessage in a viewOnceMessage for some versions
+      return await session.socket.sendMessage(jid, { 
+        viewOnceMessage: { 
+          message: buttonMessage 
+        } 
+      } as any);
     } catch (err) {
       console.error("Error sending interactive buttons, falling back to list/text:", err);
       
       try {
-        // Fallback 1: List Message
+        // Fallback 1: List Message (Legacy but still works on many clients)
         const listMessage: any = {
           text: text,
           footer: "Selecione uma opção",
@@ -599,7 +606,7 @@ class WhatsAppManager {
         });
         fallbackText += "\n_Responda com o número ou o texto da opção._";
         
-        await this.log(userId, "warn", `List Message falhou, enviando fallback de texto para ${jid}`);
+        await this.log(userId, "warn", `List Message falhou, enviando texto simples para ${jid}`);
         return await session.socket.sendMessage(jid, { text: fallbackText });
       }
     }
