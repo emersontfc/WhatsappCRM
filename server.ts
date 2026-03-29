@@ -13,6 +13,7 @@ import mediaRoutes from "./backend/routes/media";
 import logsRoutes from "./backend/routes/logs";
 import { startScheduler } from "./backend/scheduler";
 import { authenticate } from "./backend/middleware/auth";
+import { logError, LogCategory } from "./backend/lib/logger";
 import fs from "fs";
 
 import { whatsappManager } from "./backend/whatsappManager";
@@ -126,10 +127,9 @@ async function startServer() {
 
   // Global Error Handler
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const { logError } = require("./backend/lib/logger");
     logError(`Global error handler caught: ${err.message}`, err, {
       userId: (req as any).user?.id,
-      category: "system",
+      category: LogCategory.SYSTEM,
       details: {
         path: req.path,
         method: req.method,
@@ -137,6 +137,7 @@ async function startServer() {
         ip: req.ip
       }
     }).catch(console.error);
+
 
     console.error("Global error handler caught:", err);
     res.status(err.status || 500).json({

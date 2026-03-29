@@ -1,7 +1,7 @@
 import express from "express";
 import { whatsappManager } from "../whatsappManager";
 import { AuthRequest } from "../middleware/auth";
-import { requirePlan, PlanRequest } from "../middleware/requirePlan";
+import { getPlan } from "../lib/plan";
 import { supabaseAdmin } from "../supabaseAdmin";
 
 const router = express.Router();
@@ -12,11 +12,14 @@ router.use((req, res, next) => {
   next();
 });
 
-router.post("/connect", requirePlan, async (req: PlanRequest, res) => {
+router.post("/connect", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   const { phoneNumber } = req.body;
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  const plan = await getPlan(userId);
+  if (!plan) return res.status(403).json({ success: false, error: "Plan not found" });
 
   try {
     await whatsappManager.deleteSession(userId);
@@ -79,11 +82,14 @@ router.get("/me", (req: AuthRequest, res) => {
   res.json({ success: true, me });
 });
 
-router.post("/send", requirePlan, async (req: PlanRequest, res) => {
+router.post("/send", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   let { jid, text, to, mediaUrl, mediaType } = req.body;
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  const plan = await getPlan(userId);
+  if (!plan) return res.status(403).json({ success: false, error: "Plan not found" });
 
   // Handle both 'jid' and 'to' for backward compatibility
   if (!jid && to) jid = to;
@@ -100,7 +106,7 @@ router.post("/send", requirePlan, async (req: PlanRequest, res) => {
     .single();
 
   const currentUsed = sub?.messages_used || 0;
-  const maxMessages = req.plan?.max_messages_per_day || 150;
+  const maxMessages = plan.max_messages_per_day || 150;
 
   if (currentUsed >= maxMessages) {
     return res.status(403).json({ 
@@ -129,6 +135,7 @@ router.post("/send", requirePlan, async (req: PlanRequest, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
 
 router.post("/test", async (req: AuthRequest, res) => {
   const userId = req.user?.id;

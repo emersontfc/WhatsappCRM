@@ -114,41 +114,62 @@ router.get("/subscription", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
   try {
-    console.log(`[AI API] Fetching subscription for user ${userId}`);
+    console.log(`[AI API] Fetching/Initializing subscription for user ${userId}`);
     
-    // Run queries in parallel for better performance
+    // 1. Ensure profile and subscription exist
     const [profileResult, subResult] = await Promise.all([
-      supabaseAdmin
-        .from("users")
-        .select("*")
-        .eq("id", userId)
-        .maybeSingle(),
-      supabaseAdmin
-        .from("subscriptions")
-        .select("*, plans(*)")
-        .eq("user_id", userId)
-        .maybeSingle()
+      supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle(),
+      supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).maybeSingle()
     ]);
 
-    if (profileResult.error) {
-      console.error("[AI API] Profile fetch error:", profileResult.error);
-      throw profileResult.error;
+    let profile = profileResult.data;
+    let subscription = subResult.data;
+
+    if (!profile) {
+      console.log(`[AI API] Initializing profile for user ${userId}`);
+      const { data: newProfile } = await supabaseAdmin
+        .from("users")
+        .insert({
+          id: userId,
+          email: req.user?.email,
+          name: req.user?.email?.split("@")[0] || "User",
+          role: "user",
+          plan: "Free"
+        })
+        .select()
+        .single();
+      profile = newProfile;
     }
 
-    const profile = profileResult.data;
-    const subscription = subResult.data;
+    if (!subscription) {
+      console.log(`[AI API] Initializing subscription for user ${userId}`);
+      const { data: newSub } = await supabaseAdmin
+        .from("subscriptions")
+        .insert({
+          user_id: userId,
+          plan: "Free",
+          status: "active",
+          is_active: true
+        })
+        .select("*, plans(*)")
+        .single();
+      subscription = newSub;
+    }
 
-    // Standardized response according to requirements
+    // 2. Check plan status
     const plan = profile?.role === "admin" ? "Admin" : (subscription?.plan || profile?.plan || "Free");
-    const expiresAt = profile?.role === "admin" ? null : (subscription?.expires_at || null);
+    const isActive = subscription?.is_active ?? true;
+
+    if (!isActive) {
+      return res.status(403).json({ success: false, error: "Subscription inactive" });
+    }
 
     res.json({ 
       success: true, 
       data: {
         plan,
-        active: true, // All users have access now
-        expires_at: expiresAt,
-        // Include original data for backward compatibility if needed
+        active: isActive,
+        expires_at: subscription?.expires_at || null,
         profile: profile,
         subscription: subscription,
         planDetails: subscription?.plans || null
@@ -156,7 +177,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     });
   } catch (err: any) {
     console.error("[AI API] Failed to fetch subscription:", err);
-    res.status(500).json({ success: false, error: err.message || "Erro ao buscar assinatura" });
+    res.status(500).json({ success: false, error: "Erro ao buscar assinatura" });
   }
 });
 
