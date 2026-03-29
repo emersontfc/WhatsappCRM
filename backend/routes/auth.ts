@@ -101,7 +101,7 @@ router.post("/activate-license", authenticate, async (req, res) => {
     // 1. Find the license key
     const { data: keyData, error: keyFetchError } = await supabaseAdmin
       .from("license_keys")
-      .select("id, code, duration_days, plan, is_used")
+      .select("id, code, duration_days, plan, is_used, plan_id")
       .eq("code", code.trim())
       .eq("is_used", false)
       .single();

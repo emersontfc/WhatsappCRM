@@ -19,11 +19,13 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
 
   try {
     // 1. Verify token and get user using Admin client
+    console.log(`[Auth Middleware] Verifying token: ${token.substring(0, 10)}...`);
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
       console.error(`[Auth Middleware] Token verification failed:`, {
-        error: error?.message || "No user found"
+        error: error?.message || "No user found",
+        token: token.substring(0, 10) + "..."
       });
       return res.status(401).json({ error: "Invalid or expired token" });
     }
