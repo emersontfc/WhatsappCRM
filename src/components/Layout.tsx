@@ -96,6 +96,7 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
+  // Navigation items for the sidebar
   const navItems = [
     { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { name: "Contatos", path: "/contacts", icon: Users },
