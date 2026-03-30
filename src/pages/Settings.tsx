@@ -65,6 +65,7 @@ export default function Settings() {
     }
   };
   const [loading, setLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   const fetchKeys = async () => {
@@ -91,6 +92,7 @@ export default function Settings() {
 
   useEffect(() => {
     const init = async () => {
+      setPageLoading(true);
       // Check if user is admin via backend
       const checkAdmin = async () => {
         try {
@@ -109,6 +111,8 @@ export default function Settings() {
         } catch (err) {
           console.error("Error checking admin status:", err);
           setIsAdmin(false);
+        } finally {
+          setPageLoading(false);
         }
       };
       await checkAdmin();
@@ -282,129 +286,144 @@ export default function Settings() {
 
   return (
     <div className="space-y-8">
-      <div className="flex gap-2 p-1 bg-slate-100 rounded-lg w-fit">
-        <Button 
-          variant={activeTab === "profile" ? "primary" : "ghost"} 
-          onClick={() => setActiveTab("profile")}
-          className="h-8 text-xs"
-        >
-          Meu Perfil
-        </Button>
-        {isAdmin && (
-          <>
-            <Button 
-              variant={activeTab === "keys" ? "primary" : "ghost"} 
-              onClick={() => setActiveTab("keys")}
-              className="h-8 text-xs"
-            >
-              Senhas de Acesso
-            </Button>
-            <Button 
-              variant={activeTab === "users" ? "primary" : "ghost"} 
-              onClick={() => setActiveTab("users")}
-              className="h-8 text-xs"
-            >
-              Usuários
-            </Button>
-            <Button 
-              variant={activeTab === "plans" ? "primary" : "ghost"} 
-              onClick={() => setActiveTab("plans")}
-              className="h-8 text-xs"
-            >
-              Planos
-            </Button>
-          </>
-        )}
-      </div>
-
-      {activeTab === "profile" && profile ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle>Configurações de Perfil</CardTitle>
-              <CardDescription>Gerencie suas informações pessoais.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={updateProfile} className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Nome Completo</label>
-                  <Input 
-                    value={profile.name}
-                    onChange={e => setProfile({...profile, name: e.target.value})}
-                    placeholder="Seu Nome"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">E-mail</label>
-                  <Input 
-                    value={profile.email}
-                    disabled
-                    className="bg-slate-50"
-                  />
-                  <p className="text-[10px] text-slate-500">O e-mail não pode ser alterado.</p>
-                </div>
-                <Button type="submit" disabled={loading}>
-                  {loading ? "Salvando..." : "Salvar Alterações"}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Zap className="text-amber-500" />
-                Minha Subscrição
-              </CardTitle>
-              <CardDescription>Detalhes do seu plano atual.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-1">
-                <p className="text-xs font-bold uppercase text-slate-500">Plano Atual</p>
-                <div className={cn(
-                  "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase",
-                  profile.plan === "Premium" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-700"
-                )}>
-                  {profile.plan || "Gratuito"}
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs font-bold uppercase text-slate-500">Status</p>
-                <p className="text-sm font-medium">
-                  {profile.plan === "Free" ? (
-                    <span className="text-slate-600">Ativo (Plano Gratuito)</span>
-                  ) : (
-                    <span className="text-emerald-600">Ativo</span>
-                  )}
-                </p>
-              </div>
-
-              {profile.expires_at && (
-                <div className="space-y-1">
-                  <p className="text-xs font-bold uppercase text-slate-500">Data de Expiração</p>
-                  <p className="text-sm font-medium text-slate-900">
-                    {new Date(profile.expires_at).toLocaleDateString()}
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    {Math.max(0, Math.ceil((new Date(profile.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} dias restantes
-                  </p>
-                </div>
-              )}
-
-              {profile.plan !== "Premium" && profile.role !== "admin" && (
-                <Button 
-                  variant="outline" 
-                  className="w-full border-amber-200 text-amber-700 hover:bg-amber-50"
-                  onClick={() => navigate("/activate")}
-                >
-                  Fazer Upgrade de Plano
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+      {pageLoading ? (
+        <div className="flex justify-center items-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
         </div>
-      ) : activeTab === "keys" ? (
+      ) : (
+        <>
+          <div className="flex gap-2 p-1 bg-slate-100 rounded-lg w-fit">
+            <Button 
+              variant={activeTab === "profile" ? "primary" : "ghost"} 
+              onClick={() => setActiveTab("profile")}
+              className="h-8 text-xs"
+            >
+              Meu Perfil
+            </Button>
+            {isAdmin && (
+              <>
+                <Button 
+                  variant={activeTab === "keys" ? "primary" : "ghost"} 
+                  onClick={() => setActiveTab("keys")}
+                  className="h-8 text-xs"
+                >
+                  Senhas de Acesso
+                </Button>
+                <Button 
+                  variant={activeTab === "users" ? "primary" : "ghost"} 
+                  onClick={() => setActiveTab("users")}
+                  className="h-8 text-xs"
+                >
+                  Usuários
+                </Button>
+                <Button 
+                  variant={activeTab === "plans" ? "primary" : "ghost"} 
+                  onClick={() => setActiveTab("plans")}
+                  className="h-8 text-xs"
+                >
+                  Planos
+                </Button>
+              </>
+            )}
+          </div>
+
+          {activeTab === "profile" ? (
+            profile ? (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <Card className="lg:col-span-2">
+                  <CardHeader>
+                    <CardTitle>Configurações de Perfil</CardTitle>
+                    <CardDescription>Gerencie suas informações pessoais.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <form onSubmit={updateProfile} className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Nome Completo</label>
+                        <Input 
+                          value={profile.name || ""}
+                          onChange={e => setProfile({...profile, name: e.target.value})}
+                          placeholder="Seu Nome"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">E-mail</label>
+                        <Input 
+                          value={profile.email || ""}
+                          disabled
+                          className="bg-slate-50"
+                        />
+                        <p className="text-[10px] text-slate-500">O e-mail não pode ser alterado.</p>
+                      </div>
+                      <Button type="submit" disabled={loading}>
+                        {loading ? "Salvando..." : "Salvar Alterações"}
+                      </Button>
+                    </form>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Zap className="text-amber-500" />
+                      Minha Subscrição
+                    </CardTitle>
+                    <CardDescription>Detalhes do seu plano atual.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold uppercase text-slate-500">Plano Atual</p>
+                      <div className={cn(
+                        "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase",
+                        profile.plan === "Premium" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-700"
+                      )}>
+                        {profile.plan || "Gratuito"}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold uppercase text-slate-500">Status</p>
+                      <p className="text-sm font-medium">
+                        {profile.plan === "Free" ? (
+                          <span className="text-slate-600">Ativo (Plano Gratuito)</span>
+                        ) : (
+                          <span className="text-emerald-600">Ativo</span>
+                        )}
+                      </p>
+                    </div>
+
+                    {profile.expires_at && (
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold uppercase text-slate-500">Data de Expiração</p>
+                        <p className="text-sm font-medium text-slate-900">
+                          {new Date(profile.expires_at).toLocaleDateString()}
+                        </p>
+                        <p className="text-[10px] text-slate-500">
+                          {Math.max(0, Math.ceil((new Date(profile.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} dias restantes
+                        </p>
+                      </div>
+                    )}
+
+                    {profile.plan !== "Premium" && profile.role !== "admin" && (
+                      <Button 
+                        variant="outline" 
+                        className="w-full border-amber-200 text-amber-700 hover:bg-amber-50"
+                        onClick={() => navigate("/activate")}
+                      >
+                        Fazer Upgrade de Plano
+                      </Button>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <p className="text-slate-500">Não foi possível carregar o perfil. Tente recarregar a página.</p>
+                <Button variant="outline" className="mt-4" onClick={() => window.location.reload()}>
+                  Recarregar
+                </Button>
+              </div>
+            )
+          ) : activeTab === "keys" ? (
         <>
           <Card>
             <CardHeader>
@@ -678,6 +697,8 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
+      )}
+      </>
       )}
     </div>
   );

@@ -117,17 +117,19 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     console.log(`[AI API] Fetching/Initializing subscription for user ${userId}`);
     
     // 1. Ensure profile and subscription exist
+    console.log(`[AI API] Calling supabaseAdmin for user ${userId}`);
     const [profileResult, subResult] = await Promise.all([
       supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle(),
       supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).maybeSingle()
     ]);
+    console.log(`[AI API] supabaseAdmin calls completed for user ${userId}`);
 
     let profile = profileResult.data;
     let subscription = subResult.data;
 
     if (!profile) {
       console.log(`[AI API] Initializing profile for user ${userId}`);
-      const { data: newProfile } = await supabaseAdmin
+      const { data: newProfile, error: profileError } = await supabaseAdmin
         .from("users")
         .insert({
           id: userId,
@@ -138,12 +140,13 @@ router.get("/subscription", async (req: AuthRequest, res) => {
         })
         .select()
         .single();
+      if (profileError) console.error(`[AI API] Error creating profile:`, profileError);
       profile = newProfile;
     }
 
     if (!subscription) {
       console.log(`[AI API] Initializing subscription for user ${userId}`);
-      const { data: newSub } = await supabaseAdmin
+      const { data: newSub, error: subError } = await supabaseAdmin
         .from("subscriptions")
         .insert({
           user_id: userId,
@@ -153,6 +156,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
         })
         .select("*, plans(*)")
         .single();
+      if (subError) console.error(`[AI API] Error creating subscription:`, subError);
       subscription = newSub;
     }
 
@@ -167,10 +171,10 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     res.json({ 
       success: true, 
       data: {
+        ...profile,
         plan,
         active: isActive,
         expires_at: subscription?.expires_at || null,
-        profile: profile,
         subscription: subscription,
         planDetails: subscription?.plans || null
       }

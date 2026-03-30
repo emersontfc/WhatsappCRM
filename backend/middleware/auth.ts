@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { supabaseAdmin } from "../supabaseAdmin";
+import jwt from "jsonwebtoken";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -18,8 +19,19 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   const token = authHeader.split(" ")[1];
 
   try {
-    // 1. Verify token and get user using Admin client
-    console.log(`[Auth Middleware] Verifying token: ${token.substring(0, 10)}...`);
+    const jwtSecret = process.env.SUPABASE_JWT_SECRET;
+    
+    if (jwtSecret) {
+      // Fast local verification
+      const decoded = jwt.verify(token, jwtSecret) as any;
+      req.user = {
+        id: decoded.sub,
+        email: decoded.email,
+      };
+      return next();
+    }
+
+    // Fallback to network verification using the admin client
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
@@ -29,8 +41,6 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       });
       return res.status(401).json({ error: "Invalid or expired token" });
     }
-
-    console.log("User authenticated:", user.id);
 
     req.user = {
       id: user.id,

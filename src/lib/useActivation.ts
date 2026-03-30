@@ -35,23 +35,18 @@ export const useActivation = () => {
         }
 
         // Fetch from the backend API which now includes planDetails
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/ai/subscription`, {
-          headers: {
-            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`
-          }
-        });
+        const { apiFetch } = await import("./api");
+        const response = await apiFetch("/api/ai/subscription");
         
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.data) {
-            const subData = data.data;
-            
-            // Standardized: plan is always present, active is always true
-            setPlan(subData.plan);
-            setPlanDetails(subData.planDetails);
-            setIsActivated(true); // All users are "activated" now
-          }
+        if (response.success && response.data) {
+          const subData = response.data;
+          
+          // Standardized: plan is always present, active is always true
+          setPlan(subData.plan);
+          setPlanDetails(subData.planDetails);
+          setIsActivated(true); // All users are "activated" now
         }
+
       } catch (err) {
         console.error("Error checking activation:", err);
         setIsActivated(false);

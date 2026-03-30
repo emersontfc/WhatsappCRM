@@ -201,17 +201,18 @@ export default function Dashboard() {
           if (meData.me) setMe(meData.me);
         } catch (e) {}
       } else if (data.status === "qr" || data.status === "pairing") {
-        setStatus(data.status);
-        
-        // Fetch QR/Pairing code specifically
+        // Fetch QR/Pairing code specifically FIRST to avoid UI flicker
         const qrData = await apiFetch(`/api/whatsapp/qr`);
+        
         if (qrData.qr) {
           setQr(qrData.qr);
           setPairingCode(null);
+          setStatus(data.status);
         } else if (qrData.pairingCode) {
           setPairingCode(qrData.pairingCode);
           setQr(null);
-        } else if (qrData.status === "connecting" || !qrData.qr) {
+          setStatus(data.status);
+        } else if (qrData.status === "connecting" || (!qrData.qr && !qrData.pairingCode)) {
           // If in QR/Pairing state but no code, try to reconnect
           if (manual) toast.info("Gerando novo código...");
           await connect();

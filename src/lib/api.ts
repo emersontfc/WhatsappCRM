@@ -5,9 +5,16 @@ interface FetchOptions extends RequestInit {
 }
 
 export async function apiFetch(url: string, options: FetchOptions = {}) {
-  const { timeout = 15000, ...fetchOptions } = options;
+  const { timeout = 30000, ...fetchOptions } = options;
 
-  const apiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
+  let apiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
+  
+  // If we are in AI Studio (hostname ends with .run.app), force relative URLs
+  // so we test the code we just wrote, not the deployed Render backend.
+  if (typeof window !== "undefined" && window.location.hostname.endsWith(".run.app")) {
+    apiUrl = "";
+  }
+
   let fullUrl = url.startsWith("http") ? url : `${apiUrl}${url}`;
   
   // Prevent double /api if both apiUrl and url have it
