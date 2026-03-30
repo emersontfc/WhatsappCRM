@@ -116,9 +116,18 @@ async function startServer() {
     }
   } else {
     const distPath = path.join(process.cwd(), "dist");
+    
+    // Serve static files from dist
     app.use(express.static(distPath));
+    
+    // Fallback route for SPA
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      const indexPath = path.join(distPath, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).send("Frontend build not found. Please run 'npm run build'.");
+      }
     });
   }
 
