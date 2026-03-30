@@ -266,14 +266,18 @@ export default function Settings() {
     if (!profile) return;
     setLoading(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: { full_name: profile.name }
+      // Update via backend to avoid RLS issues
+      const response = await apiFetch("/api/ai/profile", {
+        method: "POST",
+        body: JSON.stringify({ name: profile.name })
       });
       
-      if (error) throw error;
+      if (!response.success) throw new Error(response.error || "Erro ao atualizar perfil.");
       
-      const userId = await getUserId();
-      await supabase.from("users").update({ name: profile.name }).eq("id", userId);
+      // Also update auth metadata for consistency
+      await supabase.auth.updateUser({
+        data: { full_name: profile.name }
+      });
       
       toast.success("Perfil atualizado com sucesso!");
     } catch (err: any) {

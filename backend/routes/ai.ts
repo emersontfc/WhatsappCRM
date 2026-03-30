@@ -127,11 +127,14 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     let profile = profileResult.data;
     let subscription = subResult.data;
 
-    const adminEmail = process.env.ADMIN_EMAIL || "alcindacharles@gmail.com";
-    const isInitialAdmin = req.user?.email === adminEmail;
+    const adminEmails = (process.env.ADMIN_EMAIL || "alcindacharles@gmail.com,emersontorres42@gmail.com").split(",").map(e => e.trim());
+    const userEmail = req.user?.email || "";
+    const isInitialAdmin = adminEmails.includes(userEmail);
+
+    console.log(`[AI API] User email: ${userEmail}, Admin emails: ${adminEmails.join(", ")}, Is initial admin: ${isInitialAdmin}`);
 
     if (profile && isInitialAdmin && profile.role !== "admin") {
-      console.log(`[AI API] Upgrading user ${userId} to admin role`);
+      console.log(`[AI API] Upgrading user ${userId} (${userEmail}) to admin role`);
       const { data: updatedProfile, error: updateError } = await supabaseAdmin
         .from("users")
         .update({ role: "admin", plan: "Admin" })
@@ -139,25 +142,38 @@ router.get("/subscription", async (req: AuthRequest, res) => {
         .select()
         .single();
       if (updateError) console.error(`[AI API] Error upgrading profile:`, updateError);
-      else profile = updatedProfile;
+      else {
+        console.log(`[AI API] Successfully upgraded user ${userId} to admin`);
+        profile = updatedProfile;
+      }
     }
 
     if (!profile) {
-      console.log(`[AI API] Initializing profile for user ${userId}`);
+      console.log(`[AI API] Initializing profile for user ${userId} (${userEmail})`);
       
       const { data: newProfile, error: profileError } = await supabaseAdmin
         .from("users")
         .insert({
           id: userId,
-          email: req.user?.email,
-          name: req.user?.email?.split("@")[0] || "User",
+          email: userEmail,
+          name: userEmail?.split("@")[0] || "User",
           role: isInitialAdmin ? "admin" : "user",
           plan: isInitialAdmin ? "Admin" : "Free"
         })
         .select()
         .single();
-      if (profileError) console.error(`[AI API] Error creating profile:`, profileError);
-      profile = newProfile;
+      
+      if (profileError) {
+        console.error(`[AI API] Error creating profile for ${userId}:`, profileError);
+        // If insert failed because it already exists (race condition), try fetching again
+        if (profileError.code === '23505') {
+           const { data: retryProfile } = await supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle();
+           profile = retryProfile;
+        }
+      } else {
+        console.log(`[AI API] Successfully created profile for user ${userId} with role: ${isInitialAdmin ? "admin" : "user"}`);
+        profile = newProfile;
+      }
     }
 
     if (!subscription) {
@@ -197,6 +213,30 @@ router.get("/subscription", async (req: AuthRequest, res) => {
   } catch (err: any) {
     console.error("[AI API] Failed to fetch subscription:", err);
     res.status(500).json({ success: false, error: "Erro ao buscar assinatura" });
+  }
+});
+
+router.post("/profile", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { name } = req.body;
+
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!name) return res.status(400).json({ error: "Name is required" });
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("users")
+      .update({ name })
+      .eq("id", userId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, data });
+  } catch (error: any) {
+    console.error("[AI API] Error updating profile:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

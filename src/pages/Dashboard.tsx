@@ -212,10 +212,17 @@ export default function Dashboard() {
           setPairingCode(qrData.pairingCode);
           setQr(null);
           setStatus(data.status);
-        } else if (qrData.status === "connecting" || (!qrData.qr && !qrData.pairingCode)) {
-          // If in QR/Pairing state but no code, try to reconnect
-          if (manual) toast.info("Gerando novo código...");
-          await connect();
+        } else if (qrData.status === "connecting") {
+          // Just wait if it's still connecting
+          setStatus("connecting");
+          setQr(null);
+          setPairingCode(null);
+        } else if (!qrData.qr && !qrData.pairingCode && data.status !== "connecting") {
+          // Only reconnect if we are supposed to have a code but don't, and we aren't already connecting
+          if (manual) {
+            toast.info("Gerando novo código...");
+            await connect();
+          }
         }
         if (manual) toast.info(data.status === "qr" ? "Aguardando leitura do QR Code." : "Aguardando pareamento.");
       } else {

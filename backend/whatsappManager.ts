@@ -211,7 +211,8 @@ class WhatsAppManager {
             session.qr = qrDataUrl;
             session.status = "qr";
             onUpdate?.("qr", qrDataUrl);
-            await this.log(userId, "info", "QR Code gerado.");
+            await this.log(userId, "info", `QR Code gerado com sucesso. Status: ${session.status}`);
+            console.log(`[WhatsApp] QR Code generated for ${userId}. Length: ${qrDataUrl.length}`);
           } catch (err) {
             console.error(`Failed to generate QR Data URL for ${userId}:`, err);
           }
@@ -220,7 +221,8 @@ class WhatsAppManager {
         if (connection === "open") {
           session.status = "connected";
           session.qr = undefined;
-          await this.log(userId, "success", "WhatsApp conectado!");
+          session.pairingCode = undefined;
+          await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           console.log(`[WhatsApp] Session ${userId} is now OPEN and READY.`);
           onUpdate?.("connected");
         }
@@ -228,9 +230,10 @@ class WhatsAppManager {
         if (connection === "close") {
           const boomErr = lastDisconnect?.error as Boom;
           const statusCode = boomErr?.output?.statusCode;
+          const reason = boomErr?.message || "Unknown reason";
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
           
-          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}. Should reconnect: ${shouldReconnect}. Error:`, boomErr);
+          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}. Reason: ${reason}. Should reconnect: ${shouldReconnect}`);
           session.status = "disconnected";
           onUpdate?.("disconnected");
 
@@ -243,6 +246,7 @@ class WhatsAppManager {
             setTimeout(() => {
               // Double check if session was already recreated by another event
               if (!this.sessions.has(userId)) {
+                console.log(`[WhatsApp] Executing auto-reconnect for ${userId}`);
                 this.createSession(userId, phoneNumber, onUpdate).catch(err => {
                   console.error(`[WhatsApp] Auto-reconnect failed for ${userId}:`, err);
                 });
