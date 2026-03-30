@@ -216,7 +216,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/profile", async (req: AuthRequest, res) => {
+router.post("/profile", authenticate, async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   const { name } = req.body;
 

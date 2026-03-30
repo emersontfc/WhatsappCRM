@@ -120,15 +120,7 @@ export const getUserName = async () => {
 export const isAdmin = async () => {
   const user = await getUser();
   if (!user) {
-    console.log("isAdmin: No user found");
     return false;
-  }
-  
-  console.log("isAdmin: Checking user", user.email);
-  const adminEmails = ["alcindacharles@gmail.com", "emersontorres42@gmail.com"];
-  if (adminEmails.includes(user.email || "")) {
-    console.log("isAdmin: User is admin by email");
-    return true;
   }
   
   try {
@@ -139,14 +131,11 @@ export const isAdmin = async () => {
       .single();
     
     if (error) {
-      console.error("isAdmin: Error fetching user role:", error);
       return false;
     }
     
-    console.log("isAdmin: User role is", userData?.role);
     return userData?.role === "admin";
   } catch (err) {
-    console.error("isAdmin: Error in isAdmin:", err);
     return false;
   }
 };
