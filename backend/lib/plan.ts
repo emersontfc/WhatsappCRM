@@ -36,13 +36,13 @@ export const getPlan = async (userId: string): Promise<PlanConfig | null> => {
     // 1. Get active subscription
     const { data: sub } = await supabaseAdmin
       .from("subscriptions")
-      .select("plan_id, is_active, expires_at")
+      .select("plan_id, status, end_date")
       .eq("user_id", userId)
-      .eq("is_active", true)
+      .eq("status", "active")
       .maybeSingle();
 
     // 2. Load plan limits
-    if (sub && sub.plan_id && (!sub.expires_at || new Date(sub.expires_at) > new Date())) {
+    if (sub && sub.plan_id && (!sub.end_date || new Date(sub.end_date) > new Date())) {
       const { data: plan } = await supabaseAdmin
         .from("plans")
         .select("*")

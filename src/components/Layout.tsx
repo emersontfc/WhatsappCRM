@@ -108,7 +108,6 @@ export default function Layout({ children }: LayoutProps) {
 
   if (isAdmin) {
     navItems.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
-    navItems.push({ name: "Logs do Sistema", path: "/admin/logs", icon: Terminal });
   }
 
   if (userPlan === "Free") {

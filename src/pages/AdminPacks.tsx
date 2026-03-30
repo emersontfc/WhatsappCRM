@@ -87,6 +87,25 @@ export default function AdminPacks() {
     }
   };
 
+  const handleDeletePack = async (packId: string) => {
+    if (!confirm("Tem certeza que deseja excluir este pack?")) return;
+    
+    try {
+      const res = await apiFetch(`/api/admin/packs/${packId}`, {
+        method: "DELETE",
+      });
+
+      if (res.success) {
+        toast.success("Pack excluído!");
+        fetchPacks();
+      } else {
+        toast.error("Erro ao excluir pack");
+      }
+    } catch (error) {
+      toast.error("Erro ao excluir pack");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Gerenciar Model Packs</h1>
@@ -115,11 +134,18 @@ export default function AdminPacks() {
       <div className="grid gap-4">
         {packs.map((pack) => (
           <Card key={pack.id} className="p-4 space-y-4">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-start">
               <div>
                 <h3 className="font-semibold">{pack.name}</h3>
                 <p className="text-sm text-slate-500">{pack.description}</p>
               </div>
+              <Button 
+                variant="ghost" 
+                className="text-red-600 hover:text-red-700 hover:bg-red-50 h-8 px-2"
+                onClick={() => handleDeletePack(pack.id)}
+              >
+                Excluir
+              </Button>
             </div>
             <textarea
               className="w-full p-2 border rounded text-sm font-mono"

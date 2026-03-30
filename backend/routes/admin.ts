@@ -156,6 +156,53 @@ router.get("/users", async (req, res) => {
   }
 });
 
+// Pack Management Routes
+router.post("/packs", async (req, res) => {
+  const { name, description, is_public } = req.body;
+  
+  if (!name) {
+    return res.status(400).json({ success: false, error: "Nome do pack é obrigatório." });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("model_packs")
+      .insert({
+        name,
+        description: description || "",
+        is_public: is_public !== undefined ? is_public : true,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+      
+    if (error) throw error;
+    
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error("Failed to create pack:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.delete("/packs/:id", async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const { error } = await supabaseAdmin
+      .from("model_packs")
+      .delete()
+      .eq("id", id);
+      
+    if (error) throw error;
+    
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Failed to delete pack:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.delete("/users/:id", async (req, res) => {
   const { id } = req.params;
   
@@ -232,9 +279,7 @@ router.patch("/users/:id/subscription", async (req, res) => {
         plan, 
         plan_id: planData.id,
         end_date: expires_at,
-        expires_at: expires_at,
-        status: "active",
-        is_active: true
+        status: "active"
       })
       .eq("user_id", id);
 

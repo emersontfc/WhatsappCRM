@@ -70,9 +70,7 @@ router.post("/register", async (req, res) => {
           plan_id: planData?.id,
           start_date: new Date().toISOString(),
           end_date: isAdminEmail ? "2099-12-31T23:59:59Z" : new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString(),
-          expires_at: isAdminEmail ? "2099-12-31T23:59:59Z" : new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString(),
-          status: "active",
-          is_active: true
+          status: "active"
         });
 
       if (subError) {
@@ -136,9 +134,7 @@ router.post("/activate-license", authenticate, async (req, res) => {
         plan_id: keyData.plan_id,
         start_date: startDate.toISOString(),
         end_date: endDate.toISOString(),
-        expires_at: endDate.toISOString(),
-        status: "active",
-        is_active: true
+        status: "active"
       }, { onConflict: 'user_id' });
 
     if (subError) throw subError;

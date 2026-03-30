@@ -127,16 +127,32 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     let profile = profileResult.data;
     let subscription = subResult.data;
 
+    const adminEmail = process.env.ADMIN_EMAIL || "alcindacharles@gmail.com";
+    const isInitialAdmin = req.user?.email === adminEmail;
+
+    if (profile && isInitialAdmin && profile.role !== "admin") {
+      console.log(`[AI API] Upgrading user ${userId} to admin role`);
+      const { data: updatedProfile, error: updateError } = await supabaseAdmin
+        .from("users")
+        .update({ role: "admin", plan: "Admin" })
+        .eq("id", userId)
+        .select()
+        .single();
+      if (updateError) console.error(`[AI API] Error upgrading profile:`, updateError);
+      else profile = updatedProfile;
+    }
+
     if (!profile) {
       console.log(`[AI API] Initializing profile for user ${userId}`);
+      
       const { data: newProfile, error: profileError } = await supabaseAdmin
         .from("users")
         .insert({
           id: userId,
           email: req.user?.email,
           name: req.user?.email?.split("@")[0] || "User",
-          role: "user",
-          plan: "Free"
+          role: isInitialAdmin ? "admin" : "user",
+          plan: isInitialAdmin ? "Admin" : "Free"
         })
         .select()
         .single();
@@ -151,8 +167,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
         .insert({
           user_id: userId,
           plan: "Free",
-          status: "active",
-          is_active: true
+          status: "active"
         })
         .select("*, plans(*)")
         .single();
@@ -162,7 +177,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
 
     // 2. Check plan status
     const plan = profile?.role === "admin" ? "Admin" : (subscription?.plan || profile?.plan || "Free");
-    const isActive = subscription?.is_active ?? true;
+    const isActive = subscription?.status === "active" || profile?.role === "admin" || true;
 
     if (!isActive) {
       return res.status(403).json({ success: false, error: "Subscription inactive" });
@@ -174,7 +189,7 @@ router.get("/subscription", async (req: AuthRequest, res) => {
         ...profile,
         plan,
         active: isActive,
-        expires_at: subscription?.expires_at || null,
+        expires_at: subscription?.end_date || null,
         subscription: subscription,
         planDetails: subscription?.plans || null
       }
