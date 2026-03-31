@@ -5,14 +5,19 @@ import { authenticate } from "../middleware/auth";
 const router = express.Router();
 
 router.get("/plans", async (req, res) => {
+  console.log("[Auth Route] Fetching plans...");
   try {
     const { data, error } = await supabaseAdmin
       .from("plans")
       .select("*")
       .order("price", { ascending: true });
       
-    if (error) throw error;
+    if (error) {
+      console.error("[Auth Route] Plans fetch error:", error);
+      throw error;
+    }
     
+    console.log("[Auth Route] Plans fetched:", data);
     res.json({ success: true, data });
   } catch (err: any) {
     console.error("Failed to fetch plans:", err);

@@ -334,11 +334,11 @@ export default function Settings() {
         </div>
       ) : (
         <>
-          <div className="flex gap-2 p-1 bg-slate-100 rounded-lg w-fit">
+          <div className="flex flex-wrap gap-2 p-1 bg-slate-100 rounded-lg w-full md:w-fit">
             <Button 
               variant={activeTab === "profile" ? "primary" : "ghost"} 
               onClick={() => setActiveTab("profile")}
-              className="h-8 text-xs"
+              className="h-8 text-xs flex-1 md:flex-none"
             >
               Meu Perfil
             </Button>
@@ -347,30 +347,30 @@ export default function Settings() {
                 <Button 
                   variant={activeTab === "keys" ? "primary" : "ghost"} 
                   onClick={() => setActiveTab("keys")}
-                  className="h-8 text-xs"
+                  className="h-8 text-xs flex-1 md:flex-none"
                 >
-                  Senhas de Acesso
+                  Senhas
                 </Button>
                 <Button 
                   variant={activeTab === "users" ? "primary" : "ghost"} 
                   onClick={() => setActiveTab("users")}
-                  className="h-8 text-xs"
+                  className="h-8 text-xs flex-1 md:flex-none"
                 >
                   Usuários
                 </Button>
                 <Button 
                   variant={activeTab === "plans" ? "primary" : "ghost"} 
                   onClick={() => setActiveTab("plans")}
-                  className="h-8 text-xs"
+                  className="h-8 text-xs flex-1 md:flex-none"
                 >
                   Planos
                 </Button>
                 <Button 
                   variant={activeTab === "settings" ? "primary" : "ghost"} 
                   onClick={() => setActiveTab("settings")}
-                  className="h-8 text-xs"
+                  className="h-8 text-xs flex-1 md:flex-none"
                 >
-                  Configurações Globais
+                  Config. Globais
                 </Button>
               </>
             )}

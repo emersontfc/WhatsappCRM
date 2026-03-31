@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Bot, Zap, Users, MessageSquare, Calendar, ShieldCheck, CheckCircle2, ArrowRight, MessageCircle, Globe, Sparkles, Rocket } from "lucide-react";
+import { Bot, Zap, Users, MessageSquare, Calendar, ShieldCheck, CheckCircle2, ArrowRight, MessageCircle, Globe, Sparkles, Rocket, Menu, X } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/api";
@@ -8,6 +8,7 @@ import { motion } from "motion/react";
 
 export default function Landing() {
   const [plans, setPlans] = useState<any[]>([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   useEffect(() => {
     const fetchPlans = async () => {
@@ -40,9 +41,9 @@ export default function Landing() {
               <a href="#ai-agent" className="text-xs font-bold uppercase tracking-widest text-white/60 hover:text-emerald-400 transition-colors">Agente IA</a>
               <a href="#pricing" className="text-xs font-bold uppercase tracking-widest text-white/60 hover:text-emerald-400 transition-colors">Planos</a>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="hidden md:flex items-center gap-4">
               <Link to="/login">
-                <Button variant="ghost" className="hidden sm:flex text-white/80 hover:text-white">Entrar</Button>
+                <Button variant="ghost" className="text-white/80 hover:text-white">Entrar</Button>
               </Link>
               <Link to="/login">
                 <Button className="bg-white text-black hover:bg-emerald-400 font-bold px-6 rounded-none skew-x-[-12deg]">
@@ -50,8 +51,21 @@ export default function Landing() {
                 </Button>
               </Link>
             </div>
+            {/* Mobile Menu Button */}
+            <button className="md:hidden p-2 text-white" onClick={() => setIsMenuOpen(!isMenuOpen)}>
+              {isMenuOpen ? <X /> : <Menu />}
+            </button>
           </div>
         </div>
+        {/* Mobile Menu */}
+        {isMenuOpen && (
+          <div className="md:hidden bg-black border-t border-white/10 p-4 space-y-4">
+            <a href="#features" className="block text-sm font-bold uppercase tracking-widest text-white/80 hover:text-emerald-400" onClick={() => setIsMenuOpen(false)}>Recursos</a>
+            <a href="#ai-agent" className="block text-sm font-bold uppercase tracking-widest text-white/80 hover:text-emerald-400" onClick={() => setIsMenuOpen(false)}>Agente IA</a>
+            <a href="#pricing" className="block text-sm font-bold uppercase tracking-widest text-white/80 hover:text-emerald-400" onClick={() => setIsMenuOpen(false)}>Planos</a>
+            <Link to="/login" className="block text-sm font-bold uppercase tracking-widest text-white/80 hover:text-emerald-400" onClick={() => setIsMenuOpen(false)}>Entrar</Link>
+          </div>
+        )}
       </nav>
 
       {/* Hero Section - Split Layout */}
