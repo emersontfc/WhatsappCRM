@@ -178,17 +178,63 @@ router.get("/subscription", async (req: AuthRequest, res) => {
 
     if (!subscription) {
       console.log(`[AI API] Initializing subscription for user ${userId}`);
+      
+      // Fetch plan_id for "Free" plan
+      let { data: planData, error: planError } = await supabaseAdmin
+        .from("plans")
+        .select("id")
+        .eq("name", "Free")
+        .single();
+
+      if (planError || !planData) {
+        console.log(`[AI API] "Free" plan not found, creating it.`);
+        const { data: newPlan, error: createError } = await supabaseAdmin
+          .from("plans")
+          .insert({
+            name: "Free",
+            max_connections: 1,
+            max_contacts: 50,
+            max_messages_per_day: 10,
+            ai_enabled: true,
+            automation_level: "basic",
+            price: 0
+          })
+          .select("id")
+          .single();
+        
+        if (createError) {
+          console.error(`[AI API] Error creating "Free" plan:`, createError);
+          throw new Error("Plano 'Free' não encontrado e falha ao criar.");
+        }
+        planData = newPlan;
+      }
+
+      const planId = planData.id;
+
       const { data: newSub, error: subError } = await supabaseAdmin
         .from("subscriptions")
         .insert({
           user_id: userId,
           plan: "Free",
-          status: "active"
+          plan_id: planId,
+          status: "active",
+          end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString() // Far future
         })
         .select("*, plans(*)")
         .single();
-      if (subError) console.error(`[AI API] Error creating subscription:`, subError);
-      subscription = newSub;
+      
+      if (subError) {
+        // If it failed because it already exists (race condition), try fetching it
+        if (subError.code === '23505') {
+            const { data: existingSub } = await supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).single();
+            subscription = existingSub;
+        } else {
+            console.error(`[AI API] Error creating subscription:`, subError);
+            throw new Error(`Erro ao criar assinatura: ${subError.message}`);
+        }
+      } else {
+        subscription = newSub;
+      }
     }
 
     // 2. Check plan status

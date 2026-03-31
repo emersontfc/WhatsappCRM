@@ -229,6 +229,16 @@ class WhatsAppManager {
 
         if (connection === "close") {
           const boomErr = lastDisconnect?.error as Boom;
+          console.log(`[WhatsApp] Connection closed for ${userId}. Error:`, boomErr);
+          
+          if (boomErr?.message === "QR refs attempts ended") {
+            console.log(`[WhatsApp] QR refs attempts ended for ${userId}. Clearing session directory.`);
+            const sessionDir = path.join(process.cwd(), "sessions", userId);
+            if (fs.existsSync(sessionDir)) {
+              fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+          }
+
           const statusCode = boomErr?.output?.statusCode;
           const reason = boomErr?.message || "Unknown reason";
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;

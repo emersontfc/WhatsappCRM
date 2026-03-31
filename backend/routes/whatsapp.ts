@@ -35,15 +35,25 @@ router.get("/qr", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  const session = whatsappManager.getSession(userId);
-  if (!session) return res.json({ success: true, status: "disconnected" });
+  try {
+    const session = whatsappManager.getSession(userId);
+    if (!session) {
+      console.log(`[WhatsApp QR] No session found for user: ${userId}`);
+      return res.json({ success: true, status: "disconnected" });
+    }
 
-  res.json({
-    success: true,
-    qr: session.qr,
-    status: session.status,
-    pairingCode: session.pairingCode
-  });
+    console.log(`[WhatsApp QR] Returning QR for user: ${userId}, status: ${session.status}, hasQR: ${!!session.qr}`);
+
+    res.json({
+      success: true,
+      qr: session.qr,
+      status: session.status,
+      pairingCode: session.pairingCode
+    });
+  } catch (error) {
+    console.error(`[WhatsApp QR] Error for user ${userId}:`, error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
 });
 
 router.get("/status", (req: AuthRequest, res) => {

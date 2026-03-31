@@ -395,17 +395,17 @@ export default function Settings() {
                       </p>
                     </div>
 
-                    {profile.expires_at && (
-                      <div className="space-y-1">
-                        <p className="text-xs font-bold uppercase text-slate-500">Data de Expiração</p>
-                        <p className="text-sm font-medium text-slate-900">
-                          {new Date(profile.expires_at).toLocaleDateString()}
-                        </p>
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold uppercase text-slate-500">Data de Expiração</p>
+                      <p className="text-sm font-medium text-slate-900">
+                        {profile.plan === "Free" ? "Perpétuo" : (profile.expires_at ? new Date(profile.expires_at).toLocaleDateString() : "N/A")}
+                      </p>
+                      {profile.plan !== "Free" && profile.expires_at && (
                         <p className="text-[10px] text-slate-500">
                           {Math.max(0, Math.ceil((new Date(profile.expires_at).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} dias restantes
                         </p>
-                      </div>
-                    )}
+                      )}
+                    </div>
 
                     {profile.plan !== "Premium" && profile.role !== "admin" && (
                       <Button 
@@ -550,32 +550,38 @@ export default function Settings() {
                         <td className="px-6 py-4">
                           <select 
                             className="bg-transparent border-none text-xs font-bold uppercase focus:ring-0 cursor-pointer text-slate-700"
-                            value={user.plan || "Starter"}
+                            value={user.plan || "Free"}
                             onChange={(e) => updateUserSubscription(user.id, e.target.value, user.expires_at)}
                           >
-                            <option value="Starter">Starter</option>
-                            <option value="Pro">Pro</option>
-                            <option value="Premium">Premium</option>
+                            {plans.map(plan => (
+                              <option key={plan.id} value={plan.name}>{plan.name}</option>
+                            ))}
                           </select>
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex flex-col gap-1">
-                            <Input 
-                              type="date"
-                              className="h-7 text-[10px] w-32 p-1"
-                              value={user.expires_at ? new Date(user.expires_at).toISOString().split('T')[0] : ""}
-                              onChange={(e) => {
-                                const date = e.target.value ? new Date(e.target.value).toISOString() : null;
-                                updateUserSubscription(user.id, user.plan, date);
-                              }}
-                            />
-                            {user.expires_at && (
-                              <span className={cn(
-                                "text-[10px] font-bold",
-                                daysLeft > 0 ? "text-emerald-600" : "text-red-600"
-                              )}>
-                                {daysLeft > 0 ? `${daysLeft} dias restantes` : "Expirado"}
-                              </span>
+                            {user.plan === "Free" ? (
+                              <span className="text-xs font-bold text-slate-500">Perpétuo</span>
+                            ) : (
+                              <>
+                                <Input 
+                                  type="date"
+                                  className="h-7 text-[10px] w-32 p-1"
+                                  value={user.expires_at ? new Date(user.expires_at).toISOString().split('T')[0] : ""}
+                                  onChange={(e) => {
+                                    const date = e.target.value ? new Date(e.target.value).toISOString() : null;
+                                    updateUserSubscription(user.id, user.plan, date);
+                                  }}
+                                />
+                                {user.expires_at && (
+                                  <span className={cn(
+                                    "text-[10px] font-bold",
+                                    daysLeft > 0 ? "text-emerald-600" : "text-red-600"
+                                  )}>
+                                    {daysLeft > 0 ? `${daysLeft} dias restantes` : "Expirado"}
+                                  </span>
+                                )}
+                              </>
                             )}
                           </div>
                         </td>

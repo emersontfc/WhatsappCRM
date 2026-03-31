@@ -173,6 +173,8 @@ export default function Dashboard() {
   };
 
   const isCheckingStatus = useRef(false);
+  const connectingSince = useRef<number | null>(null);
+  const qrSince = useRef<number | null>(null);
 
   const checkStatus = async (uId: string, manual = false) => {
     if (!uId || uId === "guest-user" || isCheckingStatus.current) return;
@@ -190,6 +192,8 @@ export default function Dashboard() {
       const data = await apiFetch(`/api/whatsapp/status`);
       
       if (data.status === "connected") {
+        connectingSince.current = null;
+        qrSince.current = null;
         setStatus("connected");
         setQr(null);
         setPairingCode(null);
@@ -201,6 +205,18 @@ export default function Dashboard() {
           if (meData.me) setMe(meData.me);
         } catch (e) {}
       } else if (data.status === "qr" || data.status === "pairing") {
+        connectingSince.current = null;
+        
+        // Check how long it's been showing QR/Pairing
+        if (!qrSince.current) {
+          qrSince.current = Date.now();
+        } else if (Date.now() - qrSince.current > 60000) { // 60 seconds timeout
+          await resetSession();
+          qrSince.current = null;
+          toast.error("O código expirou. Tente novamente.");
+          return;
+        }
+
         // Fetch QR/Pairing code specifically FIRST to avoid UI flicker
         const qrData = await apiFetch(`/api/whatsapp/qr`);
         
@@ -225,7 +241,26 @@ export default function Dashboard() {
           }
         }
         if (manual) toast.info(data.status === "qr" ? "Aguardando leitura do QR Code." : "Aguardando pareamento.");
+      } else if (data.status === "connecting") {
+        qrSince.current = null;
+        // Check how long it's been connecting
+        if (!connectingSince.current) {
+          connectingSince.current = Date.now();
+        } else if (Date.now() - connectingSince.current > 30000) { // 30 seconds timeout
+          setStatus("disconnected");
+          setQr(null);
+          setPairingCode(null);
+          connectingSince.current = null;
+          toast.error("A conexão demorou muito. Tente novamente.");
+          return;
+        }
+        // Just wait if it's still connecting
+        setStatus("connecting");
+        setQr(null);
+        setPairingCode(null);
       } else {
+        connectingSince.current = null;
+        qrSince.current = null;
         setStatus(data.status || "disconnected");
         setQr(null);
         setPairingCode(null);
@@ -555,7 +590,7 @@ export default function Dashboard() {
                   Atualizar
                 </Button>
                 <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
-                  Limpar sessão e tentar novamente
+                  Cancelar e tentar novamente
                 </Button>
               </div>
             ) : status === "pairing" && pairingCode ? (
@@ -585,7 +620,7 @@ export default function Dashboard() {
                   Verificar Conexão
                 </Button>
                 <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
-                  Limpar sessão e tentar novamente
+                  Cancelar e tentar novamente
                 </Button>
               </div>
             ) : status === "paused" ? (

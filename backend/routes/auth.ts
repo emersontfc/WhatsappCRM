@@ -41,9 +41,6 @@ router.post("/register", async (req, res) => {
     if (authUser.user) {
       const isAdminEmail = email === "alcindacharles@gmail.com" || email === "emersontorres42@gmail.com";
       
-      const planName = isAdminEmail ? "Premium" : "Free";
-      const { data: planData } = await supabaseAdmin.from("plans").select("id").eq("name", planName).single();
-
       // Create profile in public.users
       const { error: profileError } = await supabaseAdmin
         .from("users")
@@ -54,27 +51,11 @@ router.post("/register", async (req, res) => {
           role: isAdminEmail ? "admin" : "user",
           created_at: new Date().toISOString(),
           expires_at: isAdminEmail ? "2099-12-31T23:59:59Z" : null,
-          plan: planName
+          plan: isAdminEmail ? "Premium" : "Free"
         });
 
       if (profileError) {
         console.error("Profile creation error:", profileError);
-      }
-
-      // Create initial subscription
-      const { error: subError } = await supabaseAdmin
-        .from("subscriptions")
-        .insert({
-          user_id: authUser.user.id,
-          plan: planName,
-          plan_id: planData?.id,
-          start_date: new Date().toISOString(),
-          end_date: isAdminEmail ? "2099-12-31T23:59:59Z" : new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString(),
-          status: "active"
-        });
-
-      if (subError) {
-        console.error("Subscription creation error:", subError);
       }
 
       res.json({ success: true, user: authUser.user });
