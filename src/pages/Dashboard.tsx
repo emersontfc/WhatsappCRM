@@ -213,6 +213,7 @@ export default function Dashboard() {
         } else if (Date.now() - qrSince.current > 30000) { // 30 seconds timeout
           await resetSession();
           qrSince.current = null;
+          setConnectMethod("number");
           toast.error("O código expirou. Tente novamente.");
           return;
         }

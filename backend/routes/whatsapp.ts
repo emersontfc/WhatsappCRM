@@ -79,7 +79,6 @@ router.post("/reset", async (req: AuthRequest, res) => {
 
   try {
     await whatsappManager.deleteSession(userId);
-    await whatsappManager.createSession(userId);
     res.json({ success: true, message: "Sessão resetada com sucesso" });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
