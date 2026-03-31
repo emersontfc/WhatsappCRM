@@ -2,7 +2,8 @@ import { supabaseAdmin } from "./supabaseAdmin";
 import { whatsappManager } from "./whatsappManager";
 
 export function startScheduler() {
-  console.log("Starting message scheduler...");
+  console.log("Message scheduler is temporarily disabled.");
+  return;
   
   setInterval(async () => {
     try {

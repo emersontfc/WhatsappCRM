@@ -158,7 +158,7 @@ router.post("/test", async (req: AuthRequest, res) => {
     
     // Send to self
     const jid = me.id.split(":")[0] + "@s.whatsapp.net";
-    await whatsappManager.sendMessage(userId, jid, "🚀 Teste de conexão WhatsCRM bem-sucedido! Seu bot está pronto para automatizar.");
+    await whatsappManager.sendMessage(userId, jid, "🚀 Teste de conexão Agentex bem-sucedido! Seu bot está pronto para automatizar.");
     res.json({ success: true });
   } catch (err: any) {
     console.error("Failed to send test message:", err);

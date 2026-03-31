@@ -86,8 +86,8 @@ router.post("/suggest", async (req: AuthRequest, res) => {
     const model = agent?.model || "gemini-3-flash-preview";
 
     const prompt = `
-      Você é um assistente de CRM para WhatsApp. 
-      Analise o histórico de mensagens abaixo e sugira uma resposta curta, profissional e amigável em português de Moçambique/Brasil.
+      Você é um assistente de CRM para WhatsApp da Agentex. 
+      Analise o histórico de mensagens abaixo e sugira uma resposta curta, profissional e amigável em português de Moçambique.
       
       Contexto do Cliente: ${JSON.stringify(context || {})}
       

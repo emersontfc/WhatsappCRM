@@ -38,10 +38,15 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     const isExpired = session && session.expires_at && session.expires_at < Math.floor(Date.now() / 1000) + 60; // 60s buffer
     
     if (!session || isExpired) {
-      console.log("[apiFetch] Session missing or expired, refreshing via getUser()");
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: freshSessionData } = await supabase.auth.getSession();
+      console.log("[apiFetch] Session missing or expired, refreshing via getSession()");
+      // getSession() automatically refreshes the token if needed
+      const { data: freshSessionData, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !freshSessionData.session) {
+        console.warn("[apiFetch] Failed to refresh session, user might need to login again");
+        // We could trigger a logout here, but for now we just clear the session
+        session = null;
+      } else {
         session = freshSessionData.session;
       }
     }
@@ -83,6 +88,18 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     if (!response.ok) {
       if (response.status === 401) {
         console.error(`[apiFetch] 401 Unauthorized for ${fullUrl}. Token may be invalid or expired.`);
+        
+        // Clear the invalid session to force re-login
+        if (typeof window !== 'undefined') {
+          console.warn("[apiFetch] Clearing invalid session due to 401 response");
+          supabase.auth.signOut().catch(e => console.error("Error signing out:", e));
+          
+          // Optionally redirect to login page if we're not already there
+          if (!window.location.pathname.includes('/login') && !window.location.pathname.includes('/auth')) {
+            // We don't force redirect here to avoid interrupting the user, 
+            // but the UI should react to the session being cleared
+          }
+        }
         
         // Check for project mismatch if we get a 401
         try {

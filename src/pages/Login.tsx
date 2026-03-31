@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle, Eye, EyeOff } from "lucide-react";
+import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle, Eye, EyeOff, Rocket, ArrowLeft, Sparkles } from "lucide-react";
 import { supabase } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { apiFetch } from "../lib/api";
+import { motion, AnimatePresence } from "motion/react";
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
@@ -71,140 +72,198 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Navbar */}
-      <nav className="w-full bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <div className="bg-emerald-600 p-2 rounded-lg">
-                <MessageCircle className="w-5 h-5 text-white" />
-              </div>
-              <span className="font-bold text-xl tracking-tight text-slate-900">WhatsCRM</span>
-            </Link>
-          </div>
+    <div className="min-h-screen bg-black flex flex-col lg:flex-row overflow-hidden">
+      {/* Left Side - Visual/Branding */}
+      <div className="hidden lg:flex lg:w-1/2 relative bg-zinc-900 items-center justify-center p-12 overflow-hidden">
+        <div className="absolute top-0 left-0 w-full h-full opacity-20">
+          <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-emerald-500 blur-[120px] rounded-full"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-blue-500 blur-[120px] rounded-full"></div>
         </div>
-      </nav>
-
-      <div className="flex-1 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-        <CardHeader className="text-center space-y-4">
-          <div className="mx-auto h-12 w-12 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-emerald-200">
-            <Zap size={24} />
-          </div>
-          <div className="space-y-2">
-            <CardTitle className="text-3xl font-bold tracking-tight">WhatsCRM</CardTitle>
-            <CardDescription className="text-slate-500">
-              {isRegistering 
-                ? "Crie sua conta para começar a gerenciar seus contatos." 
-                : "Gerencie seus contatos e automações do WhatsApp em um só lugar."}
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {error && (
-            <div className="p-3 rounded-lg bg-red-50 text-red-600 text-sm border border-red-100">
-              {error}
+        
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.8 }}
+          className="relative z-10 space-y-8 max-w-lg"
+        >
+          <Link to="/" className="flex items-center gap-4 group mb-12">
+            <div className="bg-emerald-500 p-3 rounded-2xl group-hover:rotate-12 transition-transform duration-300">
+              <Rocket className="w-8 h-8 text-black" />
             </div>
-          )}
+            <span className="font-black text-4xl tracking-tighter uppercase italic text-white">Agentex</span>
+          </Link>
           
-          <form onSubmit={handleAuth} className="space-y-4">
-            {isRegistering && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                  <User size={16} />
-                  Nome Completo
-                </label>
-                <input
-                  type="text"
-                  required
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                  placeholder="Seu Nome"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-            )}
+          <h2 className="text-6xl font-black uppercase italic tracking-tighter leading-none text-white">
+            Domine o <br />
+            <span className="text-emerald-500 text-7xl">WhatsApp</span> <br />
+            em Moçambique.
+          </h2>
+          
+          <p className="text-xl text-white/60 font-medium leading-relaxed">
+            A plataforma definitiva para automação, CRM e Inteligência Artificial. Feito para empresas moçambicanas que não aceitam limites.
+          </p>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                <Mail size={16} />
-                E-mail
-              </label>
-              <input
-                type="email"
-                required
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                placeholder="seu@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
+          <div className="grid grid-cols-2 gap-6 pt-8">
+            <div className="p-6 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
+              <Sparkles className="w-6 h-6 text-emerald-400 mb-3" />
+              <p className="text-sm font-bold uppercase tracking-widest text-white/40">IA Nativa</p>
             </div>
-            
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                <Lock size={16} />
-                Senha
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all pr-10"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  onClick={() => setShowPassword(!showPassword)}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <Button 
-              type="submit"
-              className="w-full gap-3 h-12 text-base" 
-              disabled={loading}
-            >
-              {loading ? (
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-              ) : (
-                <>
-                  {isRegistering ? <UserPlus size={20} /> : <LogIn size={20} />}
-                  {isRegistering ? "Criar Conta" : "Entrar"}
-                </>
-              )}
-            </Button>
-          </form>
-
-          <div className="relative py-2">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t border-slate-200"></span>
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-white px-2 text-slate-500">Ou</span>
+            <div className="p-6 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-sm">
+              <Zap className="w-6 h-6 text-blue-400 mb-3" />
+              <p className="text-sm font-bold uppercase tracking-widest text-white/40">Ultra Rápido</p>
             </div>
           </div>
+        </motion.div>
 
-          <Button 
-            variant="ghost"
-            className="w-full text-slate-600 hover:text-emerald-600"
-            onClick={() => setIsRegistering(!isRegistering)}
+        {/* Decorative elements */}
+        <div className="absolute bottom-10 left-10 text-[10px] uppercase tracking-[0.5em] text-white/20 font-black italic">
+          Agentex // Next-Gen CRM
+        </div>
+      </div>
+
+      {/* Right Side - Form */}
+      <div className="flex-1 flex flex-col bg-black lg:bg-black relative">
+        <div className="lg:hidden p-6">
+          <Link to="/" className="flex items-center gap-3">
+            <div className="bg-emerald-500 p-2 rounded-xl">
+              <Rocket className="w-5 h-5 text-black" />
+            </div>
+            <span className="font-black text-2xl tracking-tighter uppercase italic text-white">Agentex</span>
+          </Link>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center p-6 sm:p-12">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full max-w-md space-y-8"
           >
-            {isRegistering 
-              ? "Já tem uma conta? Entre aqui" 
-              : "Não tem uma conta? Cadastre-se"}
-          </Button>
+            <div className="space-y-2">
+              <h1 className="text-4xl font-black uppercase italic tracking-tighter text-white">
+                {isRegistering ? "Criar Conta" : "Bem-vindo de volta"}
+              </h1>
+              <p className="text-white/40 font-medium">
+                {isRegistering 
+                  ? "Comece sua jornada de automação agora." 
+                  : "Acesse sua conta para gerenciar seu negócio."}
+              </p>
+            </div>
 
-          <p className="text-center text-xs text-slate-400">
-            Ao entrar, você concorda com nossos termos de serviço e política de privacidade.
-          </p>
-        </CardContent>
-      </Card>
+            <AnimatePresence mode="wait">
+              <motion.form 
+                key={isRegistering ? "register" : "login"}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                onSubmit={handleAuth} 
+                className="space-y-5"
+              >
+                {error && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-4 rounded-xl bg-red-500/10 text-red-500 text-sm font-bold border border-red-500/20"
+                  >
+                    {error}
+                  </motion.div>
+                )}
+
+                {isRegistering && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-black uppercase tracking-widest text-white/40 ml-1">Nome Completo</label>
+                    <div className="relative">
+                      <User className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={18} />
+                      <input
+                        type="text"
+                        required
+                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-12 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all font-medium"
+                        placeholder="Seu Nome"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-xs font-black uppercase tracking-widest text-white/40 ml-1">E-mail</label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={18} />
+                    <input
+                      type="email"
+                      required
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-12 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all font-medium"
+                      placeholder="seu@email.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+                
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center ml-1">
+                    <label className="text-xs font-black uppercase tracking-widest text-white/40">Senha</label>
+                    {!isRegistering && (
+                      <Link to="#" className="text-[10px] font-black uppercase tracking-widest text-emerald-500 hover:text-emerald-400">Esqueceu?</Link>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={18} />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-12 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all font-medium pr-12"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-white/20 hover:text-white"
+                      onClick={() => setShowPassword(!showPassword)}
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <Button 
+                  type="submit"
+                  className="w-full bg-emerald-500 hover:bg-emerald-400 text-black h-16 text-lg font-black uppercase tracking-widest rounded-none skew-x-[-12deg] mt-4" 
+                  disabled={loading}
+                >
+                  <span className="skew-x-[12deg] flex items-center justify-center gap-3">
+                    {loading ? (
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-black border-t-transparent"></div>
+                    ) : (
+                      <>
+                        {isRegistering ? <UserPlus size={20} /> : <LogIn size={20} />}
+                        {isRegistering ? "CRIAR CONTA" : "ENTRAR AGORA"}
+                      </>
+                    )}
+                  </span>
+                </Button>
+              </motion.form>
+            </AnimatePresence>
+
+            <div className="pt-4 text-center">
+              <button 
+                className="text-sm font-bold text-white/40 hover:text-emerald-500 transition-colors uppercase tracking-widest"
+                onClick={() => setIsRegistering(!isRegistering)}
+              >
+                {isRegistering 
+                  ? "Já tem uma conta? Entre aqui" 
+                  : "Não tem uma conta? Cadastre-se agora"}
+              </button>
+            </div>
+
+            <div className="pt-8 flex items-center justify-center gap-6">
+              <Link to="/" className="text-[10px] font-black uppercase tracking-[0.3em] text-white/20 hover:text-white flex items-center gap-2">
+                <ArrowLeft size={12} /> Voltar para Home
+              </Link>
+            </div>
+          </motion.div>
+        </div>
       </div>
     </div>
   );

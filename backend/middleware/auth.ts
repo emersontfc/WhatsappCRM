@@ -40,35 +40,27 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     }
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
     
+    console.log(`[Auth Middleware] Verifying token. URL: ${supabaseUrl}, Key starts with: ${supabaseKey.substring(0, 5)}...`);
+    
     let user = null;
     let errorMsg = null;
 
     try {
-      const { data: { user: sbUser }, error } = await supabaseAdmin.auth.getUser(token);
-      if (error && error.message.includes("Auth session missing")) {
-        // Fallback for older supabase-js versions
-        throw new Error("Fallback to fetch");
-      }
-      if (error) throw error;
-      user = sbUser;
-    } catch (e: any) {
-      if (e.message === "Fallback to fetch" || e.message?.includes("Auth session missing")) {
-        // Direct fetch to Supabase Auth API
-        const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            apikey: supabaseKey
-          }
-        });
-        
-        if (!res.ok) {
-          errorMsg = `Fetch failed: ${res.statusText}`;
-        } else {
-          user = await res.json();
+      // Direct fetch to Supabase Auth API
+      const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: supabaseKey
         }
+      });
+      
+      if (!res.ok) {
+        errorMsg = `Fetch failed: ${res.status} ${res.statusText}`;
       } else {
-        errorMsg = e.message;
+        user = await res.json();
       }
+    } catch (e: any) {
+      errorMsg = e.message;
     }
 
     if (errorMsg || !user) {

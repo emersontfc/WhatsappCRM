@@ -1,6 +1,6 @@
 {
-  "name": "WhatsCRM SaaS",
-  "description": "Multi-tenant WhatsApp CRM & Automation platform with AI assistant and license key payments.",
+  "name": "Agentex",
+  "description": "Plataforma SaaS de CRM e Automação de WhatsApp em Moçambique com assistente de IA e pagamentos integrados.",
   "requestFramePermissions": [
     "camera",
     "microphone"

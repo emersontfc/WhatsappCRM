@@ -231,7 +231,7 @@ router.post("/toggle", async (req: AuthRequest, res) => {
           is_active, 
           provider: defaultProvider, 
           model: 'gemini-3-flash-preview',
-          instructions: "Você é um assistente de vendas prestativo para o WhatsCRM. Responda de forma educada e profissional." 
+          instructions: "Você é um assistente de vendas prestativo para o Agentex. Responda de forma educada e profissional." 
         })
         .select()
         .single());

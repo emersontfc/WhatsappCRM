@@ -61,4 +61,43 @@ router.post("/import/:packId", async (req: AuthRequest, res) => {
   }
 });
 
+// List user's quick replies
+router.get("/my", async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+    const { data, error } = await supabaseAdmin
+      .from("quick_replies")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete a quick reply
+router.delete("/:id", async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+    const { error } = await supabaseAdmin
+      .from("quick_replies")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 export default router;

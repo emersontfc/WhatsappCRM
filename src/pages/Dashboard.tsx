@@ -211,9 +211,12 @@ export default function Dashboard() {
         if (!qrSince.current) {
           qrSince.current = Date.now();
         } else if (Date.now() - qrSince.current > 30000) { // 30 seconds timeout
-          await resetSession();
+          console.log("[WhatsApp] QR/Pairing timeout reached, resetting...");
           qrSince.current = null;
-          setConnectMethod("number");
+          await resetSession();
+          setStatus("disconnected");
+          setQr(null);
+          setPairingCode(null);
           toast.error("O código expirou. Tente novamente.");
           return;
         }
@@ -248,10 +251,12 @@ export default function Dashboard() {
         if (!connectingSince.current) {
           connectingSince.current = Date.now();
         } else if (Date.now() - connectingSince.current > 30000) { // 30 seconds timeout
+          console.log("[WhatsApp] Connecting timeout reached, resetting...");
+          connectingSince.current = null;
+          await resetSession();
           setStatus("disconnected");
           setQr(null);
           setPairingCode(null);
-          connectingSince.current = null;
           toast.error("A conexão demorou muito. Tente novamente.");
           return;
         }
@@ -590,9 +595,19 @@ export default function Dashboard() {
                   <RefreshCw size={14} />
                   Atualizar
                 </Button>
-                <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
-                  Cancelar e tentar novamente
-                </Button>
+                <div className="flex flex-col gap-2 w-full">
+                  <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
+                    Cancelar e tentar novamente
+                  </Button>
+                  <Button variant="outline" size="sm" className="text-slate-600 text-[10px]" onClick={() => {
+                    setStatus("disconnected");
+                    setQr(null);
+                    setPairingCode(null);
+                    resetSession();
+                  }}>
+                    Voltar para o menu inicial
+                  </Button>
+                </div>
               </div>
             ) : status === "pairing" && pairingCode ? (
               <div className="text-center space-y-6 w-full">
@@ -620,9 +635,19 @@ export default function Dashboard() {
                   <RefreshCw size={14} />
                   Verificar Conexão
                 </Button>
-                <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
-                  Cancelar e tentar novamente
-                </Button>
+                <div className="flex flex-col gap-2 w-full">
+                  <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
+                    Cancelar e tentar novamente
+                  </Button>
+                  <Button variant="outline" size="sm" className="text-slate-600 text-[10px]" onClick={() => {
+                    setStatus("disconnected");
+                    setQr(null);
+                    setPairingCode(null);
+                    resetSession();
+                  }}>
+                    Voltar para o menu inicial
+                  </Button>
+                </div>
               </div>
             ) : status === "paused" ? (
               <div className="text-center space-y-4 w-full">

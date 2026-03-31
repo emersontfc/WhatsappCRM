@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, User, Phone, Search, Sparkles, MessageSquare, ChevronLeft, Zap } from "lucide-react";
+import { Send, User, Phone, Search, Sparkles, MessageSquare, ChevronLeft, Zap, List, X } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId } from "../supabase";
 import { Button } from "../components/ui/Button";
@@ -17,6 +17,12 @@ interface Contact {
   id: string;
   name: string;
   phone: string;
+}
+
+interface QuickReply {
+  id: string;
+  trigger: string;
+  response_text: string;
 }
 
 interface Agent {
@@ -71,6 +77,8 @@ export default function Messages() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [isRecording, setIsRecording] = useState(false);
+  const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,6 +90,12 @@ export default function Messages() {
         const uId = await getUserId();
         if (!uId || uId === "guest-user") return;
         setUserId(uId);
+
+        // Fetch quick replies
+        const response = await apiFetch("/api/packs/my");
+        if (isMounted && response.success) {
+          setQuickReplies(response.data);
+        }
 
         // Fetch agents
         const { data: agentsData } = await supabase
@@ -222,9 +236,10 @@ export default function Messages() {
     setShowChatOnMobile(true);
   };
 
-  const handleSend = async (e?: React.FormEvent, mediaUrl?: string, mediaType?: string) => {
+  const handleSend = async (e?: React.FormEvent, mediaUrl?: string, mediaType?: string, textOverride?: string) => {
     if (e) e.preventDefault();
-    if ((!newMessage.trim() && !mediaUrl) || !selectedContact || !userId) return;
+    const textToSend = textOverride !== undefined ? textOverride : newMessage;
+    if ((!textToSend.trim() && !mediaUrl) || !selectedContact || !userId) return;
     if (!isActivated) return;
 
     setLoading(true);
@@ -234,7 +249,7 @@ export default function Messages() {
         method: "POST",
         body: JSON.stringify({
           jid: `${phone}@s.whatsapp.net`,
-          text: newMessage,
+          text: textToSend,
           mediaUrl,
           mediaType
         }),
@@ -246,6 +261,7 @@ export default function Messages() {
 
       setNewMessage("");
       setIsRecording(false);
+      setShowQuickReplies(false);
       toast.success(mediaUrl ? "Áudio enviado!" : "Mensagem enviada!");
     } catch (err: any) {
       console.error("Failed to send message:", err);
@@ -253,6 +269,10 @@ export default function Messages() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleQuickReply = (text: string) => {
+    handleSend(undefined, undefined, undefined, text);
   };
 
   const getAiSuggestion = async () => {
@@ -382,7 +402,7 @@ export default function Messages() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/30">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/30 relative">
               {messages.map((msg) => (
                 <div
                   key={msg.id}
@@ -407,6 +427,30 @@ export default function Messages() {
                 </div>
               ))}
               <div ref={scrollRef} />
+
+              {/* Quick Replies Overlay */}
+              {showQuickReplies && quickReplies.length > 0 && (
+                <div className="absolute bottom-4 left-4 right-4 bg-white border border-slate-200 rounded-2xl shadow-2xl p-4 z-20 animate-in slide-in-from-bottom-4">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Respostas Rápidas</h4>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowQuickReplies(false)}>
+                      <X size={14} />
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-2">
+                    {quickReplies.map(reply => (
+                      <button
+                        key={reply.id}
+                        onClick={() => handleQuickReply(reply.response_text)}
+                        className="text-left p-3 rounded-xl border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50 transition-all group"
+                      >
+                        <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">{reply.trigger}</p>
+                        <p className="text-xs text-slate-600 line-clamp-2 group-hover:text-slate-900">{reply.response_text}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="p-3 sm:p-4 bg-white border-t border-slate-100">
@@ -417,6 +461,19 @@ export default function Messages() {
                 />
               ) : (
                 <form onSubmit={handleSend} className="flex gap-2">
+                  <Button 
+                    type="button"
+                    variant="ghost" 
+                    size="icon" 
+                    className={cn(
+                      "h-10 w-10 shrink-0 transition-colors",
+                      showQuickReplies ? "text-emerald-600 bg-emerald-50" : "text-slate-400 hover:text-emerald-500"
+                    )}
+                    onClick={() => setShowQuickReplies(!showQuickReplies)}
+                    disabled={!isActivated || quickReplies.length === 0}
+                  >
+                    <List size={20} />
+                  </Button>
                   <Button 
                     type="button"
                     variant="ghost" 

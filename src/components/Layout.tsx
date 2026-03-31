@@ -14,7 +14,8 @@ import {
   Bot,
   Calendar as CalendarIcon,
   Package,
-  Terminal
+  Terminal,
+  Rocket
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -102,6 +103,7 @@ export default function Layout({ children }: LayoutProps) {
     { name: "Contatos", path: "/contacts", icon: Users },
     { name: "Mensagens", path: "/messages", icon: MessageSquare },
     { name: "Automações", path: "/automations", icon: Zap },
+    { name: "Respostas Rápidas", path: "/quick-replies", icon: MessageSquare },
     { name: "Modelos", path: "/models", icon: MessageSquare },
     { name: "Agente IA", path: "/agent", icon: Bot },
     { name: "Agendamentos", path: "/schedule", icon: CalendarIcon },
@@ -148,9 +150,9 @@ export default function Layout({ children }: LayoutProps) {
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="h-8 w-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white">
-              <Zap size={20} />
+              <Rocket size={20} />
             </div>
-            <span className="font-bold text-xl tracking-tight">WhatsCRM</span>
+            <span className="font-bold text-xl tracking-tight">Agentex</span>
           </div>
           <Button 
             variant="ghost" 

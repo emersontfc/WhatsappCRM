@@ -31,7 +31,7 @@ export default function Agent() {
     api_key: "",
     api_url: "",
     model: "gemini-3-flash-preview",
-    instructions: "Você é um assistente de vendas prestativo para o WhatsCRM. Responda de forma educada e profissional."
+    instructions: "Você é um assistente de vendas prestativo para o Agentex. Responda de forma educada e profissional."
   });
 
   useEffect(() => {
@@ -372,7 +372,7 @@ export default function Agent() {
             <CardContent>
               <textarea
                 className="w-full min-h-[200px] p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none text-sm leading-relaxed"
-                placeholder="Ex: Você é um assistente de vendas da empresa WhatsCRM. Seu objetivo é agendar reuniões..."
+                placeholder="Ex: Você é um assistente de vendas da empresa Agentex. Seu objetivo é agendar reuniões..."
                 value={config.instructions}
                 onChange={e => setConfig({ ...config, instructions: e.target.value })}
               />
