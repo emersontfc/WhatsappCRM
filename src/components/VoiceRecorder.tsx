@@ -82,17 +82,11 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
 
-      // We use a direct fetch here because apiFetch might not handle FormData correctly depending on its implementation
-      const token = localStorage.getItem("token");
-      const response = await fetch("/api/media/upload-audio", {
+      const result = await apiFetch("/api/media/upload-audio", {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`
-        },
         body: formData
       });
 
-      const result = await response.json();
       if (result.success) {
         onSend(result.url);
         toast.success("Áudio enviado com sucesso!");

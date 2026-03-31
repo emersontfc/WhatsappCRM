@@ -88,10 +88,7 @@ export default function AdminPacks() {
   };
 
   const handleDeletePack = async (packId: string) => {
-    if (!confirm("Tem certeza que deseja excluir este pack?")) return;
-    
     try {
-      // The backend route is /api/admin/packs/:id
       const res = await apiFetch(`/api/admin/packs/${packId}`, {
         method: "DELETE",
       });

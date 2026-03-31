@@ -33,9 +33,14 @@ export default function Settings() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [keys, setKeys] = useState<LicenseKey[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [activeTab, setActiveTab] = useState<"profile" | "keys" | "users" | "plans">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "keys" | "users" | "plans" | "settings">("profile");
   const [newKey, setNewKey] = useState({ duration: "30", plan: "Premium" });
   const [plans, setPlans] = useState<any[]>([]);
+  const [globalSettings, setGlobalSettings] = useState<any>({
+    maintenance_mode: false,
+    welcome_message: "",
+    support_contact: ""
+  });
 
   const fetchPlans = async () => {
     try {
@@ -90,6 +95,37 @@ export default function Settings() {
     }
   };
 
+  const fetchGlobalSettings = async () => {
+    try {
+      const response = await apiFetch("/api/admin/settings");
+      if (response.success && response.data) {
+        setGlobalSettings(response.data);
+      }
+    } catch (err) {
+      console.error("Error fetching global settings:", err);
+    }
+  };
+
+  const updateGlobalSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const response = await apiFetch("/api/admin/settings", {
+        method: "POST",
+        body: JSON.stringify(globalSettings),
+      });
+      if (response.success) {
+        toast.success("Configurações globais atualizadas!");
+      } else {
+        toast.error(response.error || "Erro ao atualizar configurações");
+      }
+    } catch (err) {
+      toast.error("Erro ao atualizar configurações");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       setPageLoading(true);
@@ -101,9 +137,12 @@ export default function Settings() {
             setProfile(response.data);
             if (response.data.role === "admin") {
               setIsAdmin(true);
-              await fetchKeys();
-              await fetchUsers();
-              await fetchPlans();
+              await Promise.all([
+                fetchKeys(),
+                fetchUsers(),
+                fetchPlans(),
+                fetchGlobalSettings()
+              ]);
             } else {
               setIsAdmin(false);
             }
@@ -205,7 +244,6 @@ export default function Settings() {
   };
 
   const deleteUser = async (id: string) => {
-    if (!confirm("Tem certeza que deseja apagar este usuário?")) return;
     try {
       const response = await apiFetch(`/api/admin/users/${id}`, {
         method: "DELETE"
@@ -326,6 +364,13 @@ export default function Settings() {
                   className="h-8 text-xs"
                 >
                   Planos
+                </Button>
+                <Button 
+                  variant={activeTab === "settings" ? "primary" : "ghost"} 
+                  onClick={() => setActiveTab("settings")}
+                  className="h-8 text-xs"
+                >
+                  Configurações Globais
                 </Button>
               </>
             )}
@@ -705,6 +750,54 @@ export default function Settings() {
                 </Card>
               ))}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {activeTab === "settings" && isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Configurações Globais do Sistema</CardTitle>
+            <CardDescription>Gerencie as configurações gerais da plataforma.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={updateGlobalSettings} className="space-y-6">
+              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <div className="space-y-0.5">
+                  <label className="text-sm font-bold text-slate-900">Modo de Manutenção</label>
+                  <p className="text-xs text-slate-500">Impede que usuários não-admin acessem o sistema.</p>
+                </div>
+                <input 
+                  type="checkbox" 
+                  checked={globalSettings.maintenance_mode}
+                  onChange={(e) => setGlobalSettings({...globalSettings, maintenance_mode: e.target.checked})}
+                  className="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-900">Mensagem de Boas-vindas</label>
+                <textarea 
+                  className="flex min-h-[100px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  placeholder="Mensagem exibida no dashboard para novos usuários..."
+                  value={globalSettings.welcome_message || ""}
+                  onChange={(e) => setGlobalSettings({...globalSettings, welcome_message: e.target.value})}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-900">Contato de Suporte (WhatsApp)</label>
+                <Input 
+                  placeholder="Ex: 258840000000"
+                  value={globalSettings.support_contact || ""}
+                  onChange={(e) => setGlobalSettings({...globalSettings, support_contact: e.target.value})}
+                />
+              </div>
+
+              <Button type="submit" disabled={loading} className="w-full">
+                {loading ? "Salvando..." : "Salvar Configurações"}
+              </Button>
+            </form>
           </CardContent>
         </Card>
       )}

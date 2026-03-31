@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, Tag, MoreVertical, Phone, User, Users, Send, Upload } from "lucide-react";
+import { Plus, Search, Tag, Trash2, Phone, User, Users, Send, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId, isAdmin as checkIsAdmin } from "../supabase";
 import { Button } from "../components/ui/Button";
@@ -297,6 +297,23 @@ export default function Contacts() {
     navigate(`/messages?phone=${phone}`);
   };
 
+  const handleDelete = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from("contacts")
+        .delete()
+        .eq("id", id);
+      
+      if (error) throw error;
+      
+      setContacts(prev => prev.filter(c => c.id !== id));
+      toast.success("Contato excluído!");
+    } catch (err) {
+      console.error("Error deleting contact:", err);
+      toast.error("Erro ao excluir contato.");
+    }
+  };
+
   const filtered = contacts.filter(c => 
     c.name.toLowerCase().includes(search.toLowerCase()) || 
     c.phone.includes(search)
@@ -415,8 +432,13 @@ export default function Contacts() {
                   >
                     <Send size={16} />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                    <MoreVertical size={16} />
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 text-red-500 hover:bg-red-50"
+                    onClick={() => handleDelete(contact.id)}
+                  >
+                    <Trash2 size={16} />
                   </Button>
                 </div>
               </div>

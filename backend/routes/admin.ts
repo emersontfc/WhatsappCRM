@@ -360,4 +360,54 @@ router.post("/packs/:packId/items", async (req: AuthRequest, res) => {
   }
 });
 
+router.get("/settings", async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("global_settings")
+      .select("*")
+      .single();
+      
+    if (error && error.code !== "PGRST116") throw error;
+    
+    res.json({ success: true, data: data || {} });
+  } catch (err: any) {
+    console.error("Failed to fetch settings:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/settings", async (req, res) => {
+  const settings = req.body;
+  
+  try {
+    const { data: existing } = await supabaseAdmin
+      .from("global_settings")
+      .select("id")
+      .maybeSingle();
+
+    let result;
+    if (existing) {
+      result = await supabaseAdmin
+        .from("global_settings")
+        .update(settings)
+        .eq("id", existing.id)
+        .select()
+        .single();
+    } else {
+      result = await supabaseAdmin
+        .from("global_settings")
+        .insert(settings)
+        .select()
+        .single();
+    }
+
+    if (result.error) throw result.error;
+    
+    res.json({ success: true, data: result.data });
+  } catch (err: any) {
+    console.error("Failed to update settings:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;
