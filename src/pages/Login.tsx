@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle } from "lucide-react";
+import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle, Eye, EyeOff } from "lucide-react";
 import { supabase } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
@@ -13,20 +13,35 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const navigate = useNavigate();
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+
+    // Basic Validation
+    if (!email || !password) {
+      setError("Por favor, preencha todos os campos.");
+      return;
+    }
+    if (isRegistering && !name) {
+      setError("Por favor, informe seu nome.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("A senha deve ter pelo menos 6 caracteres.");
+      return;
+    }
+
+    setLoading(true);
     try {
       if (isRegistering) {
-        const data = await apiFetch("/api/auth/register", {
+        await apiFetch("/api/auth/register", {
           method: "POST",
           body: JSON.stringify({ email, password, name }),
         });
 
-        // After successful registration, sign in automatically
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -39,7 +54,12 @@ export default function Login() {
           password,
         });
 
-        if (signInError) throw signInError;
+        if (signInError) {
+          if (signInError.message === "Invalid login credentials") {
+            throw new Error("E-mail ou senha incorretos.");
+          }
+          throw signInError;
+        }
       }
       navigate("/dashboard");
     } catch (err: any) {
@@ -126,14 +146,23 @@ export default function Login() {
                 <Lock size={16} />
                 Senha
               </label>
-              <input
-                type="password"
-                required
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  required
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all pr-10"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  onClick={() => setShowPassword(!showPassword)}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </div>
 
             <Button 

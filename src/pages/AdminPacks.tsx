@@ -91,6 +91,7 @@ export default function AdminPacks() {
     if (!confirm("Tem certeza que deseja excluir este pack?")) return;
     
     try {
+      // The backend route is /api/admin/packs/:id
       const res = await apiFetch(`/api/admin/packs/${packId}`, {
         method: "DELETE",
       });
@@ -99,10 +100,11 @@ export default function AdminPacks() {
         toast.success("Pack excluído!");
         fetchPacks();
       } else {
-        toast.error("Erro ao excluir pack");
+        toast.error(res.error || "Erro ao excluir pack");
       }
-    } catch (error) {
-      toast.error("Erro ao excluir pack");
+    } catch (error: any) {
+      console.error("Erro ao excluir pack:", error);
+      toast.error(error.message || "Erro ao excluir pack");
     }
   };
 

@@ -35,6 +35,8 @@ router.get("/qr", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
+  console.log(`[WhatsApp QR] Request received for user: ${userId}`);
+
   try {
     const session = whatsappManager.getSession(userId);
     if (!session) {

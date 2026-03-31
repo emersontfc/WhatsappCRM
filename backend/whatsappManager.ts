@@ -27,6 +27,7 @@ interface Session {
 
 class WhatsAppManager {
   private sessions: Map<string, Session> = new Map();
+  private reconnectAttempts: Map<string, number> = new Map();
   private activeTasks: number = 0;
   private maxConcurrentTasks: number = 10;
 
@@ -222,6 +223,7 @@ class WhatsAppManager {
           session.status = "connected";
           session.qr = undefined;
           session.pairingCode = undefined;
+          this.reconnectAttempts.delete(userId);
           await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           console.log(`[WhatsApp] Session ${userId} is now OPEN and READY.`);
           onUpdate?.("connected");
@@ -251,19 +253,26 @@ class WhatsAppManager {
           this.sessions.delete(userId);
 
           if (shouldReconnect) {
-            const delay = 5000; // 5 seconds delay before reconnecting
-            console.log(`[WhatsApp] Auto-reconnecting for ${userId} in ${delay}ms...`);
-            setTimeout(() => {
-              // Double check if session was already recreated by another event
-              if (!this.sessions.has(userId)) {
-                console.log(`[WhatsApp] Executing auto-reconnect for ${userId}`);
-                this.createSession(userId, phoneNumber, onUpdate).catch(err => {
-                  console.error(`[WhatsApp] Auto-reconnect failed for ${userId}:`, err);
-                });
-              } else {
-                console.log(`[WhatsApp] Skipping auto-reconnect for ${userId} as session already exists.`);
-              }
-            }, delay);
+            const attempts = this.reconnectAttempts.get(userId) || 0;
+            if (attempts < 3) {
+              this.reconnectAttempts.set(userId, attempts + 1);
+              const delay = 10000; // 10 seconds delay
+              console.log(`[WhatsApp] Auto-reconnecting for ${userId} (Attempt ${attempts + 1}/3) in ${delay}ms...`);
+              setTimeout(() => {
+                // Double check if session was already recreated by another event
+                if (!this.sessions.has(userId)) {
+                  console.log(`[WhatsApp] Executing auto-reconnect for ${userId}`);
+                  this.createSession(userId, phoneNumber, onUpdate).catch(err => {
+                    console.error(`[WhatsApp] Auto-reconnect failed for ${userId}:`, err);
+                  });
+                } else {
+                  console.log(`[WhatsApp] Skipping auto-reconnect for ${userId} as session already exists.`);
+                }
+              }, delay);
+            } else {
+              console.log(`[WhatsApp] Max reconnection attempts reached for ${userId}. Stopping.`);
+              this.reconnectAttempts.delete(userId);
+            }
           }
         }
       } catch (err) {

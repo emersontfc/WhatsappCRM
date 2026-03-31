@@ -24,6 +24,15 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
+  // Health check
+  app.get("/api/health", (req, res) => {
+    res.json({
+      success: true,
+      message: "API is working 🚀"
+    });
+  });
+  console.log("Health check route loaded");
+
   // Global Request Logger
   app.use((req, res, next) => {
     if (req.url.startsWith("/api")) {
@@ -96,11 +105,6 @@ async function startServer() {
 
   // Start background tasks
   startScheduler();
-
-  // Health check
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString(), env: process.env.NODE_ENV });
-  });
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

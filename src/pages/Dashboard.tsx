@@ -210,7 +210,7 @@ export default function Dashboard() {
         // Check how long it's been showing QR/Pairing
         if (!qrSince.current) {
           qrSince.current = Date.now();
-        } else if (Date.now() - qrSince.current > 60000) { // 60 seconds timeout
+        } else if (Date.now() - qrSince.current > 30000) { // 30 seconds timeout
           await resetSession();
           qrSince.current = null;
           toast.error("O código expirou. Tente novamente.");
