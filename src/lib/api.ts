@@ -9,6 +9,11 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
 
   let apiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
   
+  // Ensure HTTPS if the app is running on HTTPS
+  if (apiUrl && typeof window !== "undefined" && window.location.protocol === "https:" && apiUrl.startsWith("http:")) {
+    apiUrl = apiUrl.replace("http:", "https:");
+  }
+
   // If we are in AI Studio (hostname ends with .run.app), force relative URLs
   // so we test the code we just wrote, not the deployed Render backend.
   if (typeof window !== "undefined" && window.location.hostname.endsWith(".run.app")) {
