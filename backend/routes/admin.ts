@@ -367,10 +367,13 @@ router.get("/settings", async (req, res) => {
       .select("*")
       .single();
       
-    if (error && error.code !== "PGRST116") throw error;
+    if (error && error.code !== "PGRST116" && error.code !== "42P01" && !error.message?.includes("schema cache") && !error.message?.includes("does not exist")) throw error;
     
     res.json({ success: true, data: data || {} });
   } catch (err: any) {
+    if (err?.code === '42P01' || err?.message?.includes('does not exist') || err?.message?.includes('schema cache')) {
+      return res.json({ success: true, data: {} });
+    }
     console.error("Failed to fetch settings:", err);
     res.status(500).json({ success: false, error: err.message });
   }
@@ -380,10 +383,16 @@ router.post("/settings", async (req, res) => {
   const settings = req.body;
   
   try {
-    const { data: existing } = await supabaseAdmin
+    const { data: existing, error: checkError } = await supabaseAdmin
       .from("global_settings")
       .select("id")
       .maybeSingle();
+
+    if (checkError && checkError.code !== "42P01" && !checkError.message?.includes("schema cache") && !checkError.message?.includes("does not exist")) throw checkError;
+
+    if (checkError?.code === "42P01" || checkError?.message?.includes('does not exist') || checkError?.message?.includes('schema cache')) {
+       return res.status(400).json({ success: false, error: "A tabela global_settings não existe no banco de dados. Execute o script SQL no Supabase." });
+    }
 
     let result;
     if (existing) {

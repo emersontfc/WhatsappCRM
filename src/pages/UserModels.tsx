@@ -22,11 +22,13 @@ export default function UserModels() {
   };
 
   const handleImport = async (packId: string) => {
-    const res = await apiFetch(`/api/packs/import/${packId}`, { method: "POST" });
-    if (res.success) {
-      toast.success("Pack importado com sucesso!");
-    } else {
-      toast.error("Erro ao importar pack");
+    try {
+      const res = await apiFetch(`/api/packs/import/${packId}`, { method: "POST" });
+      if (res.success) {
+        toast.success("Pack importado com sucesso!");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao importar pack");
     }
   };
 

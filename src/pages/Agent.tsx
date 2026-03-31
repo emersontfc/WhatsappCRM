@@ -42,8 +42,10 @@ export default function Agent() {
 
   const fetchModels = async () => {
     try {
-      const data = await apiFetch("/api/agent/providers/models");
-      setModels(data);
+      const response = await apiFetch("/api/agent/providers/models");
+      if (response.success) {
+        setModels(response.data);
+      }
     } catch (err: any) {
       console.error("Error fetching models:", err);
       toast.error(`Erro ao carregar modelos: ${err.message}`);
@@ -52,14 +54,14 @@ export default function Agent() {
 
   const fetchConfig = async () => {
     try {
-      const data = await apiFetch("/api/agent");
-      if (data && data.id) {
+      const response = await apiFetch("/api/agent");
+      if (response.success && response.data && response.data.id) {
         setConfig({
-          ...data,
-          api_key: data.api_key || "",
-          api_url: data.api_url || "",
-          model: data.model || "",
-          instructions: data.instructions || ""
+          ...response.data,
+          api_key: response.data.api_key || "",
+          api_url: response.data.api_url || "",
+          model: response.data.model || "",
+          instructions: response.data.instructions || ""
         });
       }
     } catch (err: any) {
@@ -84,16 +86,16 @@ export default function Agent() {
     setSaving(true);
     try {
       console.log("Saving agent config...", config.provider);
-      const savedData = await apiFetch("/api/agent/create-or-update", {
+      const response = await apiFetch("/api/agent/create-or-update", {
         method: "POST",
         body: JSON.stringify(config),
       });
 
-      if (savedData && savedData.id) {
+      if (response.success && response.data && response.data.id) {
         setConfig(prev => ({
           ...prev,
-          ...savedData,
-          api_key: savedData.api_key || "********"
+          ...response.data,
+          api_key: response.data.api_key || "********"
         }));
       }
 

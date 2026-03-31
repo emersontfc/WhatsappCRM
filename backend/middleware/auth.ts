@@ -19,55 +19,10 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   const token = authHeader.split(" ")[1];
 
   try {
-    const jwtSecret = process.env.SUPABASE_JWT_SECRET;
-    
-    if (jwtSecret) {
-      // Fast local verification
-      const decoded = jwt.verify(token, jwtSecret) as any;
-      req.user = {
-        id: decoded.sub,
-        email: decoded.email,
-      };
-      return next();
-    }
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
-    // Fallback to network verification using the admin client
-    // Some older versions of supabase-js ignore the token parameter in getUser()
-    // So we make a direct fetch request to the Supabase Auth API
-    let supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim().replace(/\/$/, "");
-    if (supabaseUrl && !supabaseUrl.startsWith("http")) {
-      supabaseUrl = `https://${supabaseUrl}.supabase.co`;
-    }
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
-    
-    console.log(`[Auth Middleware] Verifying token. URL: ${supabaseUrl}, Key starts with: ${supabaseKey.substring(0, 5)}...`);
-    
-    let user = null;
-    let errorMsg = null;
-
-    try {
-      // Direct fetch to Supabase Auth API
-      const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          apikey: supabaseKey
-        }
-      });
-      
-      if (!res.ok) {
-        errorMsg = `Fetch failed: ${res.status} ${res.statusText}`;
-      } else {
-        user = await res.json();
-      }
-    } catch (e: any) {
-      errorMsg = e.message;
-    }
-
-    if (errorMsg || !user) {
-      console.error(`[Auth Middleware] Token verification failed:`, {
-        error: errorMsg || "No user found",
-        token: token.substring(0, 10) + "..."
-      });
+    if (error || !user) {
+      console.error("[Auth Middleware] Token verification failed:", error?.message || "No user found");
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 

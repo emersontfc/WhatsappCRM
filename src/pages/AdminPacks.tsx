@@ -53,18 +53,20 @@ export default function AdminPacks() {
   const handleCreatePack = async () => {
     if (!name) return toast.error("Nome é obrigatório");
     
-    const res = await apiFetch("/api/admin/packs", {
-      method: "POST",
-      body: JSON.stringify({ name, description, is_public: true }),
-    });
+    try {
+      const res = await apiFetch("/api/admin/packs", {
+        method: "POST",
+        body: JSON.stringify({ name, description, is_public: true }),
+      });
 
-    if (res.success) {
-      toast.success("Pack criado!");
-      setName("");
-      setDescription("");
-      fetchPacks();
-    } else {
-      toast.error("Erro ao criar pack");
+      if (res.success) {
+        toast.success("Pack criado!");
+        setName("");
+        setDescription("");
+        fetchPacks();
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Erro ao criar pack");
     }
   };
 
@@ -79,11 +81,9 @@ export default function AdminPacks() {
       if (res.success) {
         toast.success("Itens adicionados!");
         setJsonInput(prev => ({ ...prev, [packId]: "" }));
-      } else {
-        toast.error("Erro ao adicionar itens");
       }
-    } catch (e) {
-      toast.error("JSON inválido");
+    } catch (error: any) {
+      toast.error(error.message || "JSON inválido ou erro ao adicionar itens");
     }
   };
 
@@ -96,8 +96,6 @@ export default function AdminPacks() {
       if (res.success) {
         toast.success("Pack excluído!");
         fetchPacks();
-      } else {
-        toast.error(res.error || "Erro ao excluir pack");
       }
     } catch (error: any) {
       console.error("Erro ao excluir pack:", error);

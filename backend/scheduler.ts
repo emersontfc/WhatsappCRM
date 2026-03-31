@@ -2,10 +2,17 @@ import { supabaseAdmin } from "./supabaseAdmin";
 import { whatsappManager } from "./whatsappManager";
 
 export function startScheduler() {
-  console.log("Message scheduler is temporarily disabled.");
-  return;
+  console.log("Message scheduler started.");
   
+  let isRunning = false;
+
   setInterval(async () => {
+    if (isRunning) {
+      console.log("Scheduler is already running, skipping this tick.");
+      return;
+    }
+    
+    isRunning = true;
     try {
       // Keep-alive ping
       const port = process.env.PORT || 3000;
@@ -49,12 +56,14 @@ export function startScheduler() {
             msg.media_type
           );
 
-          await supabaseAdmin
+          const { error: updateError } = await supabaseAdmin
             .from("scheduled_messages")
             .update({ 
               status: "sent"
             })
             .eq("id", msg.id);
+            
+          if (updateError) throw updateError;
           
           // Also save to message history
           await supabaseAdmin.from("messages").insert({
@@ -80,9 +89,11 @@ export function startScheduler() {
       // Ignore "relation does not exist" error if the user hasn't created the table yet
       if (err?.code === '42P01' || err?.message?.includes('does not exist')) {
         // Silently ignore to avoid spamming the console before the user runs the SQL script
-        return;
+      } else {
+        console.error("Scheduler error:", err?.message || err);
       }
-      console.error("Scheduler error:", err?.message || err);
+    } finally {
+      isRunning = false;
     }
   }, 60000); // Check every minute
 }
