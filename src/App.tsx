@@ -16,6 +16,7 @@ import Agent from "./pages/Agent";
 import AdminPacks from "./pages/AdminPacks";
 import UserModels from "./pages/UserModels";
 import QuickReplies from "./pages/QuickReplies";
+import Groups from "./pages/Groups";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -96,6 +97,10 @@ export default function App() {
         <Route
           path="/quick-replies"
           element={user ? <Layout><QuickReplies key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/groups"
+          element={user ? <Layout><Groups key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/admin/packs"

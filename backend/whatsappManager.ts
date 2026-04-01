@@ -156,13 +156,13 @@ class WhatsAppManager {
       console.log(`Using Baileys version: ${version.join(".")}`);
     } catch (err) {
       console.warn("Failed to fetch Baileys version, using default:", err);
-      version = [2, 3000, 1015901307]; // Fallback version
+      version = [2, 3000, 1017531287]; // Updated fallback version
     }
 
     const socket = makeWASocket({
       version,
       printQRInTerminal: false,
-      browser: Browsers.macOS("Desktop"),
+      browser: ["Windows", "Chrome", "122.0.6261.112"],
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, logger),
@@ -176,28 +176,55 @@ class WhatsAppManager {
 
     this.sessions.set(userId, { socket, status: "connecting" });
 
+    console.log(`[WhatsApp] createSession for ${userId}. PhoneNumber: ${phoneNumber}. Registered: ${state.creds.registered}`);
     if (phoneNumber && !state.creds.registered) {
-      setTimeout(async () => {
-        try {
-          const code = await socket.requestPairingCode(phoneNumber);
-          console.log(`Pairing code for ${userId}: ${code}`);
-          const session = this.sessions.get(userId);
-          if (session) {
-            session.pairingCode = code;
-            session.status = "pairing";
-            onUpdate?.("pairing", code);
-          }
-        } catch (err) {
-          console.error(`Failed to request pairing code for ${userId}:`, err);
-          this.sessions.delete(userId);
-          onUpdate?.("disconnected");
+      try {
+        console.log(`[WhatsApp] Requesting pairing code for ${userId} with phone ${phoneNumber}`);
+        const code = await socket.requestPairingCode(phoneNumber);
+        console.log(`Pairing code for ${userId}: ${code}`);
+        const session = this.sessions.get(userId);
+        if (session) {
+          session.pairingCode = code;
+          session.status = "pairing";
+          onUpdate?.("pairing", code);
         }
-      }, 3000);
+      } catch (err) {
+        console.error(`Failed to request pairing code for ${userId}:`, err);
+        this.sessions.delete(userId);
+        onUpdate?.("disconnected");
+      }
     }
 
     socket.ev.on("creds.update", saveCreds);
 
+    // Welcome Message Logic
+    socket.ev.on("group-participants.update", async (update) => {
+      const { id, participants, action } = update;
+      if (action === "add") {
+        try {
+          const { data: rule } = await supabaseAdmin
+            .from("group_rules")
+            .select("welcome_msg")
+            .eq("user_id", userId)
+            .eq("group_jid", id)
+            .eq("active", true)
+            .maybeSingle();
+
+          if (rule?.welcome_msg) {
+            for (const participant of participants) {
+              const jid = typeof participant === 'string' ? participant : (participant as any).id;
+              const msg = rule.welcome_msg.replace("{user}", `@${jid.split("@")[0]}`);
+              await socket.sendMessage(id, { text: msg, mentions: [jid] });
+            }
+          }
+        } catch (err) {
+          console.error("[WhatsApp] Error in welcome message logic:", err);
+        }
+      }
+    });
+
     socket.ev.on("connection.update", async (update) => {
+      console.log(`[WhatsApp] Connection update for ${userId}:`, JSON.stringify(update, (key, value) => key === 'qr' ? '***' : value));
       try {
         const { connection, lastDisconnect, qr } = update;
         const session = this.sessions.get(userId);
@@ -231,7 +258,7 @@ class WhatsAppManager {
 
         if (connection === "close") {
           const boomErr = lastDisconnect?.error as Boom;
-          console.log(`[WhatsApp] Connection closed for ${userId}. Error:`, boomErr);
+          console.error(`[WhatsApp] Connection closed for ${userId}. Error object:`, JSON.stringify(lastDisconnect?.error, Object.getOwnPropertyNames(lastDisconnect?.error || {})));
           
           if (boomErr?.message === "QR refs attempts ended") {
             console.log(`[WhatsApp] QR refs attempts ended for ${userId}. Clearing session directory.`);
@@ -246,6 +273,16 @@ class WhatsAppManager {
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
           
           console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}. Reason: ${reason}. Should reconnect: ${shouldReconnect}`);
+
+          // Auto-clear session on 401 or 515 to force a fresh start
+          if (statusCode === 401 || statusCode === 515) {
+            console.log(`[WhatsApp] Critical error ${statusCode} for ${userId}. Clearing session directory.`);
+            const sessionDir = path.join(process.cwd(), "sessions", userId);
+            if (fs.existsSync(sessionDir)) {
+              fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+          }
+
           session.status = "disconnected";
           onUpdate?.("disconnected");
 
@@ -365,6 +402,15 @@ class WhatsAppManager {
 
                   this.activeTasks++;
                   try {
+                    // Check Group Rules if it's a group message
+                    if (isGroup) {
+                      const shouldDelete = await this.checkGroupRules(userId, socket, remoteJid, msg, text);
+                      if (shouldDelete) {
+                        console.log(`[WhatsApp] Message deleted by group rules for user ${userId}`);
+                        return;
+                      }
+                    }
+
                     console.log(`[WhatsApp] Processing message for user ${userId}: "${text}" (isButton: ${isButton}) (Active Tasks: ${this.activeTasks})`);
                     const triggered = await handleIncomingMessage(this, userId, remoteJid, text, isButton);
                     if (!triggered) {
@@ -721,6 +767,113 @@ class WhatsAppManager {
     const session = this.sessions.get(userId);
     if (!session || session.status !== "connected") return;
     return await session.socket.sendPresenceUpdate(presence, jid);
+  }
+
+  async getGroups(userId: string) {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    
+    try {
+      const groups = await session.socket.groupFetchAllParticipating();
+      return Object.values(groups);
+    } catch (err) {
+      console.error("Error fetching groups:", err);
+      throw err;
+    }
+  }
+
+  async getGroupMetadata(userId: string, jid: string) {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    
+    try {
+      return await session.socket.groupMetadata(jid);
+    } catch (err) {
+      console.error("Error fetching group metadata:", err);
+      throw err;
+    }
+  }
+
+  async updateGroupParticipants(userId: string, jid: string, participants: string[], action: "add" | "remove" | "promote" | "demote") {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    
+    try {
+      return await session.socket.groupParticipantsUpdate(jid, participants, action);
+    } catch (err) {
+      console.error(`Error updating group participants (${action}):`, err);
+      throw err;
+    }
+  }
+
+  async updateGroupSubject(userId: string, jid: string, subject: string) {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    
+    try {
+      return await session.socket.groupUpdateSubject(jid, subject);
+    } catch (err) {
+      console.error("Error updating group subject:", err);
+      throw err;
+    }
+  }
+
+  async leaveGroup(userId: string, jid: string) {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    
+    try {
+      return await session.socket.groupLeave(jid);
+    } catch (err) {
+      console.error("Error leaving group:", err);
+      throw err;
+    }
+  }
+
+  private async checkGroupRules(userId: string, socket: WASocket, jid: string, msg: any, text: string): Promise<boolean> {
+    try {
+      const { data: rule } = await supabaseAdmin
+        .from("group_rules")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("group_jid", jid)
+        .eq("active", true)
+        .maybeSingle();
+
+      if (!rule) return false;
+
+      // Check if sender is admin (admins are immune to rules)
+      const metadata = await socket.groupMetadata(jid);
+      const sender = msg.key.participant || msg.key.remoteJid;
+      const isAdmin = metadata.participants.find(p => p.id === sender)?.admin;
+      
+      if (isAdmin) return false;
+
+      let shouldDelete = false;
+
+      // 1. Anti-Link
+      if (rule.anti_link) {
+        const linkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)/gi;
+        if (linkRegex.test(text)) {
+          shouldDelete = true;
+          await this.log(userId, "warn", `Anti-Link: Mensagem deletada de ${sender} no grupo ${jid}`);
+        }
+      }
+
+      // 2. Anti-Spam (Simple check: same message as last one)
+      // This would require a cache of last messages per group/sender.
+      // For now, let's just implement the logic structure.
+
+      if (shouldDelete) {
+        await socket.sendMessage(jid, { delete: msg.key });
+        return true;
+      }
+
+      return false;
+    } catch (err) {
+      console.error("[WhatsApp] Error checking group rules:", err);
+      return false;
+    }
   }
 
   async deleteSession(userId: string) {

@@ -20,6 +20,21 @@ router.get("/list", async (req: AuthRequest, res) => {
   }
 });
 
+// Debug route to list tables
+router.get("/debug/tables", async (req: AuthRequest, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("information_schema.tables")
+      .select("table_name")
+      .eq("table_schema", "public");
+    
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Import pack into user's quick_replies
 router.post("/import/:packId", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
@@ -49,7 +64,7 @@ router.post("/import/:packId", async (req: AuthRequest, res) => {
     }));
 
     const { error: insertError } = await supabaseAdmin
-      .from("quick_replies")
+      .from("quick_reply")
       .insert(repliesToInsert);
 
     if (insertError) throw insertError;
@@ -68,7 +83,7 @@ router.get("/my", async (req: AuthRequest, res) => {
     if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
     const { data, error } = await supabaseAdmin
-      .from("quick_replies")
+      .from("quick_reply")
       .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
@@ -88,7 +103,7 @@ router.delete("/:id", async (req: AuthRequest, res) => {
     if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
     const { error } = await supabaseAdmin
-      .from("quick_replies")
+      .from("quick_reply")
       .delete()
       .eq("id", id)
       .eq("user_id", userId);

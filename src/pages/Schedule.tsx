@@ -453,7 +453,14 @@ export default function Schedule() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900">Agendamentos</h2>
-          <p className="text-slate-500">Programe mensagens para serem enviadas no futuro.</p>
+          <div className="flex items-center gap-2 text-slate-500">
+            <p>Programe mensagens para serem enviadas no futuro.</p>
+            <span className="h-1 w-1 rounded-full bg-slate-300" />
+            <div className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+              <Clock size={12} />
+              GMT+2 África/Harare
+            </div>
+          </div>
         </div>
         <div className="flex w-full sm:w-auto gap-2">
           <input 

@@ -108,6 +108,24 @@ export default function AdminPacks() {
       <h1 className="text-2xl font-bold">Gerenciar Model Packs</h1>
       
       <Card className="p-6 space-y-4">
+        <h2 className="text-lg font-semibold">Modelo JSON</h2>
+        <p className="text-sm text-slate-500">Copie este modelo para criar ou importar packs:</p>
+        <pre className="bg-slate-100 p-4 rounded text-xs font-mono overflow-x-auto">
+{`{
+  "name": "Nome do Pack",
+  "description": "Descrição do Pack",
+  "items": [
+    {
+      "trigger": "gatilho",
+      "response": "resposta",
+      "match_type": "exact"
+    }
+  ]
+}`}
+        </pre>
+      </Card>
+
+      <Card className="p-6 space-y-4">
         <h2 className="text-lg font-semibold">Novo Pack</h2>
         <Input placeholder="Nome do Pack" value={name} onChange={(e) => setName(e.target.value)} />
         <Input placeholder="Descrição" value={description} onChange={(e) => setDescription(e.target.value)} />

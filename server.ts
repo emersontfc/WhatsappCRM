@@ -15,8 +15,48 @@ import { authenticate } from "./backend/middleware/auth";
 import fs from "fs";
 
 import { whatsappManager } from "./backend/whatsappManager";
+import { supabaseAdmin } from "./backend/supabaseAdmin";
+
+async function initDatabase() {
+  try {
+    console.log("[Database] Initializing tables...");
+    // Create group_rules table if it doesn't exist
+    const { error } = await supabaseAdmin.rpc('exec_sql', {
+      sql_query: `
+        CREATE TABLE IF NOT EXISTS group_rules (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+          group_jid TEXT NOT NULL,
+          anti_link BOOLEAN DEFAULT FALSE,
+          anti_spam BOOLEAN DEFAULT FALSE,
+          anti_flood BOOLEAN DEFAULT FALSE,
+          welcome_msg TEXT,
+          active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(user_id, group_jid)
+        );
+      `
+    });
+    
+    if (error) {
+      // Fallback if RPC is not available: try a simple query to check if table exists
+      const { error: checkError } = await supabaseAdmin.from('group_rules').select('id').limit(1);
+      if (checkError && checkError.code === 'PGRST116') {
+        console.warn("[Database] group_rules table might be missing. Please run the migration manually.");
+      } else {
+        console.log("[Database] group_rules table verified.");
+      }
+    } else {
+      console.log("[Database] group_rules table initialized.");
+    }
+  } catch (err) {
+    console.error("[Database] Initialization error:", err);
+  }
+}
 
 async function startServer() {
+  await initDatabase();
   const app = express();
   const PORT = process.env.PORT || 3000;
 
@@ -150,7 +190,11 @@ async function startServer() {
     console.error("CRITICAL: Unhandled Rejection at:", promise, "reason:", reason);
   });
 
-  process.on("uncaughtException", (err) => {
+  process.on("uncaughtException", (err: any) => {
+    if (err.code === 'EPIPE') {
+      console.warn("Caught EPIPE error, ignoring to prevent crash.");
+      return;
+    }
     console.error("CRITICAL: Uncaught Exception:", err);
   });
 
@@ -161,6 +205,20 @@ async function startServer() {
     console.log(`[Startup] SUPABASE_SERVICE_ROLE_KEY present: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY}`);
     console.log(`[Startup] SUPABASE_SERVICE_KEY present: ${!!process.env.SUPABASE_SERVICE_KEY}`);
     
+    // Debug: List tables
+    supabaseAdmin
+      .from("information_schema.tables")
+      .select("table_name")
+      .eq("table_schema", "public")
+      .then(({ data, error }) => {
+        if (error) console.error("Error listing tables:", error);
+        else {
+          const tableNames = data?.map(t => t.table_name);
+          console.log("Tables in public schema:", tableNames);
+          fs.writeFileSync('tables.txt', JSON.stringify(tableNames));
+        }
+      });
+
     // Reconnect existing WhatsApp sessions in background
     whatsappManager.reconnectAllSessions().catch(err => {
       console.error("Failed to start session reconnection process:", err);

@@ -18,7 +18,9 @@ import {
   Activity,
   Copy,
   ExternalLink,
-  Pause
+  Pause,
+  Moon,
+  Sun
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId, getUser } from "../supabase";
@@ -28,31 +30,32 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { apiFetch } from "../lib/api";
+import { Badge } from "../components/ui/Badge";
 import { TemplateModal } from "../components/TemplateModal";
+import { QRCodeSVG } from "qrcode.react";
 
 const ConnectionStatusBadge = ({ status }: { status: string | null }) => {
   let label = "Desconectado";
-  let bgColor = "bg-red-100";
-  let textColor = "text-red-700";
-  let dotColor = "bg-red-500";
+  let variant: "success" | "warning" | "error" | "info" = "error";
+  let pulse = false;
 
   if (status === "connected") {
     label = "Conectado";
-    bgColor = "bg-green-100";
-    textColor = "text-green-700";
-    dotColor = "bg-green-500";
-  } else if (status === "connecting" || status === "qr") {
+    variant = "success";
+  } else if (status === "connecting" || status === "qr" || status === "pairing") {
     label = "Conectando";
-    bgColor = "bg-yellow-100";
-    textColor = "text-yellow-700";
-    dotColor = "bg-yellow-500";
+    variant = "warning";
+    pulse = true;
   }
 
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${bgColor} ${textColor}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+    <Badge variant={variant} pulse={pulse} className="px-3 py-1 text-[10px] uppercase tracking-widest font-black">
+      <span className={cn("w-1.5 h-1.5 rounded-full mr-2", 
+        variant === "success" ? "bg-emerald-500" : 
+        variant === "warning" ? "bg-amber-500" : "bg-red-500"
+      )} />
       {label}
-    </span>
+    </Badge>
   );
 };
 
@@ -75,17 +78,21 @@ export default function Dashboard() {
   });
   const [recentMessages, setRecentMessages] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
+  const [userName, setUserName] = useState("Usuário");
   const [showTemplateModal, setShowTemplateModal] = useState(false);
 
   useEffect(() => {
-    const checkUserTemplate = async () => {
+    const fetchUserData = async () => {
       const user = await getUser();
-      // Only show modal if user exists and template hasn't been applied
-      if (user && user.template_applied === false) {
-        setShowTemplateModal(true);
+      if (user) {
+        setUserId(user.id);
+        setUserName(user.user_metadata?.full_name || user.email?.split("@")[0] || "Usuário");
+        if (user.template_applied === false) {
+          setShowTemplateModal(true);
+        }
       }
     };
-    checkUserTemplate();
+    fetchUserData();
   }, []);
 
   const debugAuth = async () => {
@@ -434,10 +441,10 @@ export default function Dashboard() {
   }, [activationLoading, isActivated]);
 
   const statsConfig = [
-    { name: "Total Contatos", value: stats.contacts.toString(), icon: Users, color: "text-blue-600", bg: "bg-blue-50" },
-    { name: "Mensagens Enviadas", value: stats.messages.toString(), icon: MessageSquare, color: "text-emerald-600", bg: "bg-emerald-50" },
-    { name: "Agendamentos", value: stats.scheduled.toString(), icon: Clock, color: "text-amber-600", bg: "bg-amber-50" },
-    { name: "Automações Ativas", value: stats.automations.toString(), icon: Zap, color: "text-purple-600", bg: "bg-purple-50" },
+    { name: "Total Contatos", value: stats.contacts.toString(), icon: Users, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { name: "Mensagens Enviadas", value: stats.messages.toString(), icon: MessageSquare, color: "text-emerald-500", bg: "bg-emerald-500/10" },
+    { name: "Agendamentos", value: stats.scheduled.toString(), icon: Clock, color: "text-amber-500", bg: "bg-amber-500/10" },
+    { name: "Automações Ativas", value: stats.automations.toString(), icon: Zap, color: "text-purple-500", bg: "bg-purple-500/10" },
   ];
 
   if (activationLoading) {
@@ -451,391 +458,482 @@ export default function Dashboard() {
   const isFree = plan === "Free";
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      {/* Welcome Section */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white/60 dark:bg-slate-900/60 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-200/50 dark:border-slate-800/50 shadow-sm relative overflow-hidden group">
+        <div className="absolute -right-20 -top-20 w-64 h-64 bg-emerald-500/5 blur-3xl rounded-full group-hover:scale-125 transition-transform duration-700" />
+        <div className="relative z-10">
+          <h2 className="text-3xl font-black text-slate-900 dark:text-white tracking-tighter">Olá, {userName}! 👋</h2>
+          <p className="text-slate-500 dark:text-slate-400 font-medium">Bem-vindo de volta ao seu centro de automação inteligente.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 relative z-10">
+          <Button 
+            variant="outline" 
+            className="rounded-2xl h-12 px-6 font-bold"
+            onClick={() => checkStatus(userId || "", true)}
+          >
+            <RefreshCw size={18} className={cn("mr-2", isCheckingStatus.current && "animate-spin")} />
+            Atualizar Status
+          </Button>
+          <Button 
+            variant="glow"
+            className="rounded-2xl h-12 px-6 font-bold"
+            onClick={() => navigate("/automations")}
+          >
+            <Zap size={18} className="mr-2" />
+            Nova Automação
+          </Button>
+        </div>
+      </div>
+
       {/* Plan Info Banner */}
       <div className={cn(
-        "p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between border gap-4",
-        isFree ? "bg-slate-50 border-slate-200" : (plan === "Premium" || plan === "Admin" ? "bg-amber-50 border-amber-100" : "bg-emerald-50 border-emerald-100")
+        "p-8 rounded-[2.5rem] flex flex-col sm:flex-row items-start sm:items-center justify-between border relative overflow-hidden group transition-all duration-700 backdrop-blur-md",
+        isFree 
+          ? "bg-white/60 dark:bg-slate-900/60 border-slate-200/50 dark:border-slate-800/50 shadow-sm" 
+          : (plan === "Premium" || plan === "Admin" 
+            ? "bg-amber-500/10 dark:bg-amber-500/5 border-amber-500/20 shadow-xl shadow-amber-500/5" 
+            : "bg-emerald-500/10 dark:bg-emerald-500/5 border-emerald-500/20 shadow-xl shadow-emerald-500/5")
       )}>
-        <div className="flex items-center gap-3">
+        <div className="absolute -right-20 -top-20 w-64 h-64 bg-emerald-500/5 blur-3xl rounded-full group-hover:scale-125 transition-transform duration-700" />
+        
+        <div className="flex items-center gap-6 relative z-10">
           <div className={cn(
-            "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
-            isFree ? "bg-slate-200 text-slate-600" : (plan === "Premium" || plan === "Admin" ? "bg-amber-100 text-amber-600" : "bg-emerald-100 text-emerald-600")
+            "h-16 w-16 rounded-2xl flex items-center justify-center shrink-0 shadow-2xl transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3",
+            isFree 
+              ? "bg-slate-100 dark:bg-slate-800 text-slate-400" 
+              : (plan === "Premium" || plan === "Admin" 
+                ? "bg-gradient-to-br from-amber-400 to-amber-600 text-white" 
+                : "bg-gradient-to-br from-emerald-400 to-emerald-600 text-white")
           )}>
-            <Zap size={20} />
+            <Zap size={32} className={cn(!isFree && "animate-glow-pulse")} />
           </div>
           <div>
-            <p className="text-sm font-bold text-slate-900">
-              {isFree ? "Plano Free Ativo" : `Plano Atual: ${plan}`}
-            </p>
-            <p className="text-xs text-slate-500">
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="text-2xl font-black text-slate-900 dark:text-white tracking-tighter">
+                {isFree ? "Plano Gratuito" : `Plano ${plan}`}
+              </h3>
+              {!isFree && (
+                <Badge variant="success" pulse className="text-[10px] font-black uppercase tracking-widest px-3 py-0.5">Ativo</Badge>
+              )}
+            </div>
+            <p className="text-sm text-slate-500 dark:text-slate-400 font-medium max-w-lg leading-relaxed">
               {isFree ? (
-                "Faça upgrade para desbloquear mais conexões, contatos e recursos de IA."
+                "Você está usando a versão limitada. Faça upgrade para escalar seu negócio."
               ) : planDetails ? (
                 <>
-                  Limites: {planDetails.max_messages_per_day} msgs/dia • {planDetails.max_contacts} contatos • {planDetails.max_connections} conexão(ões)
+                  <span className="text-emerald-500 dark:text-emerald-400 font-black">{planDetails.max_messages_per_day}</span> mensagens/dia • 
+                  <span className="text-emerald-600 dark:text-emerald-400 font-black ml-1">{planDetails.max_contacts}</span> contatos • 
+                  <span className="text-emerald-600 dark:text-emerald-400 font-black ml-1">{planDetails.max_connections}</span> conexão(ões)
                 </>
               ) : (
-                "Sua conta está ativa e pronta para uso."
+                "Sua conta premium está configurada e pronta para automação em massa."
               )}
             </p>
           </div>
         </div>
         {(isFree || (plan !== "Premium" && plan !== "Admin")) && (
           <Button 
-            size="sm" 
-            variant={isFree ? "primary" : "outline"}
-            className={isFree ? "bg-emerald-600 hover:bg-emerald-700" : "border-amber-200 text-amber-700 hover:bg-amber-100 shrink-0"}
+            variant="glow"
+            className="mt-6 sm:mt-0 rounded-2xl h-14 px-8 font-black text-sm uppercase tracking-widest relative z-10"
             onClick={() => navigate("/activate")}
           >
-            Fazer Upgrade
+            Fazer Upgrade Agora
           </Button>
         )}
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
-        {statsConfig.map((stat) => (
-          <Card key={stat.name} className="overflow-hidden">
-            <CardContent className="p-3 sm:p-6 flex flex-col sm:flex-row items-center sm:items-start gap-2 sm:gap-4 text-center sm:text-left">
-              <div className={cn("p-2 sm:p-3 rounded-lg sm:rounded-xl shrink-0", stat.bg, stat.color)}>
-                <stat.icon size={20} className="sm:w-6 sm:h-6" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] sm:text-sm font-medium text-slate-500 truncate">{stat.name}</p>
-                <p className="text-base sm:text-2xl font-bold text-slate-900 truncate">{stat.value}</p>
-              </div>
-            </CardContent>
+      {/* Bento Grid Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {statsConfig.map((stat, index) => (
+          <Card 
+            key={stat.name} 
+            className="group p-8 rounded-[2.5rem] border-slate-200/50 dark:border-slate-800/50 hover:border-emerald-500/30 transition-all duration-500 relative overflow-hidden shimmer"
+            style={{ animationDelay: `${index * 100}ms` }}
+          >
+            <div className="absolute -right-4 -bottom-4 opacity-[0.03] group-hover:opacity-[0.07] transition-opacity dark:text-white">
+              <stat.icon size={100} />
+            </div>
+            <div className={cn("h-14 w-14 rounded-2xl flex items-center justify-center mb-6 transition-all duration-300 group-hover:scale-110 group-hover:rotate-6 shadow-lg shadow-black/5", stat.bg, stat.color)}>
+              <stat.icon size={28} />
+            </div>
+            <p className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-[0.2em] mb-1">{stat.name}</p>
+            <div className="flex items-baseline gap-2">
+              <p className="text-4xl font-black text-slate-900 dark:text-white tracking-tighter">{stat.value}</p>
+              <Badge variant="success" className="text-[10px] px-2 py-0 h-5">+12%</Badge>
+            </div>
           </Card>
         ))}
       </div>
 
-      {/* WhatsApp Connection Card */}
-      <TemplateModal isOpen={showTemplateModal} onClose={() => setShowTemplateModal(false)} />
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {/* WhatsApp Connection Card */}
-        <Card className="lg:col-span-1">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <QrCode size={20} className="text-emerald-600" />
-                Conexão WhatsApp
-                <button 
-                  onClick={debugAuth}
-                  className="p-1 hover:bg-slate-100 rounded text-slate-400"
-                  title="Debug Auth Configuration"
-                >
-                  <ShieldAlert size={14} />
-                </button>
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+        {/* Connection Card */}
+        <div className="xl:col-span-4 space-y-8">
+          <Card glow className="p-8 rounded-[2.5rem] border-slate-200/50 dark:border-slate-800/50 relative overflow-hidden group h-full flex flex-col">
+            <div className="flex items-center justify-between mb-10">
+              <div className="flex items-center gap-4">
+                <div className="h-12 w-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-500 shadow-inner">
+                  <QrCode size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tighter">WhatsApp</h3>
+                  <p className="text-[9px] text-slate-400 uppercase tracking-[0.2em] font-black">Instância Ativa</p>
+                </div>
               </div>
               <ConnectionStatusBadge status={status} />
-            </CardTitle>
-            <CardDescription>
-              Conecte seu celular para começar a enviar mensagens.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col items-center justify-center py-6 space-y-6">
-            {error && (
-              <div className="w-full p-3 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3 text-red-600">
-                <AlertCircle size={18} className="shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-xs font-bold uppercase">Erro de Conexão</p>
-                  <p className="text-[10px] opacity-80">{error}</p>
-                </div>
-                <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            )}
-
-            {status === "connected" ? (
-              <div className="text-center space-y-4 w-full">
-                <div className="mx-auto h-20 w-20 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600">
-                  <CheckCircle2 size={48} />
-                </div>
-                <div className="space-y-1">
-                  <p className="font-semibold text-emerald-700">Conectado</p>
-                  <p className="text-sm text-slate-500 flex items-center justify-center gap-2">
-                    {me?.id ? `Número: ${me.id.split(':')[0]}` : "Seu WhatsApp está pronto para uso."}
-                    {me?.id && (
-                      <button 
-                        onClick={() => {
-                          navigator.clipboard.writeText(me.id.split(':')[0]);
-                          toast.success("Número copiado!");
-                        }}
-                        className="p-1 hover:bg-slate-100 rounded text-slate-400"
-                      >
-                        <Copy size={12} />
-                      </button>
-                    )}
-                  </p>
-                </div>
-                <div className="flex flex-col gap-2 w-full">
-                  <div className="flex gap-2">
-                    <Button variant="outline" className="flex-1 gap-2" onClick={pauseSession} disabled={loading}>
-                      <Pause size={18} />
-                      Pausar Conexão
-                    </Button>
-                    <Button variant="ghost" className="text-red-500 hover:bg-red-50" size="icon" onClick={resetSession} disabled={loading}>
-                      <Trash2 size={18} />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : status === "qr" && qr ? (
-              <div className="text-center space-y-4 w-full">
-                <div className="p-4 bg-white border-2 border-slate-100 rounded-2xl shadow-inner mx-auto w-fit">
-                  <img src={qr} alt="QR Code" className="h-48 w-48" />
-                </div>
-                <div className="space-y-1">
-                  <p className="font-semibold text-slate-900">Escaneie o QR Code</p>
-                  <p className="text-sm text-slate-500">Abra o WhatsApp {">"} Aparelhos Conectados.</p>
-                </div>
-                <Button variant="ghost" size="sm" className="gap-2" onClick={() => userId && checkStatus(userId, true)}>
-                  <RefreshCw size={14} />
-                  Atualizar
-                </Button>
-                <div className="flex flex-col gap-2 w-full">
-                  <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
-                    Cancelar e tentar novamente
-                  </Button>
-                  <Button variant="outline" size="sm" className="text-slate-600 text-[10px]" onClick={() => {
-                    setStatus("disconnected");
-                    setQr(null);
-                    setPairingCode(null);
-                    resetSession();
-                  }}>
-                    Voltar para o menu inicial
-                  </Button>
-                </div>
-              </div>
-            ) : status === "pairing" && pairingCode ? (
-              <div className="text-center space-y-6 w-full">
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-slate-500">Seu código de pareamento:</p>
-                  <div className="flex justify-center gap-2">
-                    {pairingCode.split('').map((char, i) => (
-                      <div key={i} className="w-8 h-10 bg-slate-100 border border-slate-200 rounded-lg flex items-center justify-center text-xl font-bold text-emerald-600">
-                        {char}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 text-left">
-                  <p className="text-xs font-bold text-emerald-800 uppercase mb-2">Como usar:</p>
-                  <ol className="text-xs text-emerald-700 space-y-1 list-decimal list-inside">
-                    <li>Abra o WhatsApp no seu celular</li>
-                    <li>Vá em Configurações {">"} Aparelhos Conectados</li>
-                    <li>Toque em "Conectar um aparelho"</li>
-                    <li>Toque em "Conectar com número de telefone"</li>
-                    <li>Digite o código acima no seu celular</li>
-                  </ol>
-                </div>
-                <Button variant="ghost" size="sm" className="gap-2" onClick={() => userId && checkStatus(userId)}>
-                  <RefreshCw size={14} />
-                  Verificar Conexão
-                </Button>
-                <div className="flex flex-col gap-2 w-full">
-                  <Button variant="ghost" size="sm" className="text-slate-400 text-[10px]" onClick={resetSession}>
-                    Cancelar e tentar novamente
-                  </Button>
-                  <Button variant="outline" size="sm" className="text-slate-600 text-[10px]" onClick={() => {
-                    setStatus("disconnected");
-                    setQr(null);
-                    setPairingCode(null);
-                    resetSession();
-                  }}>
-                    Voltar para o menu inicial
-                  </Button>
-                </div>
-              </div>
-            ) : status === "paused" ? (
-              <div className="text-center space-y-4 w-full">
-                <div className="mx-auto h-20 w-20 bg-amber-100 rounded-full flex items-center justify-center text-amber-600">
-                  <Pause size={48} />
-                </div>
-                <div className="space-y-1">
-                  <p className="font-semibold text-amber-700">Conexão Pausada</p>
-                  <p className="text-sm text-slate-500">Seu bot está offline. Retome a conexão para voltar a enviar e receber mensagens.</p>
-                </div>
-                <div className="flex flex-col gap-2 w-full">
-                  <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700" onClick={connect} disabled={loading}>
-                    <Zap size={18} />
-                    Retomar Conexão
-                  </Button>
-                  <Button variant="ghost" className="text-red-500 hover:bg-red-50" onClick={resetSession} disabled={loading}>
-                    <Trash2 size={16} className="mr-2" />
-                    Desconectar Completamente
-                  </Button>
-                </div>
-              </div>
-            ) : (status === "connecting" || loading || status === null) ? (
-              <div className="text-center space-y-4 py-8 w-full">
-                <div className="mx-auto h-20 w-20 bg-slate-100 rounded-full flex items-center justify-center text-emerald-500">
-                  <RefreshCw size={48} className="animate-spin" />
-                </div>
-                <div className="space-y-1">
-                  <p className="font-semibold text-slate-900">
-                    {connectMethod === "qr" ? "Gerando QR Code..." : "Gerando Código..."}
-                  </p>
-                  <p className="text-sm text-slate-500">Isso pode levar alguns segundos.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center space-y-6 py-4 w-full">
-                <div className="flex p-1 bg-slate-100 rounded-xl">
-                  <button 
-                    className={cn(
-                      "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
-                      connectMethod === "number" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                    )}
-                    onClick={() => setConnectMethod("number")}
-                  >
-                    Por Número
-                  </button>
-                  <button 
-                    className={cn(
-                      "flex-1 py-2 text-xs font-bold rounded-lg transition-all",
-                      connectMethod === "qr" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                    )}
-                    onClick={() => setConnectMethod("qr")}
-                  >
-                    Por QR Code
-                  </button>
-                </div>
-
-                {connectMethod === "number" ? (
-                  <div className="space-y-4">
-                    <div className="space-y-2 text-left">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Número do WhatsApp</label>
-                      <div className="relative">
-                        <Phone size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <Input 
-                          placeholder="Ex: 5511999999999" 
-                          className="pl-10"
-                          value={phoneNumber}
-                          onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-400 italic">Inclua o código do país e DDD (apenas números).</p>
-                    </div>
-                    <Button className="w-full gap-2" onClick={connect} disabled={loading || !phoneNumber}>
-                      <Key size={18} />
-                      Gerar Código de Pareamento
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="mx-auto h-20 w-20 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
-                      <QrCode size={48} />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-semibold text-slate-900">Conexão por QR Code</p>
-                      <p className="text-sm text-slate-500">Gere um código para escanear com a câmera.</p>
-                    </div>
-                    <Button className="w-full gap-2" onClick={connect} disabled={loading}>
-                      <Zap size={18} />
-                      Gerar QR Code
-                    </Button>
-                  </div>
-                )}
-
-                <div className="pt-4 border-t border-slate-100 flex flex-col gap-2 w-full">
-                  <p className="text-[10px] text-slate-400">Já escaneou no seu celular?</p>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 text-xs gap-2"
-                    onClick={() => userId && checkStatus(userId, true)}
-                  >
-                    <RefreshCw size={14} />
-                    Verificar Conexão Manualmente
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Live Logs Section */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Terminal size={20} className="text-slate-600" />
-                Mensagens Recentes
-              </CardTitle>
-              <CardDescription>Acompanhe as últimas mensagens.</CardDescription>
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="bg-slate-950 rounded-xl p-4 font-mono text-[10px] sm:text-xs h-[300px] overflow-y-auto space-y-2 border border-slate-800 shadow-2xl custom-scrollbar">
-              {recentMessages.length === 0 ? (
-                <p className="text-slate-500 italic">Nenhuma mensagem recente.</p>
+
+            <div className="flex-1 flex flex-col items-center justify-center min-h-[350px]">
+              {error && (
+                <div className="w-full mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 rounded-2xl flex items-start gap-3 text-red-600 dark:text-red-400 animate-in fade-in zoom-in duration-300">
+                  <AlertCircle size={20} className="shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-xs font-bold uppercase tracking-wider">Erro de Conexão</p>
+                    <p className="text-[11px] opacity-80 leading-relaxed mt-1">{error}</p>
+                  </div>
+                  <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600 transition-colors">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              )}
+
+              {status === "connected" ? (
+                <div className="text-center space-y-6 w-full animate-in fade-in zoom-in duration-500">
+                  <div className="relative mx-auto w-24 h-24">
+                    <div className="absolute inset-0 bg-emerald-500/20 blur-3xl rounded-full animate-glow-pulse" />
+                    <div className="relative h-24 w-24 bg-emerald-500/10 rounded-3xl flex items-center justify-center text-emerald-500 border border-emerald-500/20 mx-auto shadow-xl">
+                      <CheckCircle2 size={56} />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xl font-black text-slate-900 dark:text-white tracking-tighter">Conectado e Ativo</p>
+                    <div className="flex items-center justify-center gap-2 bg-slate-100/50 dark:bg-slate-800/50 py-2 px-4 rounded-xl border border-slate-200/50 dark:border-slate-700/50 w-fit mx-auto">
+                      <Phone size={14} className="text-emerald-500" />
+                      <span className="text-sm font-mono font-bold text-slate-600 dark:text-slate-300">
+                        {me?.id ? me.id.split(':')[0] : "Número Ativo"}
+                      </span>
+                      {me?.id && (
+                        <button 
+                          onClick={() => {
+                            navigator.clipboard.writeText(me.id.split(':')[0]);
+                            toast.success("Número copiado!");
+                          }}
+                          className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-md text-slate-400 transition-colors"
+                        >
+                          <Copy size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-3 pt-4">
+                    <Button 
+                      variant="outline" 
+                      className="w-full py-6 rounded-2xl font-bold" 
+                      onClick={pauseSession} 
+                      disabled={loading}
+                    >
+                      <Pause size={20} className="mr-2" />
+                      Pausar Automação
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      className="w-full text-red-500 hover:text-red-600 hover:bg-red-500/10 rounded-2xl font-bold" 
+                      onClick={resetSession} 
+                      disabled={loading}
+                    >
+                      <Trash2 size={18} className="mr-2" />
+                      Desconectar Conta
+                    </Button>
+                  </div>
+                </div>
+              ) : status === "qr" && qr ? (
+                <div className="text-center space-y-8 w-full animate-in fade-in zoom-in duration-500">
+                  <div className="p-6 bg-white dark:bg-white rounded-[2.5rem] shadow-2xl shadow-emerald-500/10 mx-auto w-fit relative group border border-slate-100 dark:border-slate-800">
+                    <div className="absolute inset-0 bg-emerald-500/5 blur-xl rounded-full group-hover:scale-110 transition-transform" />
+                    <div className="relative bg-white p-2 rounded-xl z-10">
+                      <QRCodeSVG value={qr} size={200} />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xl font-black text-slate-900 dark:text-white tracking-tighter">Escaneie o QR Code</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed max-w-[240px] mx-auto">
+                      Abra o WhatsApp {">"} Aparelhos Conectados<br />e aponte sua câmera para cá.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-3 pt-2">
+                    <Button 
+                      variant="outline" 
+                      className="w-full py-6 rounded-2xl font-bold" 
+                      onClick={() => userId && checkStatus(userId, true)}
+                    >
+                      <RefreshCw size={18} className="mr-2" />
+                      Atualizar QR Code
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 text-xs font-bold" 
+                      onClick={resetSession}
+                    >
+                      Cancelar e tentar novamente
+                    </Button>
+                  </div>
+                </div>
+              ) : status === "pairing" && pairingCode ? (
+                <div className="text-center space-y-8 w-full animate-in fade-in zoom-in duration-500">
+                  <div className="space-y-4">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Código de Pareamento</p>
+                    <div className="flex justify-center gap-2 sm:gap-3">
+                      {pairingCode.split('').map((char, i) => (
+                        <div key={i} className="w-10 h-14 sm:w-12 sm:h-16 bg-slate-100/50 dark:bg-slate-800/50 border-2 border-slate-200 dark:border-slate-700 rounded-2xl flex items-center justify-center text-xl sm:text-2xl font-black text-emerald-500 shadow-inner">
+                          {char}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="p-6 bg-emerald-500/5 dark:bg-emerald-500/10 rounded-3xl border border-emerald-500/20 text-left space-y-4">
+                    <div className="flex items-center gap-2 text-emerald-500">
+                      <Activity size={16} />
+                      <p className="text-[10px] font-black uppercase tracking-widest">Passo a Passo</p>
+                    </div>
+                    <ol className="text-xs text-slate-600 dark:text-slate-400 space-y-3 list-decimal list-inside leading-relaxed font-medium">
+                      <li>Abra o <span className="text-slate-900 dark:text-white font-black">WhatsApp</span> no seu celular</li>
+                      <li>Vá em <span className="text-slate-900 dark:text-white font-black">Aparelhos Conectados</span></li>
+                      <li>Toque em <span className="text-slate-900 dark:text-white font-black">Conectar um aparelho</span></li>
+                      <li>Escolha <span className="text-slate-900 dark:text-white font-black">Conectar com número</span></li>
+                      <li>Digite o código acima no seu celular</li>
+                    </ol>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <Button 
+                      variant="outline" 
+                      className="w-full py-6 rounded-2xl font-bold" 
+                      onClick={() => userId && checkStatus(userId)}
+                    >
+                      <RefreshCw size={18} className="mr-2" />
+                      Verificar Conexão
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 text-xs font-bold" 
+                      onClick={resetSession}
+                    >
+                      Voltar e tentar novamente
+                    </Button>
+                  </div>
+                </div>
+              ) : status === "paused" ? (
+                <div className="text-center space-y-6 w-full animate-in fade-in zoom-in duration-500">
+                  <div className="h-24 w-24 bg-amber-50 dark:bg-amber-900/20 rounded-3xl flex items-center justify-center text-amber-600 dark:text-amber-400 border border-amber-100 dark:border-amber-900/50 mx-auto">
+                    <Pause size={56} />
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xl font-bold text-slate-900 dark:text-white">Conexão Pausada</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Seu bot está temporariamente offline.</p>
+                  </div>
+                  <div className="flex flex-col gap-3 pt-4">
+                    <Button 
+                      className="w-full py-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20" 
+                      onClick={connect} 
+                      disabled={loading}
+                    >
+                      <Zap size={20} className="mr-2" />
+                      Retomar Automação
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-2xl" 
+                      onClick={resetSession} 
+                      disabled={loading}
+                    >
+                      <Trash2 size={18} className="mr-2" />
+                      Desconectar Conta
+                    </Button>
+                  </div>
+                </div>
+              ) : (status === "connecting" || loading || status === null) ? (
+                <div className="text-center space-y-6 py-12 w-full">
+                  <div className="relative mx-auto w-24 h-24">
+                    <div className="absolute inset-0 bg-emerald-500/5 blur-3xl rounded-full animate-pulse" />
+                    <div className="relative h-24 w-24 bg-white dark:bg-slate-900 rounded-3xl flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-slate-100 dark:border-slate-800 shadow-sm">
+                      <RefreshCw size={48} className="animate-spin" />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xl font-bold text-slate-900 dark:text-white">
+                      {connectMethod === "qr" ? "Gerando QR Code..." : "Gerando Código..."}
+                    </p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Preparando ambiente seguro...</p>
+                  </div>
+                </div>
               ) : (
-                recentMessages.map((msg) => (
-                  <div key={msg.id} className="text-slate-300">
-                    <span className="text-slate-500">[{new Date(msg.timestamp).toLocaleTimeString()}]</span> {msg.text}
+                <div className="text-center space-y-8 py-4 w-full animate-in fade-in slide-in-from-top-4 duration-500">
+                  <div className="flex p-1.5 bg-slate-100 dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
+                    <button 
+                      className={cn(
+                        "flex-1 py-3 text-xs font-bold rounded-xl transition-all duration-300",
+                        connectMethod === "number" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      )}
+                      onClick={() => setConnectMethod("number")}
+                    >
+                      Parear por Número
+                    </button>
+                    <button 
+                      className={cn(
+                        "flex-1 py-3 text-xs font-bold rounded-xl transition-all duration-300",
+                        connectMethod === "qr" ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm" : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      )}
+                      onClick={() => setConnectMethod("qr")}
+                    >
+                      Parear por QR Code
+                    </button>
+                  </div>
+
+                  {connectMethod === "number" ? (
+                    <div className="space-y-6 text-left animate-in fade-in slide-in-from-left-4 duration-500">
+                      <div className="space-y-3">
+                        <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Seu Número WhatsApp</label>
+                        <div className="relative group">
+                          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Phone size={18} className="text-slate-400 group-focus-within:text-emerald-600 transition-colors" />
+                          </div>
+                          <Input 
+                            placeholder="Ex: 5511999999999" 
+                            className="pl-12 py-7 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-2xl focus:ring-emerald-500/20 focus:border-emerald-500 text-lg font-medium dark:text-white"
+                            value={phoneNumber}
+                            onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                          />
+                        </div>
+                        <p className="text-[11px] text-slate-400 italic ml-1 flex items-center gap-1.5">
+                          <AlertCircle size={12} />
+                          Inclua DDI + DDD (apenas números).
+                        </p>
+                      </div>
+                      <Button 
+                        className="w-full py-7 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-lg shadow-lg shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98]" 
+                        onClick={connect} 
+                        disabled={loading || !phoneNumber}
+                      >
+                        <Key size={20} className="mr-2" />
+                        Gerar Código Agora
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+                      <div className="h-24 w-24 bg-slate-100 dark:bg-slate-800 rounded-3xl flex items-center justify-center text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 mx-auto">
+                        <QrCode size={56} />
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">Conexão Instantânea</p>
+                        <p className="text-sm text-slate-500 dark:text-slate-400">Escaneie o código com seu celular para conectar em segundos.</p>
+                      </div>
+                      <Button 
+                        className="w-full py-7 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-lg shadow-lg shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98]" 
+                        onClick={connect} 
+                        disabled={loading}
+                      >
+                        <Zap size={20} className="mr-2" />
+                        Gerar QR Code
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
+                    <Button 
+                      variant="ghost" 
+                      className="w-full text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 rounded-xl text-xs py-4"
+                      onClick={() => userId && checkStatus(userId, true)}
+                    >
+                      <RefreshCw size={14} className="mr-2" />
+                      Já escaneou? Verificar conexão manual
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* Messages and Activity Bento Grid */}
+        <div className="xl:col-span-8 grid grid-cols-1 gap-8">
+          {/* Recent Messages / Monitor */}
+          <Card className="p-8 rounded-[2.5rem] border-slate-200/50 dark:border-slate-800/50 relative overflow-hidden group flex flex-col h-full">
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-4">
+                <div className="h-12 w-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500 shadow-inner">
+                  <Terminal size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tighter">Monitor em Tempo Real</h3>
+                  <p className="text-[9px] text-slate-400 uppercase tracking-[0.2em] font-black">Logs do Sistema</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 px-4 py-1.5 bg-emerald-500/10 rounded-full border border-emerald-500/20">
+                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse-soft" />
+                <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Live Feed</span>
+              </div>
+            </div>
+            
+            <div className="flex-1 bg-slate-950 rounded-3xl p-8 font-mono text-xs min-h-[350px] overflow-y-auto space-y-4 border border-slate-800 shadow-inner custom-scrollbar relative">
+              {recentMessages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-600 space-y-6">
+                  <div className="p-6 bg-slate-900 rounded-full border border-slate-800 shadow-sm">
+                    <MessageSquare size={48} className="opacity-20" />
+                  </div>
+                  <p className="italic font-medium">Aguardando novas mensagens...</p>
+                </div>
+              ) : (
+                recentMessages.map((msg, i) => (
+                  <div 
+                    key={msg.id} 
+                    className="text-slate-400 border-l-2 border-emerald-500/30 pl-6 py-2 hover:bg-white/5 rounded-r-xl transition-all animate-in fade-in slide-in-from-left-2 duration-300 group/msg"
+                    style={{ animationDelay: `${i * 50}ms` }}
+                  >
+                    <div className="flex items-center gap-3 mb-1">
+                      <span className="text-slate-500 font-black bg-slate-900 px-2 py-0.5 rounded text-[9px] border border-slate-800">
+                        {new Date(msg.timestamp).toLocaleTimeString()}
+                      </span> 
+                      <span className={cn(
+                        "text-[9px] font-black uppercase tracking-widest",
+                        msg.type === 'outbound' ? 'text-blue-500' : 'text-emerald-500'
+                      )}>
+                        {msg.type === 'outbound' ? 'Enviada' : 'Recebida'}
+                      </span>
+                    </div>
+                    <span className="text-sm leading-relaxed block group-hover/msg:translate-x-1 transition-transform text-slate-300">{msg.text}</span>
                   </div>
                 ))
               )}
             </div>
-          </CardContent>
-        </Card>
+          </Card>
 
-        {/* Recent Activity / Feed */}
-        <Card className="lg:col-span-3">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Activity size={20} className="text-blue-600" />
-                Atividade Recente
-              </CardTitle>
-              <CardDescription>Ultimas mensagens e eventos do sistema.</CardDescription>
+          {/* Quick Actions / Activity */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="p-10 rounded-[3rem] bg-gradient-to-br from-blue-600 to-indigo-700 text-white group hover:scale-[1.02] transition-all duration-500 cursor-pointer shadow-2xl shadow-blue-500/20 relative overflow-hidden" onClick={() => navigate("/automations")}>
+              <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-white/10 blur-3xl rounded-full group-hover:scale-150 transition-transform duration-700" />
+              <div className="h-14 w-14 rounded-2xl bg-white/20 backdrop-blur-md text-white flex items-center justify-center mb-8 shadow-lg group-hover:rotate-12 transition-transform">
+                <Zap size={28} />
+              </div>
+              <h4 className="text-2xl font-black mb-3 tracking-tighter">Automações Inteligentes</h4>
+              <p className="text-blue-50 text-sm leading-relaxed opacity-80 font-medium">Configure respostas automáticas baseadas em palavras-chave e IA de última geração.</p>
+              <div className="mt-8 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest bg-white/20 w-fit px-5 py-2.5 rounded-full backdrop-blur-md hover:bg-white/30 transition-colors">
+                Configurar Agora <ChevronRight size={16} />
+              </div>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => navigate("/automations")} className="text-emerald-600 gap-1">
-              Ver Automações
-              <ChevronRight size={14} />
-            </Button>
-          </CardHeader>
-          <CardContent>
-            {recentMessages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-4">
-                <MessageSquare size={48} strokeWidth={1.5} />
-                <p className="text-sm">Nenhuma atividade registrada ainda.</p>
+
+            <div className="p-10 rounded-[3rem] bg-gradient-to-br from-emerald-600 to-teal-700 text-white group hover:scale-[1.02] transition-all duration-500 cursor-pointer shadow-2xl shadow-emerald-500/20 relative overflow-hidden" onClick={() => navigate("/schedule")}>
+              <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-white/10 blur-3xl rounded-full group-hover:scale-150 transition-transform duration-700" />
+              <div className="h-14 w-14 rounded-2xl bg-white/20 backdrop-blur-md text-white flex items-center justify-center mb-8 shadow-lg group-hover:rotate-12 transition-transform">
+                <Clock size={28} />
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {recentMessages.map((msg) => (
-                  <div key={msg.id} className="flex items-start gap-4 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 transition-colors">
-                    <div className={cn(
-                      "h-10 w-10 rounded-full flex items-center justify-center shrink-0",
-                      msg.type === "inbound" ? "bg-blue-100 text-blue-600" : "bg-emerald-100 text-emerald-600"
-                    )}>
-                      <MessageSquare size={18} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-bold text-slate-900 truncate">
-                          {msg.type === "inbound" ? "Mensagem Recebida" : "Mensagem Enviada"}
-                        </p>
-                        <span className="text-[10px] text-slate-400 whitespace-nowrap">
-                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-500 line-clamp-1">{msg.text}</p>
-                      {msg.is_automated && (
-                        <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 bg-purple-50 text-purple-600 text-[8px] font-bold uppercase rounded">
-                          <Zap size={8} /> Automação
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+              <h4 className="text-2xl font-black mb-3 tracking-tighter">Agendamentos em Massa</h4>
+              <p className="text-emerald-50 text-sm leading-relaxed opacity-80 font-medium">Programe campanhas inteiras para serem enviadas no momento exato do seu público.</p>
+              <div className="mt-8 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest bg-white/20 w-fit px-5 py-2.5 rounded-full backdrop-blur-md hover:bg-white/30 transition-colors">
+                Agendar Mensagem <ChevronRight size={16} />
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

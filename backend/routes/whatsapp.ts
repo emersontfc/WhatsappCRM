@@ -179,6 +179,123 @@ router.post("/pause", async (req: AuthRequest, res) => {
   }
 });
 
+// Group Management
+router.get("/groups", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const groups = await whatsappManager.getGroups(userId);
+    res.json({ success: true, groups });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/groups/:jid", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const metadata = await whatsappManager.getGroupMetadata(userId, jid);
+    res.json({ success: true, metadata });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/groups/:jid/participants", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  const { participants, action } = req.body; // action: 'add', 'remove', 'promote', 'demote'
+  
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!participants || !action) return res.status(400).json({ error: "participants and action are required" });
+
+  try {
+    const result = await whatsappManager.updateGroupParticipants(userId, jid, participants, action);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/groups/:jid/subject", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  const { subject } = req.body;
+  
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!subject) return res.status(400).json({ error: "subject is required" });
+
+  try {
+    const result = await whatsappManager.updateGroupSubject(userId, jid, subject);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/groups/:jid/leave", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const result = await whatsappManager.leaveGroup(userId, jid);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/groups/:jid/rules", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("group_rules")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("group_jid", jid)
+      .maybeSingle();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/groups/:jid/rules", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  const rules = req.body;
+  
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("group_rules")
+      .upsert({
+        user_id: userId,
+        group_jid: jid,
+        ...rules,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id,group_jid' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Catch-all for unmatched WhatsApp routes to help debug 404s
 router.use((req, res) => {
   console.warn(`[WhatsApp Route Not Found] ${req.method} ${req.originalUrl}`);

@@ -6,14 +6,14 @@ import { Zap } from "lucide-react";
 export const UpgradePrompt = ({ title, description }: { title: string; description: string }) => {
   const navigate = useNavigate();
   return (
-    <Card className="bg-amber-50 border-amber-200">
+    <Card className="bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800">
       <CardContent className="py-6 text-center space-y-4">
-        <Zap size={32} className="mx-auto text-amber-400" />
-        <h3 className="text-lg font-bold text-amber-900">{title}</h3>
-        <p className="text-amber-700 max-w-md mx-auto">
+        <Zap size={32} className="mx-auto text-amber-400 dark:text-amber-500" />
+        <h3 className="text-lg font-bold text-amber-900 dark:text-amber-100">{title}</h3>
+        <p className="text-amber-700 dark:text-amber-400 max-w-md mx-auto">
           {description}
         </p>
-        <Button onClick={() => navigate("/upgrade")} className="bg-amber-600 hover:bg-amber-700">
+        <Button onClick={() => navigate("/upgrade")} className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600">
           Upgrade Agora
         </Button>
       </CardContent>
