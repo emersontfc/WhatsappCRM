@@ -63,7 +63,7 @@ export function TemplateModal({ isOpen, onClose }: { isOpen: boolean; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-lg border border-slate-200">
         <h2 className="text-lg font-bold mb-2">Qual é o seu tipo de negócio?</h2>
         <p className="text-sm text-slate-500 mb-4">Escolha um template para configurar automaticamente suas automações e IA.</p>
         <div className="grid gap-2">

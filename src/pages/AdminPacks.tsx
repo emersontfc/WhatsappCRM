@@ -105,12 +105,12 @@ export default function AdminPacks() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Gerenciar Model Packs</h1>
+      <h1 className="text-2xl font-bold text-slate-900">Gerenciar Model Packs</h1>
       
       <Card className="p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Modelo JSON</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Modelo JSON</h2>
         <p className="text-sm text-slate-500">Copie este modelo para criar ou importar packs:</p>
-        <pre className="bg-slate-100 p-4 rounded text-xs font-mono overflow-x-auto">
+        <pre className="bg-slate-100 p-4 rounded text-xs font-mono overflow-x-auto text-slate-800 border border-slate-200">
 {`{
   "name": "Nome do Pack",
   "description": "Descrição do Pack",
@@ -126,16 +126,16 @@ export default function AdminPacks() {
       </Card>
 
       <Card className="p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Novo Pack</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Novo Pack</h2>
         <Input placeholder="Nome do Pack" value={name} onChange={(e) => setName(e.target.value)} />
         <Input placeholder="Descrição" value={description} onChange={(e) => setDescription(e.target.value)} />
         <Button onClick={handleCreatePack}>Criar Pack</Button>
       </Card>
 
       <Card className="p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Importar Pack (JSON)</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Importar Pack (JSON)</h2>
         <textarea
-          className="w-full p-2 border rounded text-sm font-mono"
+          className="w-full p-2 border border-slate-200 rounded text-sm font-mono bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none"
           rows={5}
           placeholder='{"name": "...", "description": "...", "items": [{"trigger": "...", "response": "..."}]}'
           value={importJson}
@@ -151,7 +151,7 @@ export default function AdminPacks() {
           <Card key={pack.id} className="p-4 space-y-4">
             <div className="flex justify-between items-start">
               <div>
-                <h3 className="font-semibold">{pack.name}</h3>
+                <h3 className="font-semibold text-slate-900">{pack.name}</h3>
                 <p className="text-sm text-slate-500">{pack.description}</p>
               </div>
               <Button 
@@ -163,7 +163,7 @@ export default function AdminPacks() {
               </Button>
             </div>
             <textarea
-              className="w-full p-2 border rounded text-sm font-mono"
+              className="w-full p-2 border border-slate-200 rounded text-sm font-mono bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none"
               rows={5}
               placeholder='[{"trigger": "marcar", "response": "...", "match_type": "contains"}]'
               value={jsonInput[pack.id] || ""}

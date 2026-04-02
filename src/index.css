@@ -8,7 +8,7 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50 antialiased font-sans transition-colors duration-300;
+    @apply bg-slate-50 text-slate-900 antialiased font-sans transition-colors duration-300;
   }
 }
 
@@ -21,11 +21,11 @@
     background: transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    @apply bg-slate-200 dark:bg-slate-800 rounded-full hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors;
+    @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors;
   }
   
   .glass-card {
-    @apply bg-white/60 dark:bg-slate-900/60 backdrop-blur-md border border-slate-200/50 dark:border-slate-800/50 shadow-xl;
+    @apply bg-white/60 backdrop-blur-md border border-slate-200/50 shadow-xl;
   }
   
   .bento-grid {
@@ -102,14 +102,14 @@
 }
 
 .card-premium {
-  @apply bg-white dark:bg-slate-900/60 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 backdrop-blur-md transition-all duration-300 hover:shadow-xl hover:border-slate-300 dark:hover:border-slate-700 hover:-translate-y-1;
+  @apply bg-white rounded-3xl shadow-sm border border-slate-200 backdrop-blur-md transition-all duration-300 hover:shadow-xl hover:border-slate-300 hover:-translate-y-1;
 }
 
 .big-stat {
-  @apply text-4xl font-bold tracking-tight text-slate-900 dark:text-white;
+  @apply text-4xl font-bold tracking-tight text-slate-900;
 }
 
 .text-muted {
-  @apply text-slate-500 dark:text-slate-400 text-sm;
+  @apply text-slate-500 text-sm;
 }
 

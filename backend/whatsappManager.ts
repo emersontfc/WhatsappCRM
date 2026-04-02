@@ -5,13 +5,14 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   WASocket,
   Contact as BaileysContact,
-  Browsers
+  Browsers,
+  generateWAMessageFromContent,
+  prepareWAMessageMedia
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
 import path from "path";
 import fs from "fs";
-import QRCode from "qrcode";
 import { supabaseAdmin } from "./supabaseAdmin";
 import { handleIncomingMessage } from "./automationManager";
 import { handleAgentMessage } from "./agentManager";
@@ -162,37 +163,54 @@ class WhatsAppManager {
     const socket = makeWASocket({
       version,
       printQRInTerminal: false,
-      browser: ["Windows", "Chrome", "122.0.6261.112"],
+      browser: Browsers.ubuntu("Chrome"),
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
       logger,
-      // Add some performance and stability options
+      // Performance and stability options
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: true,
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 0,
+      keepAliveIntervalMs: 30000,
+      retryRequestDelayMs: 5000,
+      shouldSyncHistoryMessage: () => false,
     });
 
     this.sessions.set(userId, { socket, status: "connecting" });
 
     console.log(`[WhatsApp] createSession for ${userId}. PhoneNumber: ${phoneNumber}. Registered: ${state.creds.registered}`);
     if (phoneNumber && !state.creds.registered) {
-      try {
-        console.log(`[WhatsApp] Requesting pairing code for ${userId} with phone ${phoneNumber}`);
-        const code = await socket.requestPairingCode(phoneNumber);
-        console.log(`Pairing code for ${userId}: ${code}`);
-        const session = this.sessions.get(userId);
-        if (session) {
-          session.pairingCode = code;
-          session.status = "pairing";
-          onUpdate?.("pairing", code);
+      // Small delay to ensure socket is ready before requesting pairing code
+      setTimeout(async () => {
+        try {
+          console.log(`[WhatsApp] Requesting pairing code for ${userId} with phone ${phoneNumber}`);
+          const code = await socket.requestPairingCode(phoneNumber);
+          console.log(`Pairing code for ${userId}: ${code}`);
+          const session = this.sessions.get(userId);
+          if (session) {
+            session.pairingCode = code;
+            session.status = "pairing";
+            onUpdate?.("pairing", code);
+          }
+        } catch (err: any) {
+          console.error(`Failed to request pairing code for ${userId}:`, err);
+          
+          // If it's a 401 or connection closed, clear the session to allow retry
+          if (err.message?.includes("Connection Closed") || err.message?.includes("401")) {
+            const sessionDir = path.join(process.cwd(), "sessions", userId);
+            if (fs.existsSync(sessionDir)) {
+              fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+          }
+          
+          this.sessions.delete(userId);
+          onUpdate?.("disconnected");
         }
-      } catch (err) {
-        console.error(`Failed to request pairing code for ${userId}:`, err);
-        this.sessions.delete(userId);
-        onUpdate?.("disconnected");
-      }
+      }, 3000);
     }
 
     socket.ev.on("creds.update", saveCreds);
@@ -234,16 +252,11 @@ class WhatsAppManager {
         }
 
         if (qr) {
-          try {
-            const qrDataUrl = await QRCode.toDataURL(qr);
-            session.qr = qrDataUrl;
-            session.status = "qr";
-            onUpdate?.("qr", qrDataUrl);
-            await this.log(userId, "info", `QR Code gerado com sucesso. Status: ${session.status}`);
-            console.log(`[WhatsApp] QR Code generated for ${userId}. Length: ${qrDataUrl.length}`);
-          } catch (err) {
-            console.error(`Failed to generate QR Data URL for ${userId}:`, err);
-          }
+          session.qr = qr;
+          session.status = "qr";
+          onUpdate?.("qr", qr);
+          await this.log(userId, "info", `QR Code gerado com sucesso. Status: ${session.status}`);
+          console.log(`[WhatsApp] QR Code generated for ${userId}. Length: ${qr.length}`);
         }
 
         if (connection === "open") {
@@ -257,10 +270,13 @@ class WhatsAppManager {
         }
 
         if (connection === "close") {
-          const boomErr = lastDisconnect?.error as Boom;
-          console.error(`[WhatsApp] Connection closed for ${userId}. Error object:`, JSON.stringify(lastDisconnect?.error, Object.getOwnPropertyNames(lastDisconnect?.error || {})));
+          const boomErr = lastDisconnect?.error as Boom | undefined;
+          const statusCode = boomErr?.output?.statusCode;
+          const reason = boomErr?.message || "Graceful close or unknown reason";
           
-          if (boomErr?.message === "QR refs attempts ended") {
+          console.error(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode || 'Unknown'}. Reason: ${reason}`);
+          
+          if (reason === "QR refs attempts ended") {
             console.log(`[WhatsApp] QR refs attempts ended for ${userId}. Clearing session directory.`);
             const sessionDir = path.join(process.cwd(), "sessions", userId);
             if (fs.existsSync(sessionDir)) {
@@ -268,18 +284,31 @@ class WhatsAppManager {
             }
           }
 
-          const statusCode = boomErr?.output?.statusCode;
-          const reason = boomErr?.message || "Unknown reason";
           const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
           
-          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}. Reason: ${reason}. Should reconnect: ${shouldReconnect}`);
+          console.log(`[WhatsApp] Connection closed for ${userId}. Should reconnect: ${shouldReconnect}`);
 
-          // Auto-clear session on 401 or 515 to force a fresh start
-          if (statusCode === 401 || statusCode === 515) {
-            console.log(`[WhatsApp] Critical error ${statusCode} for ${userId}. Clearing session directory.`);
+          // Auto-clear session on 401 or sync failure to force a fresh start
+          if (statusCode === 401 || reason.includes("failed to sync state")) {
+            console.log(`[WhatsApp] Critical error ${statusCode} (${reason}) for ${userId}. Clearing session directory.`);
             const sessionDir = path.join(process.cwd(), "sessions", userId);
             if (fs.existsSync(sessionDir)) {
               fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+          }
+
+          if (statusCode === 515) {
+            const attempts = this.reconnectAttempts.get(userId) || 0;
+            console.log(`[WhatsApp] Stream Error 515 for ${userId} (Attempt ${attempts + 1}).`);
+            
+            // If it fails too many times with 515, the session might be corrupted
+            if (attempts >= 3) {
+              console.log(`[WhatsApp] Stream Error 515 persisted for ${userId}. Clearing session directory to force fresh start.`);
+              const sessionDir = path.join(process.cwd(), "sessions", userId);
+              if (fs.existsSync(sessionDir)) {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+              }
+              this.reconnectAttempts.delete(userId); // Reset attempts for the fresh start
             }
           }
 
@@ -291,10 +320,12 @@ class WhatsAppManager {
 
           if (shouldReconnect) {
             const attempts = this.reconnectAttempts.get(userId) || 0;
-            if (attempts < 3) {
+            const maxAttempts = statusCode === 515 ? 10 : 3; // More attempts for stream errors
+            
+            if (attempts < maxAttempts) {
               this.reconnectAttempts.set(userId, attempts + 1);
-              const delay = 10000; // 10 seconds delay
-              console.log(`[WhatsApp] Auto-reconnecting for ${userId} (Attempt ${attempts + 1}/3) in ${delay}ms...`);
+              const delay = statusCode === 515 ? 5000 : 10000; // Faster reconnect for stream errors
+              console.log(`[WhatsApp] Auto-reconnecting for ${userId} (Attempt ${attempts + 1}/${maxAttempts}) in ${delay}ms...`);
               setTimeout(() => {
                 // Double check if session was already recreated by another event
                 if (!this.sessions.has(userId)) {
@@ -307,7 +338,7 @@ class WhatsAppManager {
                 }
               }, delay);
             } else {
-              console.log(`[WhatsApp] Max reconnection attempts reached for ${userId}. Stopping.`);
+              console.log(`[WhatsApp] Max reconnection attempts (${maxAttempts}) reached for ${userId}. Stopping.`);
               this.reconnectAttempts.delete(userId);
             }
           }
@@ -382,12 +413,7 @@ class WhatsAppManager {
                 }
 
                 const isGroup = remoteJid.includes("@g.us");
-                if (isGroup) {
-                  console.log(`[WhatsApp] Skipping group message from ${remoteJid} for user ${userId}`);
-                  await this.syncMessage(userId, msg);
-                  continue;
-                }
-
+                
                 console.log(`[WhatsApp] Incoming message from ${remoteJid} for user ${userId}: "${text}"`);
                 const isButton = !!(msg.message?.buttonsResponseMessage || 
                                    msg.message?.templateButtonReplyMessage || 
@@ -411,7 +437,7 @@ class WhatsAppManager {
                       }
                     }
 
-                    console.log(`[WhatsApp] Processing message for user ${userId}: "${text}" (isButton: ${isButton}) (Active Tasks: ${this.activeTasks})`);
+                    console.log(`[WhatsApp] Processing message for user ${userId}: "${text}" (isButton: ${isButton}) (isGroup: ${isGroup}) (Active Tasks: ${this.activeTasks})`);
                     const triggered = await handleIncomingMessage(this, userId, remoteJid, text, isButton);
                     if (!triggered) {
                       console.log(`[WhatsApp] No automation triggered for user ${userId}, calling AI agent.`);
@@ -476,7 +502,8 @@ class WhatsAppManager {
 
       if (!text) return;
 
-      const contactId = await this.getOrCreateContact(userId, jid);
+      const pushName = msg.pushName || "";
+      const contactId = await this.getOrCreateContact(userId, jid, pushName);
       
       // Check if message already exists
       const { data: existingMsg } = await supabaseAdmin
@@ -496,6 +523,15 @@ class WhatsAppManager {
           timestamp: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
           msg_id: msg.key.id,
         });
+
+        // Update contact's last message info
+        await supabaseAdmin
+          .from("contacts")
+          .update({
+            last_message_at: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
+            last_message_text: text.substring(0, 100)
+          })
+          .eq("id", contactId);
       }
     } catch (err) {
       console.error("Sync message error:", err);
@@ -573,7 +609,7 @@ class WhatsAppManager {
     }
   }
 
-  private async getOrCreateContact(userId: string, jid: string): Promise<string> {
+  private async getOrCreateContact(userId: string, jid: string, pushName?: string): Promise<string> {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(userId)) return "unknown";
@@ -581,12 +617,19 @@ class WhatsAppManager {
       const phone = jid.split("@")[0];
       const { data: existingContact } = await supabaseAdmin
         .from("contacts")
-        .select("id")
+        .select("id, name")
         .eq("user_id", userId)
         .eq("phone", phone)
         .maybeSingle();
 
       if (existingContact) {
+        // Update name if it was just the phone number and we now have a pushName
+        if (pushName && (existingContact.name === phone || !existingContact.name)) {
+          await supabaseAdmin
+            .from("contacts")
+            .update({ name: pushName })
+            .eq("id", existingContact.id);
+        }
         return existingContact.id;
       }
 
@@ -594,7 +637,7 @@ class WhatsAppManager {
         .from("contacts")
         .insert({
           user_id: userId,
-          name: phone,
+          name: pushName || phone,
           phone,
           tags: ["WhatsApp"],
           created_at: new Date().toISOString(),
@@ -619,7 +662,7 @@ class WhatsAppManager {
     return session?.socket?.user;
   }
 
-  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string) {
+  async ensureConnection(userId: string) {
     let session = this.sessions.get(userId);
     
     // Attempt auto-reconnect if session files exist but session is not in memory or not connected
@@ -628,7 +671,7 @@ class WhatsAppManager {
       if (fs.existsSync(sessionDir)) {
         const isPaused = fs.existsSync(path.join(sessionDir, "paused.txt"));
         if (!isPaused) {
-          console.log(`Auto-reconnecting session for user ${userId} before sending message.`);
+          console.log(`Auto-reconnecting session for user ${userId}...`);
           await this.createSession(userId);
           
           // Wait up to 10 seconds for connection
@@ -642,6 +685,12 @@ class WhatsAppManager {
         }
       }
     }
+    
+    return this.sessions.get(userId);
+  }
+
+  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string) {
+    let session = await this.ensureConnection(userId);
 
     if (!session || session.status !== "connected") {
       await this.log(userId, "error", "Falha ao enviar mensagem: Sessão não conectada.");
@@ -673,28 +722,7 @@ class WhatsAppManager {
   }
 
   async sendButtonsMessage(userId: string, jid: string, text: string, buttons: { id: string, label: string }[]) {
-    let session = this.sessions.get(userId);
-    
-    // Attempt auto-reconnect if session files exist but session is not in memory or not connected
-    if (!session || session.status !== "connected") {
-      const sessionDir = path.join(process.cwd(), "sessions", userId);
-      if (fs.existsSync(sessionDir)) {
-        const isPaused = fs.existsSync(path.join(sessionDir, "paused.txt"));
-        if (!isPaused) {
-          console.log(`Auto-reconnecting session for user ${userId} before sending buttons.`);
-          await this.createSession(userId);
-          
-          // Wait up to 10 seconds for connection
-          let attempts = 0;
-          while (attempts < 20) {
-            session = this.sessions.get(userId);
-            if (session?.status === "connected") break;
-            await new Promise(resolve => setTimeout(resolve, 500));
-            attempts++;
-          }
-        }
-      }
-    }
+    let session = await this.ensureConnection(userId);
 
     if (!session || session.status !== "connected") {
       await this.log(userId, "error", "Falha ao enviar botões: Sessão não conectada.");
@@ -703,10 +731,9 @@ class WhatsAppManager {
 
     try {
       // Modern Baileys Buttons (Interactive Message - Native Flow)
-      // This is the most compatible way for modern WhatsApp versions
-      const buttonMessage: any = {
+      const message = {
         interactiveMessage: {
-          header: { title: "", hasMediaAttachment: false },
+          header: { title: "Menu", hasMediaAttachment: false },
           body: { text: text },
           footer: { text: "Selecione uma opção" },
           nativeFlowMessage: {
@@ -722,33 +749,34 @@ class WhatsAppManager {
       };
 
       await this.log(userId, "info", `Enviando botões interativos para ${jid}`);
-      // Note: Baileys requires wrapping interactiveMessage in a viewOnceMessage for some versions
-      return await session.socket.sendMessage(jid, { 
+      
+      const genMsg = await generateWAMessageFromContent(jid, { 
         viewOnceMessage: { 
-          message: buttonMessage 
+          message 
         } 
-      } as any);
+      }, { userJid: session.socket.user?.id });
+
+      return await session.socket.relayMessage(jid, genMsg.message!, { messageId: genMsg.key.id! });
     } catch (err) {
-      console.error("Error sending interactive buttons, falling back to list/text:", err);
+      console.error("Error sending interactive buttons, falling back to legacy buttons:", err);
       
       try {
-        // Fallback 1: List Message (Legacy but still works on many clients)
-        const listMessage: any = {
+        // Fallback 1: Legacy Buttons (Still works on some clients)
+        const legacyButtons = buttons.map(b => ({
+          buttonId: b.id,
+          buttonText: { displayText: b.label },
+          type: 1
+        }));
+
+        const buttonMessage = {
           text: text,
-          footer: "Selecione uma opção",
-          title: "Menu",
-          buttonText: "Ver Opções",
-          sections: [
-            {
-              title: "Opções Disponíveis",
-              rows: buttons.map(b => ({ title: b.label, rowId: b.id }))
-            }
-          ]
+          buttons: legacyButtons,
+          headerType: 1
         };
-        await this.log(userId, "warn", `Botões falharam, tentando List Message para ${jid}`);
-        return await session.socket.sendMessage(jid, listMessage);
-      } catch (listErr) {
-        console.error("List message also failed, falling back to plain text:", listErr);
+        await this.log(userId, "warn", `Botões interativos falharam, tentando Legacy Buttons para ${jid}`);
+        return await session.socket.sendMessage(jid, buttonMessage);
+      } catch (legacyErr) {
+        console.error("Legacy buttons also failed, falling back to plain text:", legacyErr);
         
         // Fallback 2: Plain Text with numbered options
         let fallbackText = `*${text}*\n\n`;
@@ -757,20 +785,114 @@ class WhatsAppManager {
         });
         fallbackText += "\n_Responda com o número ou o texto da opção._";
         
-        await this.log(userId, "warn", `List Message falhou, enviando texto simples para ${jid}`);
+        await this.log(userId, "warn", `Legacy Buttons falharam, enviando texto simples para ${jid}`);
+        return await session.socket.sendMessage(jid, { text: fallbackText });
+      }
+    }
+  }
+
+  async sendListMessage(userId: string, jid: string, listData: any) {
+    let session = await this.ensureConnection(userId);
+
+    if (!session || session.status !== "connected") {
+      await this.log(userId, "error", "Falha ao enviar lista: Sessão não conectada.");
+      throw new Error("WhatsApp session not connected. Please go to the WhatsApp tab and reconnect.");
+    }
+
+    try {
+      // Modern Baileys List (Interactive Message - Native Flow - single_select)
+      const sections = listData.sections.map((section: any) => ({
+        title: section.title,
+        rows: section.rows.map((row: any) => ({
+          header: "",
+          title: row.title,
+          description: row.description || "",
+          id: row.id || row.title
+        }))
+      }));
+
+      const message = {
+        interactiveMessage: {
+          body: { text: listData.description || "Selecione uma opção" },
+          footer: { text: listData.footer || "" },
+          header: { title: listData.title || "Menu", hasMediaAttachment: false },
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: "single_select",
+                buttonParamsJson: JSON.stringify({
+                  title: listData.buttonText || "Ver Opções",
+                  sections: sections
+                })
+              }
+            ]
+          }
+        }
+      };
+
+      await this.log(userId, "info", `Enviando lista interativa (moderna) para ${jid}`);
+      
+      const genMsg = await generateWAMessageFromContent(jid, { 
+        viewOnceMessage: { 
+          message 
+        } 
+      }, { userJid: session.socket.user?.id });
+
+      return await session.socket.relayMessage(jid, genMsg.message!, { messageId: genMsg.key.id! });
+    } catch (err) {
+      console.error("Error sending modern list message, falling back to legacy list:", err);
+      
+      try {
+        // Fallback 1: Legacy List Message
+        const legacyListMessage: any = {
+          text: listData.description || "Selecione uma opção",
+          footer: listData.footer || "",
+          title: listData.title || "Menu",
+          buttonText: listData.buttonText || "Ver Opções",
+          sections: listData.sections.map((section: any) => ({
+            title: section.title,
+            rows: section.rows.map((row: any) => ({
+              title: row.title,
+              description: row.description || "",
+              rowId: row.id || row.title
+            }))
+          }))
+        };
+        await this.log(userId, "warn", `Lista moderna falhou, tentando Legacy List para ${jid}`);
+        return await session.socket.sendMessage(jid, legacyListMessage);
+      } catch (legacyListErr) {
+        console.error("Legacy list message also failed, falling back to text:", legacyListErr);
+        
+        // Fallback 2: Plain Text
+        let fallbackText = `${listData.title || "Menu"}\n${listData.description || ""}\n\n`;
+        let optionNum = 1;
+        
+        listData.sections.forEach((section: any) => {
+          if (section.title) fallbackText += `*${section.title}*\n`;
+          section.rows.forEach((row: any) => {
+            fallbackText += `${optionNum}. ${row.title}\n`;
+            if (row.description) fallbackText += `   ${row.description}\n`;
+            optionNum++;
+          });
+          fallbackText += '\n';
+        });
+        
+        fallbackText += `Responda com o número da opção desejada.`;
+        
+        await this.log(userId, "warn", `Lista legada falhou, enviando texto puro para ${jid}`);
         return await session.socket.sendMessage(jid, { text: fallbackText });
       }
     }
   }
 
   async sendPresenceUpdate(userId: string, jid: string, presence: "composing" | "recording" | "paused") {
-    const session = this.sessions.get(userId);
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") return;
     return await session.socket.sendPresenceUpdate(presence, jid);
   }
 
   async getGroups(userId: string) {
-    const session = this.sessions.get(userId);
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
     
     try {
@@ -783,7 +905,7 @@ class WhatsAppManager {
   }
 
   async getGroupMetadata(userId: string, jid: string) {
-    const session = this.sessions.get(userId);
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
     
     try {
@@ -795,7 +917,7 @@ class WhatsAppManager {
   }
 
   async updateGroupParticipants(userId: string, jid: string, participants: string[], action: "add" | "remove" | "promote" | "demote") {
-    const session = this.sessions.get(userId);
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
     
     try {
@@ -807,7 +929,7 @@ class WhatsAppManager {
   }
 
   async updateGroupSubject(userId: string, jid: string, subject: string) {
-    const session = this.sessions.get(userId);
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
     
     try {
@@ -819,7 +941,7 @@ class WhatsAppManager {
   }
 
   async leaveGroup(userId: string, jid: string) {
-    const session = this.sessions.get(userId);
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
     
     try {
@@ -829,6 +951,8 @@ class WhatsAppManager {
       throw err;
     }
   }
+
+  private messageHistory: Map<string, { text: string, timestamp: number }[]> = new Map();
 
   private async checkGroupRules(userId: string, socket: WASocket, jid: string, msg: any, text: string): Promise<boolean> {
     try {
@@ -850,6 +974,14 @@ class WhatsAppManager {
       if (isAdmin) return false;
 
       let shouldDelete = false;
+      const now = Date.now();
+      const historyKey = `${userId}:${jid}:${sender}`;
+      
+      // Get or initialize history for this sender in this group
+      let history = this.messageHistory.get(historyKey) || [];
+      
+      // Clean up old history (older than 1 minute)
+      history = history.filter(h => now - h.timestamp < 60000);
 
       // 1. Anti-Link
       if (rule.anti_link) {
@@ -860,9 +992,29 @@ class WhatsAppManager {
         }
       }
 
-      // 2. Anti-Spam (Simple check: same message as last one)
-      // This would require a cache of last messages per group/sender.
-      // For now, let's just implement the logic structure.
+      // 2. Anti-Spam (Repeated messages)
+      if (!shouldDelete && rule.anti_spam) {
+        const isRepeated = history.some(h => h.text === text && now - h.timestamp < 30000);
+        if (isRepeated) {
+          shouldDelete = true;
+          await this.log(userId, "warn", `Anti-Spam: Mensagem repetida deletada de ${sender} no grupo ${jid}`);
+        }
+      }
+
+      // 3. Anti-Flood (Too many messages)
+      if (!shouldDelete && rule.anti_flood) {
+        const recentMessages = history.filter(h => now - h.timestamp < 10000);
+        if (recentMessages.length >= 5) { // 5 messages in 10 seconds
+          shouldDelete = true;
+          await this.log(userId, "warn", `Anti-Flood: Flood detectado de ${sender} no grupo ${jid}`);
+        }
+      }
+
+      // Update history
+      history.push({ text, timestamp: now });
+      // Keep only last 10 messages in history
+      if (history.length > 10) history.shift();
+      this.messageHistory.set(historyKey, history);
 
       if (shouldDelete) {
         await socket.sendMessage(jid, { delete: msg.key });

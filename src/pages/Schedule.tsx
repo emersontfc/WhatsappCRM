@@ -12,8 +12,10 @@ import {
   User,
   AlertCircle,
   Upload,
-  Settings2
+  Settings2,
+  Mic
 } from "lucide-react";
+import { VoiceRecorder } from "../components/VoiceRecorder";
 import { toast } from "sonner";
 import { supabase, getUserId, isAdmin as checkIsAdmin } from "../supabase";
 import { Button } from "../components/ui/Button";
@@ -48,18 +50,26 @@ export default function Schedule() {
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   
+  const getMozambiqueTime = () => {
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const mozambiqueOffset = 2; // UTC+2
+    return new Date(utc + (3600000 * mozambiqueOffset));
+  };
+
   const [newMessage, setNewMessage] = useState<Partial<ScheduledMessage>>({
     contact_id: "",
     contact_name: "",
     message: "",
     media_url: "",
     media_type: "",
-    scheduled_at: new Date(Date.now() + 3600000).toISOString().slice(0, 16)
+    scheduled_at: new Date(getMozambiqueTime().getTime() + 3600000).toISOString().slice(0, 16)
   });
 
   useEffect(() => {
@@ -523,12 +533,22 @@ export default function Schedule() {
 
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase text-slate-500">Mensagem</label>
-              <textarea 
-                className="flex min-h-[100px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                placeholder="Digite a mensagem que será enviada..."
-                value={newMessage.message}
-                onChange={e => setNewMessage({...newMessage, message: e.target.value})}
-              />
+              {isRecording ? (
+                <VoiceRecorder 
+                  onSend={(url) => {
+                    setNewMessage(prev => ({ ...prev, media_url: url, media_type: "audio" }));
+                    setIsRecording(false);
+                  }} 
+                  onCancel={() => setIsRecording(false)} 
+                />
+              ) : (
+                <textarea 
+                  className="flex min-h-[100px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                  placeholder="Digite a mensagem que será enviada..."
+                  value={newMessage.message}
+                  onChange={e => setNewMessage({...newMessage, message: e.target.value})}
+                />
+              )}
             </div>
 
             <div className="space-y-2">
@@ -546,7 +566,7 @@ export default function Schedule() {
                   variant="outline" 
                   className="gap-2"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={uploadingMedia}
+                  disabled={uploadingMedia || isRecording}
                 >
                   {uploadingMedia ? (
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent"></div>
@@ -554,6 +574,17 @@ export default function Schedule() {
                     <Paperclip size={16} />
                   )}
                   {uploadingMedia ? "Enviando..." : "Anexar Mídia"}
+                </Button>
+
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  className="gap-2"
+                  onClick={() => setIsRecording(!isRecording)}
+                  disabled={uploadingMedia}
+                >
+                  <Mic size={16} />
+                  {isRecording ? "Cancelar Áudio" : "Gravar Áudio"}
                 </Button>
 
                 {newMessage.media_url && (
@@ -613,7 +644,7 @@ export default function Schedule() {
                       <div className="flex items-center gap-2 text-xs text-slate-500">
                         <span className="flex items-center gap-1 font-medium text-slate-700">
                           <CalendarIcon size={12} />
-                          {new Date(msg.scheduled_at).toLocaleString()}
+                          {new Date(msg.scheduled_at).toLocaleString("pt-MZ", { timeZone: "Africa/Maputo" })}
                         </span>
                         <span>•</span>
                         <span className={cn(

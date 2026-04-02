@@ -17,6 +17,8 @@ interface Contact {
   id: string;
   name: string;
   phone: string;
+  last_message_at?: string;
+  last_message_text?: string;
 }
 
 interface QuickReply {
@@ -116,7 +118,7 @@ export default function Messages() {
           .from("contacts")
           .select("*")
           .eq("user_id", uId)
-          .order("name", { ascending: true });
+          .order("last_message_at", { ascending: false, nullsFirst: false });
         
         if (isMounted && initialContacts) {
           setContacts(initialContacts);
@@ -223,7 +225,7 @@ export default function Messages() {
       .from("contacts")
       .select("*")
       .eq("user_id", userId)
-      .order("name", { ascending: true });
+      .order("last_message_at", { ascending: false, nullsFirst: false });
     
     if (updatedContacts) {
       setContacts(updatedContacts);
@@ -335,10 +337,19 @@ export default function Messages() {
                 {getInitials(contact.name)}
               </div>
               <div className="flex-1 min-w-0">
-                <p className={cn("font-semibold text-sm truncate", selectedContact?.id === contact.id ? "text-emerald-900" : "text-slate-900")}>
-                  {contact.name}
+                <div className="flex justify-between items-start">
+                  <p className={cn("font-semibold text-sm truncate", selectedContact?.id === contact.id ? "text-emerald-900" : "text-slate-900")}>
+                    {contact.name}
+                  </p>
+                  {contact.last_message_at && (
+                    <span className="text-[10px] text-slate-400">
+                      {new Date(contact.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 truncate font-medium mt-0.5">
+                  {contact.last_message_text || contact.phone}
                 </p>
-                <p className="text-xs text-slate-500 truncate font-medium mt-0.5">{contact.phone}</p>
               </div>
             </button>
           ))}

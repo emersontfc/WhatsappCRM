@@ -366,11 +366,11 @@ export default function Contacts() {
       </div>
 
       {isAdding && (
-        <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/30 dark:bg-emerald-900/10">
+        <Card className="border-emerald-200 bg-emerald-50/30">
           <CardContent className="p-6">
             <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Nome</label>
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Nome</label>
                 <Input 
                   placeholder="Nome do cliente" 
                   value={newContact.name}
@@ -379,7 +379,7 @@ export default function Contacts() {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Telefone</label>
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Telefone</label>
                 <div className="flex gap-2">
                   <div className="w-20 shrink-0">
                     <Input 
@@ -396,10 +396,10 @@ export default function Contacts() {
                     required
                   />
                 </div>
-                <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">O código do país será adicionado automaticamente se necessário.</p>
+                <p className="text-[10px] text-slate-400 mt-1">O código do país será adicionado automaticamente se necessário.</p>
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Tags (separadas por vírgula)</label>
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Tags (separadas por vírgula)</label>
                 <Input 
                   placeholder="VIP, Lead, Novo" 
                   value={newContact.tags}
@@ -417,17 +417,17 @@ export default function Contacts() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filtered.map((contact) => (
-          <Card key={contact.id} className="hover:border-emerald-200 dark:hover:border-emerald-800 transition-colors group">
+          <Card key={contact.id} className="hover:border-emerald-200 transition-colors group">
             <CardContent className="p-6">
               <div className="flex justify-between items-start mb-4">
-                <div className="h-12 w-12 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center text-slate-400 dark:text-slate-500 group-hover:bg-emerald-100 dark:group-hover:bg-emerald-500/20 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                <div className="h-12 w-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 group-hover:bg-emerald-100 group-hover:text-emerald-600 transition-colors">
                   <User size={24} />
                 </div>
                 <div className="flex gap-2">
                   <Button 
                     variant="ghost" 
                     size="icon" 
-                    className="h-8 w-8 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20"
+                    className="h-8 w-8 text-emerald-600 hover:bg-emerald-50"
                     onClick={() => handleSendMessage(contact.phone)}
                   >
                     <Send size={16} />
@@ -435,7 +435,7 @@ export default function Contacts() {
                   <Button 
                     variant="ghost" 
                     size="icon" 
-                    className="h-8 w-8 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+                    className="h-8 w-8 text-red-500 hover:bg-red-50"
                     onClick={() => handleDelete(contact.id)}
                   >
                     <Trash2 size={16} />
@@ -443,15 +443,15 @@ export default function Contacts() {
                 </div>
               </div>
               <div className="space-y-1">
-                <h4 className="font-bold text-slate-900 dark:text-white">{contact.name}</h4>
-                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <h4 className="font-bold text-slate-900">{contact.name}</h4>
+                <div className="flex items-center gap-2 text-sm text-slate-500">
                   <Phone size={14} />
                   {contact.phone}
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {contact.tags.map(tag => (
-                  <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+                  <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold uppercase tracking-wider">
                     <Tag size={10} />
                     {tag}
                   </span>
@@ -463,9 +463,9 @@ export default function Contacts() {
       </div>
 
       {filtered.length === 0 && !isAdding && (
-        <div className="text-center py-20 bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
-          <Users size={48} className="mx-auto text-slate-300 dark:text-slate-700 mb-4" />
-          <p className="text-slate-500 dark:text-slate-400">Nenhum contato encontrado.</p>
+        <div className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-200">
+          <Users size={48} className="mx-auto text-slate-300 mb-4" />
+          <p className="text-slate-500">Nenhum contato encontrado.</p>
         </div>
       )}
     </div>

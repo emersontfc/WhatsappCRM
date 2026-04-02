@@ -72,7 +72,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row overflow-hidden">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row overflow-x-hidden">
       {/* Left Side - Visual/Branding */}
       <div className="hidden lg:flex lg:w-1/2 relative bg-white items-center justify-center p-12 overflow-hidden border-r border-slate-200">
         <div className="absolute top-0 left-0 w-full h-full opacity-10">
@@ -122,7 +122,7 @@ export default function Login() {
       </div>
 
       {/* Right Side - Form */}
-      <div className="flex-1 flex flex-col bg-slate-50 lg:bg-slate-50 relative">
+      <div className="flex-1 flex flex-col bg-slate-50 relative">
         <div className="lg:hidden p-6">
           <Link to="/" className="flex items-center gap-3">
             <div className="bg-emerald-500 p-2 rounded-xl shadow-lg shadow-emerald-500/20">
@@ -139,10 +139,10 @@ export default function Login() {
             className="w-full max-w-md space-y-8"
           >
             <div className="space-y-2">
-              <h1 className="text-4xl font-black uppercase italic tracking-tighter text-slate-900">
+              <h1 className="text-3xl sm:text-4xl font-black uppercase italic tracking-tighter text-slate-900">
                 {isRegistering ? "Criar Conta" : "Bem-vindo de volta"}
               </h1>
-              <p className="text-slate-500 font-medium">
+              <p className="text-sm sm:text-base text-slate-500 font-medium">
                 {isRegistering 
                   ? "Comece sua jornada de automação agora." 
                   : "Acesse sua conta para gerenciar seu negócio."}
@@ -159,11 +159,11 @@ export default function Login() {
                 className="space-y-5"
               >
                 {error && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="p-4 rounded-xl bg-red-50 text-red-600 text-sm font-bold border border-red-100"
-                  >
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-xl bg-red-50 text-red-600 text-sm font-bold border border-red-100"
+                    >
                     {error}
                   </motion.div>
                 )}

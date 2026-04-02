@@ -45,6 +45,10 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             const buttonsData = JSON.parse(automation.buttons_json);
             await whatsappManager.sendButtonsMessage(userId, jid, buttonsData.text, buttonsData.buttons);
             await whatsappManager.log(userId, "success", `Bot "${automation.name}" (Menu) disparado para ${jid}`, { trigger: normalizedText, buttons: buttonsData });
+          } else if (automation.response_type === "list") {
+            const listData = JSON.parse(automation.list_json);
+            await whatsappManager.sendListMessage(userId, jid, listData);
+            await whatsappManager.log(userId, "success", `Bot "${automation.name}" (Lista) disparado para ${jid}`, { trigger: normalizedText, list: listData });
           } else {
             await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type);
             await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: automation.media_type });
@@ -61,7 +65,9 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             await supabaseAdmin.from("messages").insert({
               user_id: userId,
               contact_id: contact?.id || "automated",
-              text: automation.response_type === "buttons" ? JSON.parse(automation.buttons_json).text : automation.response,
+              text: automation.response_type === "buttons" ? JSON.parse(automation.buttons_json).text : 
+                    automation.response_type === "list" ? JSON.parse(automation.list_json).title : 
+                    automation.response,
               type: "outbound",
               timestamp: new Date().toISOString(),
               is_automated: true,

@@ -143,6 +143,9 @@ router.post("/send", async (req: AuthRequest, res) => {
     res.json({ success: true, result });
   } catch (err: any) {
     console.error("Failed to send message:", err);
+    if (err.message && err.message.includes("WhatsApp session not connected")) {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -162,6 +165,9 @@ router.post("/test", async (req: AuthRequest, res) => {
     res.json({ success: true });
   } catch (err: any) {
     console.error("Failed to send test message:", err);
+    if (err.message && (err.message.includes("WhatsApp session not connected") || err.message === "Bot não conectado.")) {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -188,6 +194,9 @@ router.get("/groups", async (req: AuthRequest, res) => {
     const groups = await whatsappManager.getGroups(userId);
     res.json({ success: true, groups });
   } catch (err: any) {
+    if (err.message === "WhatsApp não conectado") {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -201,6 +210,9 @@ router.get("/groups/:jid", async (req: AuthRequest, res) => {
     const metadata = await whatsappManager.getGroupMetadata(userId, jid);
     res.json({ success: true, metadata });
   } catch (err: any) {
+    if (err.message === "WhatsApp não conectado") {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -217,6 +229,9 @@ router.post("/groups/:jid/participants", async (req: AuthRequest, res) => {
     const result = await whatsappManager.updateGroupParticipants(userId, jid, participants, action);
     res.json({ success: true, result });
   } catch (err: any) {
+    if (err.message === "WhatsApp não conectado") {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -233,6 +248,9 @@ router.post("/groups/:jid/subject", async (req: AuthRequest, res) => {
     const result = await whatsappManager.updateGroupSubject(userId, jid, subject);
     res.json({ success: true, result });
   } catch (err: any) {
+    if (err.message === "WhatsApp não conectado") {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -246,6 +264,9 @@ router.post("/groups/:jid/leave", async (req: AuthRequest, res) => {
     const result = await whatsappManager.leaveGroup(userId, jid);
     res.json({ success: true, result });
   } catch (err: any) {
+    if (err.message === "WhatsApp não conectado") {
+      return res.json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });

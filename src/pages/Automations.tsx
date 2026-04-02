@@ -32,7 +32,7 @@ import { cn, slugify } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { useSubscription } from "../lib/useSubscription";
 import { UpgradePrompt } from "../components/UpgradePrompt";
-import { FlowBuilder, Node as FlowNode } from "../components/FlowBuilder";
+import { AudioRecorder } from "../components/AudioRecorder";
 
 interface Automation {
   id: string;
@@ -61,7 +61,6 @@ export default function Automations() {
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [recentMessages, setRecentMessages] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
-  const [showFlowBuilder, setShowFlowBuilder] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const responseTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [newAutomation, setNewAutomation] = useState<Partial<Automation>>({
@@ -104,9 +103,9 @@ export default function Automations() {
     }
 
     return (
-      <div className="w-full max-w-[320px] mx-auto bg-[#E5DDD5] dark:bg-slate-950 rounded-[2.5rem] border-[8px] border-slate-900 dark:border-slate-800 aspect-[9/18] overflow-hidden shadow-2xl relative flex flex-col">
+      <div className="w-full max-w-[320px] mx-auto bg-[#E5DDD5] rounded-[2.5rem] border-[8px] border-slate-900 aspect-[9/18] overflow-hidden shadow-2xl relative flex flex-col">
         {/* Phone Header */}
-        <div className="bg-[#075E54] dark:bg-slate-900 p-4 pt-8 flex items-center gap-3 text-white">
+        <div className="bg-[#075E54] p-4 pt-8 flex items-center gap-3 text-white">
           <div className="h-8 w-8 rounded-full bg-slate-200/20 flex items-center justify-center">
             <Users size={16} />
           </div>
@@ -121,8 +120,8 @@ export default function Automations() {
           {/* Incoming Message (Trigger) */}
           {automation.trigger === 'keyword' && automation.keyword && (
             <div className="flex justify-start">
-              <div className="bg-white dark:bg-slate-800 p-2 rounded-lg rounded-tl-none shadow-sm max-w-[80%]">
-                <p className="text-[11px] text-slate-900 dark:text-slate-100">{automation.keyword}</p>
+              <div className="bg-white p-2 rounded-lg rounded-tl-none shadow-sm max-w-[80%]">
+                <p className="text-[11px] text-slate-900">{automation.keyword}</p>
                 <p className="text-[9px] text-slate-400 text-right mt-1">10:00</p>
               </div>
             </div>
@@ -130,9 +129,9 @@ export default function Automations() {
 
           {/* Outgoing Message (Response) */}
           <div className="flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-500 delay-500">
-            <div className="bg-[#DCF8C6] dark:bg-emerald-900/40 p-2 rounded-lg rounded-tr-none shadow-sm max-w-[85%] space-y-2">
+            <div className="bg-[#DCF8C6] p-2 rounded-lg rounded-tr-none shadow-sm max-w-[85%] space-y-2">
               {automation.media_url && (
-                <div className="rounded-md overflow-hidden bg-black/5 dark:bg-white/5 p-1">
+                <div className="rounded-md overflow-hidden bg-black/5 p-1">
                   {automation.media_type === 'image' ? (
                     <img src={automation.media_url} alt="Preview" className="w-full h-32 object-cover rounded" />
                   ) : (
@@ -146,10 +145,10 @@ export default function Automations() {
 
               {automation.response_type === 'buttons' && buttons ? (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-slate-900 dark:text-slate-100">{buttons.text}</p>
+                  <p className="text-[11px] text-slate-900">{buttons.text}</p>
                   <div className="space-y-1">
                     {buttons.buttons.map((btn: any, i: number) => (
-                      <div key={i} className="bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold py-2 px-3 rounded-md text-center shadow-sm border border-slate-100 dark:border-slate-700">
+                      <div key={i} className="bg-white text-emerald-600 text-[10px] font-bold py-2 px-3 rounded-md text-center shadow-sm border border-slate-100">
                         {btn.label || "Botão"}
                       </div>
                     ))}
@@ -157,16 +156,16 @@ export default function Automations() {
                 </div>
               ) : automation.response_type === 'list' && list ? (
                 <div className="space-y-2">
-                  <p className="text-[11px] font-bold text-slate-900 dark:text-slate-100">{list.title}</p>
-                  <p className="text-[10px] text-slate-600 dark:text-slate-400">{list.description}</p>
-                  <div className="bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold py-2 px-3 rounded-md text-center shadow-sm border border-slate-100 dark:border-slate-700 flex items-center justify-center gap-2">
+                  <p className="text-[11px] font-bold text-slate-900">{list.title}</p>
+                  <p className="text-[10px] text-slate-600">{list.description}</p>
+                  <div className="bg-white text-emerald-600 text-[10px] font-bold py-2 px-3 rounded-md text-center shadow-sm border border-slate-100 flex items-center justify-center gap-2">
                     <MessageSquare size={12} />
                     {list.buttonText || "Ver Opções"}
                   </div>
                   <p className="text-[8px] text-slate-400 italic">{list.footer}</p>
                 </div>
               ) : (
-                <p className="text-[11px] text-slate-900 dark:text-slate-100 whitespace-pre-wrap">
+                <p className="text-[11px] text-slate-900 whitespace-pre-wrap">
                   {automation.response || "Sua resposta aparecerá aqui..."}
                 </p>
               )}
@@ -176,8 +175,8 @@ export default function Automations() {
         </div>
 
         {/* Chat Input */}
-        <div className="p-2 bg-white dark:bg-slate-900 flex items-center gap-2">
-          <div className="flex-1 bg-slate-100 dark:bg-slate-800 h-8 rounded-full px-3 flex items-center text-slate-400 text-[10px]">
+        <div className="p-2 bg-white flex items-center gap-2">
+          <div className="flex-1 bg-slate-100 h-8 rounded-full px-3 flex items-center text-slate-400 text-[10px]">
             Mensagem
           </div>
           <div className="h-8 w-8 rounded-full bg-[#128C7E] flex items-center justify-center text-white">
@@ -308,8 +307,13 @@ export default function Automations() {
       return;
     }
     
-    if (!newAutomation.name || (!newAutomation.response && newAutomation.response_type !== 'buttons')) {
+    if (!newAutomation.name || (!newAutomation.response && newAutomation.response_type !== 'buttons' && newAutomation.response_type !== 'list' && newAutomation.response_type !== 'audio')) {
       toast.error("Preencha o nome e a resposta.");
+      return;
+    }
+
+    if (newAutomation.response_type === 'audio' && !newAutomation.media_url) {
+      toast.error("Grave ou anexe um áudio para esta automação.");
       return;
     }
     
@@ -430,9 +434,6 @@ export default function Automations() {
     setAutomations(prev => prev.filter(a => a.id !== id));
 
     try {
-      // Delete nodes and options first
-      await supabase.from("nodes").delete().eq("automation_id", id);
-      
       const { error } = await supabase
         .from("automations")
         .delete()
@@ -444,87 +445,6 @@ export default function Automations() {
       // Rollback
       setAutomations(original);
       toast.error("Erro ao excluir automação.");
-    }
-  };
-
-  const handleSaveFlow = async (nodes: FlowNode[], name: string, keyword: string) => {
-    try {
-      const userId = await getUserId();
-      if (!userId) throw new Error("Usuário não identificado.");
-
-      let automation_id = editingId;
-
-      if (!automation_id) {
-        // Create automation first
-        const { data: auto, error: autoError } = await supabase
-          .from("automations")
-          .insert({
-            name: name || "Novo Fluxo",
-            user_id: userId,
-            active: true,
-            trigger: "keyword",
-            keyword: keyword || "fluxo",
-            created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (autoError) throw autoError;
-        automation_id = auto.id;
-      } else {
-        // Update existing automation name and keyword
-        await supabase
-          .from("automations")
-          .update({ name, keyword })
-          .eq("id", automation_id);
-      }
-
-      // Save nodes and options
-      // 1. Delete existing nodes (cascades to options if set up, otherwise delete options first)
-      await supabase.from("nodes").delete().eq("automation_id", automation_id);
-
-      // 2. Insert new nodes
-      for (const node of nodes) {
-        const { data: savedNode, error: nodeError } = await supabase
-          .from("nodes")
-          .insert({
-            id: node.id,
-            automation_id: automation_id,
-            type: node.type,
-            content: node.content,
-            order_index: node.order_index
-          })
-          .select()
-          .single();
-
-        if (nodeError) throw nodeError;
-
-        // 3. Insert options for this node
-        if (node.options && node.options.length > 0) {
-          const optionsToInsert = node.options.map(opt => ({
-            id: opt.id,
-            node_id: savedNode.id,
-            label: opt.label,
-            next_node_id: opt.next_node_id
-          }));
-
-          const { error: optError } = await supabase.from("options").insert(optionsToInsert);
-          if (optError) throw optError;
-        }
-      }
-
-      toast.success("Fluxo salvo com sucesso!");
-      setShowFlowBuilder(false);
-      setEditingId(null);
-      // Refresh automations
-      const { data: updatedAutomations } = await supabase
-        .from("automations")
-        .select("*")
-        .eq("user_id", userId);
-      if (updatedAutomations) setAutomations(updatedAutomations);
-    } catch (err: any) {
-      console.error("Error saving flow:", err);
-      toast.error(err.message || "Erro ao salvar fluxo.");
     }
   };
 
@@ -562,26 +482,12 @@ export default function Automations() {
     );
   }
 
-  if (showFlowBuilder) {
-    return (
-      <div className="fixed inset-0 z-[100] bg-white dark:bg-slate-950 overflow-hidden">
-        <FlowBuilder 
-          automationId={editingId || "new"} 
-          automationName={newAutomation.name || "Novo Fluxo"}
-          automationKeyword={newAutomation.keyword || ""}
-          onSave={handleSaveFlow}
-          onCancel={() => setShowFlowBuilder(false)}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
-          <h2 className="text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Automações Inteligentes</h2>
-          <p className="text-slate-500 dark:text-slate-400 mt-1">Crie fluxos automáticos e menus interativos para seu atendimento.</p>
+          <h2 className="text-3xl font-bold text-slate-900 tracking-tight">Automações Inteligentes</h2>
+          <p className="text-slate-500 mt-1">Crie fluxos automáticos e menus interativos para seu atendimento.</p>
           {planDetails && automations.length >= (planDetails.automation_level === 'basic' ? 5 : 100) && (
             <div className="mt-4">
               <UpgradePrompt 
@@ -594,46 +500,64 @@ export default function Automations() {
         <Button 
           onClick={() => {
             setEditingId(null);
-            setNewAutomation({ name: "" });
-            setShowFlowBuilder(true);
+            setNewAutomation({
+              name: "",
+              trigger: "keyword",
+              keyword: "",
+              response: "",
+              active: true,
+              delay: 2,
+              media_url: "",
+              media_type: "",
+              response_type: "text",
+              buttons_json: JSON.stringify({ text: "Como posso ajudar?", buttons: [] }),
+              list_json: JSON.stringify({ 
+                title: "Escolha uma opção", 
+                description: "Selecione o serviço desejado abaixo:",
+                footer: "Agentex Automation",
+                buttonText: "Ver Opções",
+                sections: [{ title: "Serviços", rows: [] }] 
+              })
+            });
+            setIsAdding(true);
           }} 
           className="gap-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl px-6 py-6 h-auto font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95"
         >
           <Plus size={20} />
-          Novo Fluxo (Chatbot)
+          Nova Automação
         </Button>
       </div>
 
-      {isAdding && !showFlowBuilder && (
+      {isAdding && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start animate-in fade-in slide-in-from-top-4 duration-500">
           <div className="lg:col-span-8">
-            <Card className="border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/30 dark:bg-emerald-500/5 backdrop-blur-xl overflow-hidden relative">
+            <Card className="border-emerald-200 bg-emerald-50/30 backdrop-blur-xl overflow-hidden relative">
               <div className="absolute top-0 right-0 p-4 opacity-5">
                 <Zap size={120} />
               </div>
               <CardHeader className="pb-4">
-                <CardTitle className="text-xl font-bold text-slate-900 dark:text-white">
+                <CardTitle className="text-xl font-bold text-slate-900">
                   {editingId ? "Editar Automação" : "Configurar Nova Automação"}
                 </CardTitle>
-                <CardDescription className="dark:text-slate-400">
+                <CardDescription>
                   {editingId ? "Atualize os dados da sua automação." : "Defina o gatilho e a resposta automática para seus clientes."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6 relative z-10">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Nome da Automação</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Nome da Automação</label>
                     <Input 
                       placeholder="Ex: Boas-vindas" 
                       value={newAutomation.name}
                       onChange={e => setNewAutomation({...newAutomation, name: e.target.value})}
-                      className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-xl focus:ring-emerald-500/20"
+                      className="bg-white border-slate-200 rounded-xl focus:ring-emerald-500/20"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Gatilho (Trigger)</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Gatilho (Trigger)</label>
                     <select 
-                      className="flex h-10 w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/20 dark:text-white"
+                      className="flex h-10 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/20"
                       value={newAutomation.trigger}
                       onChange={e => setNewAutomation({...newAutomation, trigger: e.target.value as any})}
                     >
@@ -642,7 +566,7 @@ export default function Automations() {
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
                       Delay (Segundos)
                       <div className="group relative">
                         <Info size={12} className="text-slate-400 cursor-help" />
@@ -657,14 +581,14 @@ export default function Automations() {
                       max="60"
                       value={newAutomation.delay}
                       onChange={e => setNewAutomation({...newAutomation, delay: parseInt(e.target.value) || 0})}
-                      className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-xl focus:ring-emerald-500/20"
+                      className="bg-white border-slate-200 rounded-xl focus:ring-emerald-500/20"
                     />
                   </div>
                 </div>
 
                 {newAutomation.trigger === "keyword" && (
                   <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
                       Palavra-chave
                       <div className="group relative">
                         <Info size={12} className="text-slate-400 cursor-help" />
@@ -677,13 +601,13 @@ export default function Automations() {
                       placeholder="Ex: preco, ajuda, ola" 
                       value={newAutomation.keyword}
                       onChange={e => setNewAutomation({...newAutomation, keyword: e.target.value})}
-                      className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-xl focus:ring-emerald-500/20"
+                      className="bg-white border-slate-200 rounded-xl focus:ring-emerald-500/20"
                     />
                   </div>
                 )}
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Tipo de Resposta</label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tipo de Resposta</label>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {[
                       { id: 'text', label: 'Texto', icon: MessageSquare },
@@ -692,13 +616,14 @@ export default function Automations() {
                       { id: 'list', label: 'Lista', icon: ChevronRight }
                     ].map((type) => (
                       <button
+                        type="button"
                         key={type.id}
                         onClick={() => setNewAutomation({...newAutomation, response_type: type.id as any})}
                         className={cn(
                           "flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border transition-all",
                           newAutomation.response_type === type.id 
                             ? "bg-emerald-500 border-emerald-500 text-white shadow-lg shadow-emerald-500/20" 
-                            : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:border-emerald-200 dark:hover:border-emerald-500/30"
+                            : "bg-white border-slate-200 text-slate-500 hover:border-emerald-200"
                         )}
                       >
                         <type.icon size={20} />
@@ -709,9 +634,9 @@ export default function Automations() {
                 </div>
 
             {newAutomation.response_type === "buttons" && (
-              <div className="space-y-4 border border-slate-200 dark:border-slate-700 p-6 rounded-2xl bg-slate-50/50 dark:bg-slate-800/50 animate-in zoom-in-95">
+              <div className="space-y-4 border border-slate-200 p-6 rounded-2xl bg-slate-50/50 animate-in zoom-in-95">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Título do Menu</label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Título do Menu</label>
                   <Input 
                     placeholder="Ex: Como posso ajudar hoje?" 
                     value={JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}').text}
@@ -719,18 +644,18 @@ export default function Automations() {
                       const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
                       setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, text: e.target.value})});
                     }}
-                    className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-xl"
+                    className="bg-white border-slate-200 rounded-xl"
                   />
                 </div>
                 
                 <div className="space-y-3">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Botões (Máx 3)</label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Botões (Máx 3)</label>
                   {JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}').buttons.map((btn: any, index: number) => {
                     const slug = slugify(btn.label);
                     const automationExists = automations.some(a => a.trigger === 'keyword' && a.keyword === slug);
                     
                     return (
-                      <div key={index} className="flex flex-col gap-3 p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 shadow-sm group">
+                      <div key={index} className="flex flex-col gap-3 p-4 border border-slate-200 rounded-xl bg-white shadow-sm group">
                         <div className="flex items-center justify-between gap-3">
                           <Input 
                             placeholder="Texto do Botão" 
@@ -742,12 +667,12 @@ export default function Automations() {
                               newButtons[index].id = slugify(e.target.value);
                               setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: newButtons})});
                             }}
-                            className="bg-slate-50 dark:bg-slate-900 border-none rounded-lg"
+                            className="bg-slate-50 border-none rounded-lg"
                           />
                           <Button 
                             variant="ghost" 
                             size="icon"
-                            className="shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" 
+                            className="shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50" 
                             onClick={() => {
                               const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
                               const newButtons = current.buttons.filter((_: any, i: number) => i !== index);
@@ -769,6 +694,7 @@ export default function Automations() {
                                 <AlertTriangle size={12} /> Sem Resposta
                               </span>
                               <button 
+                                type="button"
                                 onClick={() => createResponseForButton(btn.label)}
                                 className="text-emerald-500 hover:underline font-bold uppercase tracking-wider"
                               >
@@ -788,7 +714,7 @@ export default function Automations() {
                         const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
                         setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: [...current.buttons, {id: "", label: ""}]})});
                       }}
-                      className="w-full border-dashed border-2 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-emerald-500 hover:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 rounded-xl py-6"
+                      className="w-full border-dashed border-2 border-slate-200 text-slate-400 hover:text-emerald-500 hover:border-emerald-500 hover:bg-emerald-50 rounded-xl py-6"
                     >
                       <Plus size={18} className="mr-2" />
                       Adicionar Botão
@@ -799,10 +725,10 @@ export default function Automations() {
             )}
 
             {newAutomation.response_type === "list" && (
-              <div className="space-y-4 border border-slate-200 dark:border-slate-700 p-6 rounded-2xl bg-slate-50/50 dark:bg-slate-800/50 animate-in zoom-in-95">
+              <div className="space-y-4 border border-slate-200 p-6 rounded-2xl bg-slate-50/50 animate-in zoom-in-95">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Título da Lista</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Título da Lista</label>
                     <Input 
                       placeholder="Ex: Nossos Serviços" 
                       value={JSON.parse(newAutomation.list_json || '{"title": "Escolha uma opção", "sections": []}').title}
@@ -810,11 +736,11 @@ export default function Automations() {
                         const current = JSON.parse(newAutomation.list_json || '{"title": "Escolha uma opção", "sections": []}');
                         setNewAutomation({...newAutomation, list_json: JSON.stringify({...current, title: e.target.value})});
                       }}
-                      className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-xl"
+                      className="bg-white border-slate-200 rounded-xl"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Texto do Botão</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Texto do Botão</label>
                     <Input 
                       placeholder="Ex: Ver Opções" 
                       value={JSON.parse(newAutomation.list_json || '{"buttonText": "Ver Opções", "sections": []}').buttonText}
@@ -822,19 +748,19 @@ export default function Automations() {
                         const current = JSON.parse(newAutomation.list_json || '{"buttonText": "Ver Opções", "sections": []}');
                         setNewAutomation({...newAutomation, list_json: JSON.stringify({...current, buttonText: e.target.value})});
                       }}
-                      className="bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 rounded-xl"
+                      className="bg-white border-slate-200 rounded-xl"
                     />
                   </div>
                 </div>
                 
                 <div className="space-y-3">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Itens da Lista</label>
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Itens da Lista</label>
                   {JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}').sections[0].rows.map((row: any, index: number) => {
                     const slug = slugify(row.title);
                     const automationExists = automations.some(a => a.trigger === 'keyword' && a.keyword === slug);
                     
                     return (
-                      <div key={index} className="flex flex-col gap-3 p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 shadow-sm group">
+                      <div key={index} className="flex flex-col gap-3 p-4 border border-slate-200 rounded-xl bg-white shadow-sm group">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 space-y-2">
                             <Input 
@@ -848,7 +774,7 @@ export default function Automations() {
                                 current.sections[0].rows = newRows;
                                 setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
                               }}
-                              className="bg-slate-50 dark:bg-slate-900 border-none rounded-lg text-sm font-bold"
+                              className="bg-slate-50 border-none rounded-lg text-sm font-bold"
                             />
                             <Input 
                               placeholder="Descrição (Opcional)" 
@@ -860,13 +786,13 @@ export default function Automations() {
                                 current.sections[0].rows = newRows;
                                 setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
                               }}
-                              className="bg-slate-50 dark:bg-slate-900 border-none rounded-lg text-xs"
+                              className="bg-slate-50 border-none rounded-lg text-xs"
                             />
                           </div>
                           <Button 
                             variant="ghost" 
                             size="icon"
-                            className="shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" 
+                            className="shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50" 
                             onClick={() => {
                               const current = JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}');
                               const newRows = current.sections[0].rows.filter((_: any, i: number) => i !== index);
@@ -889,6 +815,7 @@ export default function Automations() {
                                 <AlertTriangle size={12} /> Sem Resposta
                               </span>
                               <button 
+                                type="button"
                                 onClick={() => createResponseForButton(row.title)}
                                 className="text-emerald-500 hover:underline font-bold uppercase tracking-wider"
                               >
@@ -909,7 +836,7 @@ export default function Automations() {
                         current.sections[0].rows.push({id: "", title: "", description: ""});
                         setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
                       }}
-                      className="w-full border-dashed border-2 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-emerald-500 hover:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 rounded-xl py-6"
+                      className="w-full border-dashed border-2 border-slate-200 text-slate-400 hover:text-emerald-500 hover:border-emerald-500 hover:bg-emerald-50 rounded-xl py-6"
                     >
                       <Plus size={18} className="mr-2" />
                       Adicionar Item à Lista
@@ -921,18 +848,30 @@ export default function Automations() {
 
             {(newAutomation.response_type === "text" || newAutomation.response_type === "audio") && (
               <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Resposta Automática</label>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  {newAutomation.response_type === "audio" ? "Legenda do Áudio (Opcional)" : "Resposta Automática"}
+                </label>
                 <textarea 
-                  className="flex min-h-[120px] w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/20 dark:text-white resize-none"
-                  placeholder="Digite a mensagem que será enviada..."
+                  className="flex min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/20 resize-none"
+                  placeholder={newAutomation.response_type === "audio" ? "Digite uma legenda para o áudio..." : "Digite a mensagem que será enviada..."}
                   value={newAutomation.response}
                   onChange={e => setNewAutomation({...newAutomation, response: e.target.value})}
                 />
               </div>
             )}
 
+            {newAutomation.response_type === "audio" && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Gravar Áudio</label>
+                <AudioRecorder 
+                  onUploadComplete={(url) => setNewAutomation(prev => ({ ...prev, media_url: url, media_type: 'audio' }))}
+                  onCancel={() => {}}
+                />
+              </div>
+            )}
+
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Anexo (Opcional)</label>
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Anexo (Opcional)</label>
               <div className="flex flex-wrap items-center gap-4">
                 <input 
                   type="file" 
@@ -944,7 +883,7 @@ export default function Automations() {
                 <Button 
                   type="button" 
                   variant="outline" 
-                  className="gap-2 rounded-xl border-slate-200 dark:border-slate-700 dark:text-slate-300"
+                  className="gap-2 rounded-xl border-slate-200"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploadingMedia}
                 >
@@ -957,7 +896,7 @@ export default function Automations() {
                 </Button>
 
                 {newAutomation.media_url && (
-                  <div className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl text-sm border border-emerald-500/20 animate-in fade-in zoom-in-95">
+                  <div className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 text-emerald-600 rounded-xl text-sm border border-emerald-500/20 animate-in fade-in zoom-in-95">
                     {newAutomation.media_type === 'image' && <ImageIcon size={16} />}
                     {newAutomation.media_type === 'audio' && <Music size={16} />}
                     {newAutomation.media_type === 'document' && <FileText size={16} />}
@@ -972,11 +911,11 @@ export default function Automations() {
                   </div>
                 )}
               </div>
-              <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">Suporta imagens, áudios e PDFs (Máx 10MB).</p>
+              <p className="text-[10px] text-slate-400 italic">Suporta imagens, áudios e PDFs (Máx 10MB).</p>
             </div>
 
-                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-                  <Button variant="ghost" onClick={cancelEdit} className="rounded-xl dark:text-slate-400">Cancelar</Button>
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                  <Button variant="ghost" onClick={cancelEdit} className="rounded-xl">Cancelar</Button>
                   <Button 
                     onClick={handleAdd}
                     className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl px-8 font-bold"
@@ -990,7 +929,7 @@ export default function Automations() {
 
           <div className="lg:col-span-4 sticky top-24">
             <div className="space-y-4">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 text-center">Pré-visualização WhatsApp</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 text-center">Pré-visualização WhatsApp</p>
               <WhatsAppPreview automation={newAutomation} />
             </div>
           </div>
@@ -999,18 +938,18 @@ export default function Automations() {
 
       <div className="grid grid-cols-1 gap-6">
         {automations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 md:py-32 bg-white dark:bg-slate-900 rounded-3xl md:rounded-[3rem] border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 space-y-6">
-            <div className="w-20 h-20 md:w-24 md:h-24 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center">
-              <Zap strokeWidth={1} className="size-10 md:size-12 text-slate-200 dark:text-slate-700" />
+          <div className="flex flex-col items-center justify-center py-16 md:py-32 bg-white rounded-3xl md:rounded-[3rem] border border-dashed border-slate-200 text-slate-400 space-y-6">
+            <div className="w-20 h-20 md:w-24 md:h-24 bg-slate-50 rounded-full flex items-center justify-center">
+              <Zap strokeWidth={1} className="size-10 md:size-12 text-slate-200" />
             </div>
             <div className="text-center space-y-2 px-4">
-              <p className="text-lg md:text-xl font-bold text-slate-900 dark:text-white">Nenhuma automação ativa</p>
-              <p className="text-sm md:text-base text-slate-500 dark:text-slate-400 max-w-xs mx-auto">Comece criando sua primeira resposta automática para otimizar seu tempo.</p>
+              <p className="text-lg md:text-xl font-bold text-slate-900">Nenhuma automação ativa</p>
+              <p className="text-sm md:text-base text-slate-500 max-w-xs mx-auto">Comece criando sua primeira resposta automática para otimizar seu tempo.</p>
             </div>
             <Button 
               variant="outline" 
               onClick={() => setIsAdding(true)}
-              className="rounded-2xl px-8 py-6 h-auto font-bold border-slate-200 dark:border-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 hover:border-emerald-200"
+              className="rounded-2xl px-8 py-6 h-auto font-bold border-slate-200 hover:bg-emerald-50 hover:border-emerald-200"
             >
               Criar Agora
             </Button>
@@ -1027,19 +966,19 @@ export default function Automations() {
                     <div className="flex items-center gap-4 min-w-0">
                       <div className={cn(
                         "h-12 w-12 md:h-14 md:w-14 rounded-2xl flex items-center justify-center shrink-0 transition-colors duration-500",
-                        auto.active ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "bg-slate-100 dark:bg-slate-800 text-slate-400"
+                        auto.active ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "bg-slate-100 text-slate-400"
                       )}>
                         <Zap className="size-6 md:size-7" />
                       </div>
                       <div className="min-w-0">
-                        <h3 className="text-base md:text-lg font-bold text-slate-900 dark:text-white truncate">{auto.name}</h3>
+                        <h3 className="text-base md:text-lg font-bold text-slate-900 truncate">{auto.name}</h3>
                         <div className="flex flex-wrap items-center gap-2 md:gap-3 mt-1">
-                          <span className="flex items-center gap-1 text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                          <span className="flex items-center gap-1 text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-slate-400">
                             {auto.trigger === "keyword" ? <MessageSquare className="size-2.5 md:size-3" /> : <Users className="size-2.5 md:size-3" />}
                             {auto.trigger === "keyword" ? `"${auto.keyword}"` : "Novo Contato"}
                           </span>
-                          <span className="text-slate-200 dark:text-slate-800 hidden md:inline">•</span>
-                          <span className="flex items-center gap-1 text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                          <span className="text-slate-200 hidden md:inline">•</span>
+                          <span className="flex items-center gap-1 text-[9px] md:text-[10px] font-bold uppercase tracking-wider text-slate-400">
                             <Clock className="size-2.5 md:size-3" />
                             {auto.delay || 0}s
                           </span>
@@ -1050,10 +989,9 @@ export default function Automations() {
                       <Button 
                         variant="ghost" 
                         size="icon"
-                        className="text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 rounded-xl h-10 w-10"
+                        className="text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl h-10 w-10"
                         onClick={() => {
                           handleEdit(auto);
-                          setShowFlowBuilder(true);
                         }}
                       >
                         <Settings2 size={20} />
@@ -1061,7 +999,7 @@ export default function Automations() {
                       <Button 
                         variant="ghost" 
                         size="icon"
-                        className={cn("rounded-xl h-10 w-10", auto.active ? "text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/20" : "text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-950/20")}
+                        className={cn("rounded-xl h-10 w-10", auto.active ? "text-amber-500 hover:bg-amber-50" : "text-emerald-500 hover:bg-emerald-50")}
                         onClick={() => toggleActive(auto.id, auto.active)}
                       >
                         {auto.active ? <Pause size={20} /> : <Play size={20} />}
@@ -1069,7 +1007,7 @@ export default function Automations() {
                       <Button 
                         variant="ghost" 
                         size="icon"
-                        className="text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-xl h-10 w-10"
+                        className="text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl h-10 w-10"
                         onClick={() => handleDelete(auto.id)}
                       >
                         <Trash2 size={20} />
@@ -1077,17 +1015,17 @@ export default function Automations() {
                     </div>
                   </div>
 
-                  <div className="mt-6 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800/50 relative overflow-hidden">
+                  <div className="mt-6 p-4 bg-slate-50 rounded-2xl border border-slate-100 relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/20" />
-                    <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.2em] mb-2">Resposta Automática</p>
-                    <p className="text-sm text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">Resposta Automática</p>
+                    <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed">
                       {auto.response_type === 'buttons' ? 'Menu de Botões Interativo' : 
                        auto.response_type === 'list' ? 'Menu de Lista Interativo' : 
                        auto.response}
                     </p>
                     
                     {auto.media_url && (
-                      <div className="mt-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 w-fit px-3 py-1.5 rounded-lg border border-emerald-500/10">
+                      <div className="mt-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-500/5 w-fit px-3 py-1.5 rounded-lg border border-emerald-500/10">
                         {auto.media_type === 'image' && <ImageIcon size={12} />}
                         {auto.media_type === 'audio' && <Music size={12} />}
                         {auto.media_type === 'document' && <FileText size={12} />}
@@ -1102,7 +1040,7 @@ export default function Automations() {
         )}
       </div>
 
-      <Card className="bg-slate-900 dark:bg-emerald-950 text-white border-none overflow-hidden relative shadow-2xl rounded-3xl md:rounded-[3rem]">
+      <Card className="bg-slate-900 text-white border-none overflow-hidden relative shadow-2xl rounded-3xl md:rounded-[3rem]">
         <div className="absolute top-0 right-0 p-6 md:p-12 opacity-10 rotate-12">
           <Zap className="size-[120px] md:size-[180px]" />
         </div>
