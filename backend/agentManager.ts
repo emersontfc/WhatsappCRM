@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "./supabaseAdmin";
+import { supabaseAdmin } from "./supabaseAdmin.ts";
 import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
 

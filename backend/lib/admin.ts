@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "../supabaseAdmin";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 export const getAdminEmails = (): string[] => {
   const envAdminEmails = process.env.ADMIN_EMAIL || "alcindacharles@gmail.com,emersontorres42@gmail.com";

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { supabaseAdmin } from "../supabaseAdmin";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 import jwt from "jsonwebtoken";
 
 export interface AuthRequest extends Request {

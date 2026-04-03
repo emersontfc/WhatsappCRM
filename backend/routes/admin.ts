@@ -1,6 +1,6 @@
 import express from "express";
-import { supabaseAdmin } from "../supabaseAdmin";
-import { authorizeAdmin, AuthRequest } from "../middleware/auth";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
+import { authorizeAdmin, AuthRequest } from "../middleware/auth.ts";
 
 const router = express.Router();
 

@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
-import { authenticate } from "../middleware/auth";
+import { authenticate } from "../middleware/auth.ts";
 
 const router = express.Router();
 

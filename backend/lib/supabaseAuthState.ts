@@ -5,7 +5,7 @@ import {
   initAuthCreds, 
   BufferJSON 
 } from "@whiskeysockets/baileys";
-import { supabaseAdmin } from "../supabaseAdmin";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 /**
  * Custom Baileys authentication state handler that persists everything in a single Supabase JSONB column.

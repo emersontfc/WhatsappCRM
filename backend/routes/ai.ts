@@ -1,8 +1,8 @@
 import express from "express";
 import { GoogleGenAI } from "@google/genai";
-import { decrypt, runAI } from "../agentManager";
-import { AuthRequest } from "../middleware/auth";
-import { supabaseAdmin } from "../supabaseAdmin";
+import { decrypt, runAI } from "../agentManager.ts";
+import { AuthRequest } from "../middleware/auth.ts";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 const router = express.Router();
 

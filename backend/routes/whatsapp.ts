@@ -1,8 +1,8 @@
 import express from "express";
-import { whatsappManager } from "../whatsappManager";
-import { AuthRequest } from "../middleware/auth";
-import { getPlan } from "../lib/plan";
-import { supabaseAdmin } from "../supabaseAdmin";
+import { whatsappManager } from "../whatsappManager.ts";
+import { AuthRequest } from "../middleware/auth.ts";
+import { getPlan } from "../lib/plan.ts";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 const router = express.Router();
 

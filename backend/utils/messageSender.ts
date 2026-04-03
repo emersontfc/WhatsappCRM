@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "../supabaseAdmin";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 export async function sendWhatsAppMessage(sock: any, jid: string, messageData: {
   text?: string;

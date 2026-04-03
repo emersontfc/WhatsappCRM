@@ -1,5 +1,5 @@
-import { supabaseAdmin } from "./supabaseAdmin";
-import { whatsappManager } from "./whatsappManager";
+import { supabaseAdmin } from "./supabaseAdmin.ts";
+import { whatsappManager } from "./whatsappManager.ts";
 
 export function startScheduler() {
   console.log("Message scheduler started.");

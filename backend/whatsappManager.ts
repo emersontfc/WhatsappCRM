@@ -12,10 +12,10 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
-import { supabaseAdmin } from "./supabaseAdmin";
-import { handleIncomingMessage } from "./automation";
-import { handleAgentMessage } from "./agent";
-import { useSupabaseAuthState } from "./lib/supabaseAuthState";
+import { supabaseAdmin } from "./supabaseAdmin.ts";
+import { handleIncomingMessage } from "./automationManager.ts";
+import { handleAgentMessage } from "./agentManager.ts";
+import { useSupabaseAuthState } from "./lib/supabaseAuthState.ts";
 
 const logger = pino({ level: "silent" });
 
@@ -348,11 +348,118 @@ export class WhatsAppManager {
     return this.sessions.get(userId);
   }
 
-  async sendMessage(userId: string, jid: string, text: string) {
+  getMe(userId: string) {
     const session = this.sessions.get(userId);
+    return session?.socket?.user;
+  }
+
+  async ensureConnection(userId: string) {
+    let session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") {
+      await this.createSession(userId);
+      let attempts = 0;
+      while (attempts < 20) {
+        session = this.sessions.get(userId);
+        if (session?.status === "connected") break;
+        await new Promise(resolve => setTimeout(resolve, 500));
+        attempts++;
+      }
+    }
+    return this.sessions.get(userId);
+  }
+
+  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number) {
+    const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") {
       throw new Error("WhatsApp session not connected.");
     }
+
+    if (mediaUrl && mediaType) {
+      if (mediaType === 'image') {
+        return await session.socket.sendMessage(jid, { image: { url: mediaUrl }, caption: text });
+      } else if (mediaType === 'video') {
+        return await session.socket.sendMessage(jid, { video: { url: mediaUrl }, caption: text });
+      } else if (mediaType === 'audio') {
+        return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: 'audio/mp4', ptt: true, seconds: duration });
+      } else if (mediaType === 'document') {
+        return await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: 'application/pdf', fileName: 'documento.pdf', caption: text });
+      }
+    }
+
+    return await session.socket.sendMessage(jid, { text });
+  }
+
+  async getGroups(userId: string) {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    return await session.socket.groupFetchAllParticipating();
+  }
+
+  async getGroupMetadata(userId: string, jid: string) {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    return await session.socket.groupMetadata(jid);
+  }
+
+  async updateGroupParticipants(userId: string, jid: string, participants: string[], action: "add" | "remove" | "promote" | "demote") {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    return await session.socket.groupParticipantsUpdate(jid, participants, action);
+  }
+
+  async updateGroupSubject(userId: string, jid: string, subject: string) {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    return await session.socket.groupUpdateSubject(jid, subject);
+  }
+
+  async leaveGroup(userId: string, jid: string) {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+    return await session.socket.groupLeave(jid);
+  }
+
+  async pauseSession(userId: string) {
+    const session = this.sessions.get(userId);
+    if (session) {
+      try {
+        session.socket.end(undefined);
+      } catch (e) {}
+      this.sessions.delete(userId);
+    }
+    return { success: true };
+  }
+
+  async reconnectAllSessions() {
+    console.log("[WhatsApp] Reconnecting all sessions from database...");
+    const { data: sessions } = await supabaseAdmin
+      .from("whatsapp_sessions")
+      .select("user_id");
+
+    if (sessions) {
+      for (const s of sessions) {
+        console.log(`[WhatsApp] Auto-reconnecting session for user ${s.user_id}`);
+        this.createSession(s.user_id).catch(err => {
+          console.error(`Failed to reconnect session for ${s.user_id}:`, err);
+        });
+      }
+    }
+  }
+
+  async sendMenu(userId: string, jid: string, menu: any) {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+
+    const { name, description, items } = menu;
+    let text = `*${name}*\n\n${description}\n\n`;
+    
+    if (items && Array.isArray(items)) {
+      items.forEach((item: any, index: number) => {
+        text += `${index + 1}. ${item.label}\n`;
+      });
+    }
+
+    text += `\nDigite o número da opção desejada.`;
     return await session.socket.sendMessage(jid, { text });
   }
 

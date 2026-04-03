@@ -2,21 +2,21 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
-import whatsappRoutes from "./backend/routes/whatsapp";
-import aiRoutes from "./backend/routes/ai";
-import adminRoutes from "./backend/routes/admin";
-import authRoutes from "./backend/routes/auth";
-import agentRoutes from "./backend/routes/agent";
-import templateRoutes from "./backend/routes/templates";
-import packRoutes from "./backend/routes/packs";
-import mediaRoutes from "./backend/routes/media";
-import menuRoutes from "./backend/routes/menus";
-import { startScheduler } from "./backend/scheduler";
-import { authenticate } from "./backend/middleware/auth";
+import whatsappRoutes from "./backend/routes/whatsapp.ts";
+import aiRoutes from "./backend/routes/ai.ts";
+import adminRoutes from "./backend/routes/admin.ts";
+import authRoutes from "./backend/routes/auth.ts";
+import agentRoutes from "./backend/routes/agent.ts";
+import templateRoutes from "./backend/routes/templates.ts";
+import packRoutes from "./backend/routes/packs.ts";
+import mediaRoutes from "./backend/routes/media.ts";
+import menuRoutes from "./backend/routes/menus.ts";
+import { startScheduler } from "./backend/scheduler.ts";
+import { authenticate } from "./backend/middleware/auth.ts";
 import fs from "fs";
 
-import { whatsappManager } from "./backend/whatsappManager";
-import { supabaseAdmin } from "./backend/supabaseAdmin";
+import { whatsappManager } from "./backend/whatsappManager.ts";
+import { supabaseAdmin } from "./backend/supabaseAdmin.ts";
 
 async function initDatabase() {
   try {
