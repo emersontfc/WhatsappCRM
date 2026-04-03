@@ -3,101 +3,70 @@ import {
   AuthenticationCreds, 
   SignalDataTypeMap, 
   initAuthCreds, 
-  BufferJSON, 
-  proto 
+  BufferJSON 
 } from "@whiskeysockets/baileys";
 import { supabaseAdmin } from "../supabaseAdmin";
 
-export const useSupabaseAuthState = async (userId: string): Promise<{ state: AuthenticationState, saveCreds: () => Promise<void> }> => {
-  
-  const writeData = async (data: any, category: string, keyId?: string) => {
-    const payload = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
-    
-    const { error } = await supabaseAdmin
-      .from("whatsapp_sessions")
-      .upsert({
-        user_id: userId,
-        category,
-        key_id: keyId || "default",
-        data: payload,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "user_id,category,key_id" });
+/**
+ * Custom Baileys authentication state handler that persists everything in a single Supabase JSONB column.
+ * This ensures session persistence on platforms like Render without local file storage.
+ */
+export const useSupabaseAuthState = async (userId: string) => {
+  // Load session from Supabase
+  const { data: row } = await supabaseAdmin
+    .from("whatsapp_sessions")
+    .select("session_data")
+    .eq("user_id", userId)
+    .maybeSingle();
 
-    if (error) {
-      console.error(`[SupabaseAuthState] Error writing ${category}:${keyId}:`, error.message);
-    }
-  };
+  // Parse session data (reviving buffers)
+  let sessionData: { creds: AuthenticationCreds; keys: any } = row?.session_data
+    ? JSON.parse(JSON.stringify(row.session_data), BufferJSON.reviver)
+    : { creds: initAuthCreds(), keys: {} };
 
-  const readData = async (category: string, keyId?: string) => {
+  // Helper to save state to Supabase
+  const saveState = async () => {
     try {
-      const { data, error } = await supabaseAdmin
+      // Stringify with replacer to handle buffers
+      const payload = JSON.parse(JSON.stringify(sessionData), BufferJSON.replacer);
+      
+      await supabaseAdmin
         .from("whatsapp_sessions")
-        .select("data")
-        .eq("user_id", userId)
-        .eq("category", category)
-        .eq("key_id", keyId || "default")
-        .maybeSingle();
-
-      if (error) {
-        console.error(`[SupabaseAuthState] Error reading ${category}:${keyId}:`, error.message);
-        return null;
-      }
-
-      return data ? JSON.parse(JSON.stringify(data.data), BufferJSON.reviver) : null;
+        .upsert({
+          user_id: userId,
+          session_data: payload,
+          updated_at: new Date().toISOString()
+        }, { onConflict: "user_id" });
     } catch (err) {
-      console.error(`[SupabaseAuthState] Error parsing ${category}:${keyId}:`, err);
-      return null;
+      console.error(`[WhatsApp] Error saving auth state for ${userId}:`, err);
     }
   };
 
-  const removeData = async (category: string, keyId?: string) => {
-    const { error } = await supabaseAdmin
-      .from("whatsapp_sessions")
-      .delete()
-      .eq("user_id", userId)
-      .eq("category", category)
-      .eq("key_id", keyId || "default");
-
-    if (error) {
-      console.error(`[SupabaseAuthState] Error removing ${category}:${keyId}:`, error.message);
+  const state: AuthenticationState = {
+    creds: sessionData.creds,
+    keys: {
+      get: (type, ids) => {
+        const data: any = {};
+        for (const id of ids) {
+          let value = sessionData.keys[type]?.[id];
+          if (value) {
+            data[id] = value;
+          }
+        }
+        return data;
+      },
+      set: (data) => {
+        for (const type in data) {
+          if (!sessionData.keys[type]) sessionData.keys[type] = {};
+          Object.assign(sessionData.keys[type], data[type]);
+        }
+        return saveState();
+      }
     }
   };
-
-  const creds: AuthenticationCreds = await readData("creds") || initAuthCreds();
 
   return {
-    state: {
-      creds,
-      keys: {
-        get: async (type, ids) => {
-          const data: { [id: string]: SignalDataTypeMap[typeof type] } = {};
-          await Promise.all(
-            ids.map(async (id) => {
-              let value = await readData(type, id);
-              if (type === "app-state-sync-key" && value) {
-                value = proto.Message.AppStateSyncKeyData.fromObject(value);
-              }
-              data[id] = value;
-            })
-          );
-          return data;
-        },
-        set: async (data) => {
-          const tasks: Promise<void>[] = [];
-          for (const category in data) {
-            for (const id in data[category as keyof SignalDataTypeMap]) {
-              const value = data[category as keyof SignalDataTypeMap]![id];
-              if (value) {
-                tasks.push(writeData(value, category, id));
-              } else {
-                tasks.push(removeData(category, id));
-              }
-            }
-          }
-          await Promise.all(tasks);
-        },
-      },
-    },
-    saveCreds: () => writeData(creds, "creds"),
+    state,
+    saveCreds: saveState
   };
 };
