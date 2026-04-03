@@ -53,7 +53,7 @@ async function initDatabase() {
 
       CREATE TABLE IF NOT EXISTS whatsapp_sessions (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        user_id TEXT UNIQUE NOT NULL,
+        user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
         session_data JSONB NOT NULL,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );

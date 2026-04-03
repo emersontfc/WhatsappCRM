@@ -215,7 +215,7 @@ export default function Dashboard() {
         // Check how long it's been showing QR
         if (!qrSince.current) {
           qrSince.current = Date.now();
-        } else if (Date.now() - qrSince.current > 60000) { // 60 seconds timeout
+        } else if (Date.now() - qrSince.current > 120000) { // 120 seconds timeout for QR
           console.log("[WhatsApp] QR timeout reached, resetting...");
           qrSince.current = null;
           await resetSession();
@@ -230,25 +230,18 @@ export default function Dashboard() {
         
         if (qrData.qr) {
           setQr(qrData.qr);
-          setStatus(data.status);
-        } else if (qrData.status === "connecting") {
-          // Just wait if it's still connecting
+          setStatus("qr");
+        } else {
+          // If status is QR but no code yet, just wait
           setStatus("connecting");
           setQr(null);
-        } else if (!qrData.qr && data.status !== "connecting") {
-          // Only reconnect if we are supposed to have a code but don't, and we aren't already connecting
-          if (manual) {
-            toast.info("Gerando novo código...");
-            await connect();
-          }
         }
-        if (manual) toast.info("Aguardando leitura do QR Code.");
       } else if (data.status === "connecting") {
         qrSince.current = null;
         // Check how long it's been connecting
         if (!connectingSince.current) {
           connectingSince.current = Date.now();
-        } else if (Date.now() - connectingSince.current > 30000) { // 30 seconds timeout
+        } else if (Date.now() - connectingSince.current > 60000) { // 60 seconds timeout for connecting
           console.log("[WhatsApp] Connecting timeout reached, resetting...");
           connectingSince.current = null;
           await resetSession();

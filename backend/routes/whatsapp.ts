@@ -40,14 +40,14 @@ router.get("/qr", (req: AuthRequest, res) => {
     const session = whatsappManager.getSession(userId);
     if (!session) {
       console.log(`[WhatsApp QR] No session found for user: ${userId}`);
-      return res.json({ success: true, status: "disconnected" });
+      return res.json({ success: true, status: "disconnected", qr: null });
     }
 
     console.log(`[WhatsApp QR] Returning QR for user: ${userId}, status: ${session.status}, hasQR: ${!!session.qr}`);
 
     res.json({
       success: true,
-      qr: session.qr,
+      qr: session.qr || null,
       status: session.status
     });
   } catch (error) {

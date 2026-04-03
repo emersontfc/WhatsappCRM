@@ -66,25 +66,29 @@ export class WhatsAppManager {
       await this.log(userId, "info", `Iniciando conexão WhatsApp (Tentativa ${attempts + 1})...`);
       
       const { state, saveCreds } = await useSupabaseAuthState(userId);
+      console.log(`[WhatsApp] Auth state loaded for ${userId}`);
       
       let version;
       try {
+        console.log(`[WhatsApp] Fetching latest Baileys version...`);
         const v = await fetchLatestBaileysVersion();
         version = v.version;
+        console.log(`[WhatsApp] Using Baileys version: ${version.join('.')}`);
       } catch (err) {
+        console.warn(`[WhatsApp] Failed to fetch Baileys version, using fallback:`, err);
         version = [2, 3000, 1017531287];
       }
 
       const socket = makeWASocket({
         version,
         printQRInTerminal: false,
-        browser: Browsers.ubuntu("Chrome"),
+        browser: Browsers.macOS("Desktop"),
         auth: state,
         logger,
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        connectTimeoutMs: 90000,
+        connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 15000,
         retryRequestDelayMs: 5000,
@@ -101,6 +105,7 @@ export class WhatsAppManager {
         if (!session) return;
 
         if (qr) {
+          console.log(`[WhatsApp] QR Code received for ${userId}`);
           session.qr = qr;
           session.status = "qr";
           onUpdate?.("qr", qr);
