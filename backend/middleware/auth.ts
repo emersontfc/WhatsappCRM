@@ -19,7 +19,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   const token = authHeader.split(" ")[1];
 
   if (!supabaseAdmin) {
-    console.error("[Auth Middleware] Supabase Admin not initialized. Cannot verify token.");
+    console.error("[Auth Middleware] Supabase Admin not initialized.");
     return res.status(500).json({ error: "Authentication service unavailable" });
   }
 
@@ -27,7 +27,6 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
-      console.error("[Auth Middleware] Token verification failed:", error?.message || "No user found");
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 

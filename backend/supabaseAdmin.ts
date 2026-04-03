@@ -3,33 +3,16 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
-const supabaseAnonKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();
-const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "").trim();
+const supabaseUrl = (process.env.SUPABASE_URL || "").trim();
+const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
-// Handle case where user only provides the project ref
-let finalSupabaseUrl = supabaseUrl;
-if (finalSupabaseUrl && !finalSupabaseUrl.startsWith("http")) {
-  finalSupabaseUrl = `https://${finalSupabaseUrl}.supabase.co`;
+if (!supabaseUrl || !supabaseServiceRoleKey) {
+  console.warn("[Supabase] WARNING: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing in environment variables.");
 }
-
-console.log("[Supabase] Initializing clients...");
-console.log("[Supabase] URL present:", !!finalSupabaseUrl);
-console.log("[Supabase] ANON_KEY present:", !!supabaseAnonKey);
-console.log("[Supabase] SERVICE_ROLE_KEY present:", !!supabaseServiceRoleKey);
-
-if (!finalSupabaseUrl) {
-  console.warn("[Supabase] CRITICAL: SUPABASE_URL is missing. Backend functionality will be limited.");
-}
-
-// Client for public/auth operations (anon key)
-export const supabaseClient = finalSupabaseUrl && supabaseAnonKey 
-  ? createClient(finalSupabaseUrl, supabaseAnonKey)
-  : null;
 
 // Admin client for backend operations (service role key)
-export const supabaseAdmin = finalSupabaseUrl && supabaseServiceRoleKey
-  ? createClient(finalSupabaseUrl, supabaseServiceRoleKey, {
+export const supabaseAdmin = (supabaseUrl && supabaseServiceRoleKey)
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
       auth: {
         autoRefreshToken: false,
         persistSession: false
@@ -37,8 +20,11 @@ export const supabaseAdmin = finalSupabaseUrl && supabaseServiceRoleKey
     })
   : null as any;
 
+// Alias for convenience if needed, but we use supabaseAdmin throughout the app
+export const supabase = supabaseAdmin;
+
 if (supabaseAdmin) {
-  console.log(`[Supabase Admin] Initialized for URL: ${finalSupabaseUrl.substring(0, 15)}...`);
+  console.log(`[Supabase Admin] Initialized successfully.`);
 } else {
-  console.warn("[Supabase Admin] FAILED to initialize. SERVICE_ROLE_KEY may be missing.");
+  console.error("[Supabase Admin] FAILED to initialize. Backend will not function correctly.");
 }
