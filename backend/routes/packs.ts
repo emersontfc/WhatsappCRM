@@ -102,13 +102,21 @@ router.delete("/:id", async (req: AuthRequest, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
-    const { error } = await supabaseAdmin
+    console.log(`[QuickReply] Attempting to delete reply ${id} for user ${userId}`);
+
+    const { data, error, count } = await supabaseAdmin
       .from("quick_reply")
       .delete()
       .eq("id", id)
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .select();
 
-    if (error) throw error;
+    if (error) {
+      console.error(`[QuickReply] Delete error:`, error);
+      throw error;
+    }
+
+    console.log(`[QuickReply] Delete result:`, { count, data });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });

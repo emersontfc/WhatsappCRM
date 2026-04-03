@@ -25,7 +25,7 @@ export default function Landing() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-emerald-500 selection:text-white">
+    <div className="min-h-[100dvh] bg-white font-sans text-slate-900 selection:bg-emerald-500 selection:text-white overflow-x-hidden">
       {/* Navbar */}
       <nav className="fixed top-0 w-full bg-white/90 backdrop-blur-xl z-50 border-b border-slate-100 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -91,7 +91,7 @@ export default function Landing() {
               <span>O CRM #1 de Moçambique</span>
             </div>
             
-            <h1 className="text-6xl sm:text-7xl lg:text-8xl font-black tracking-tighter leading-[0.9] uppercase italic text-slate-900">
+            <h1 className="text-4xl sm:text-6xl lg:text-8xl font-black tracking-tighter leading-[0.9] uppercase italic text-slate-900">
               Venda no <br />
               <span className="text-emerald-600">Automático</span> <br />
               com IA.
@@ -142,14 +142,14 @@ export default function Landing() {
               />
               
               {/* Overlay elements */}
-              <div className="absolute bottom-10 right-10 bg-white p-6 rounded-3xl shadow-2xl border border-slate-100 animate-float">
-                <div className="flex items-center gap-4">
-                  <div className="h-12 w-12 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-600">
-                    <Zap size={24} />
+              <div className="absolute bottom-4 right-4 sm:bottom-10 sm:right-10 bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-100 animate-float">
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <div className="h-10 w-10 sm:h-12 sm:w-12 bg-emerald-100 rounded-xl sm:rounded-2xl flex items-center justify-center text-emerald-600">
+                    <Zap size={20} className="sm:w-6 sm:h-6" />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Vendas Hoje</p>
-                    <p className="text-2xl font-black text-slate-900">42.500 MT</p>
+                    <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400">Vendas Hoje</p>
+                    <p className="text-lg sm:text-2xl font-black text-slate-900">42.500 MT</p>
                   </div>
                 </div>
               </div>
@@ -206,7 +206,7 @@ export default function Landing() {
               <Bot className="w-4 h-4" />
               <span>Inteligência Artificial Nativa</span>
             </div>
-            <h2 className="text-5xl sm:text-7xl font-black uppercase italic tracking-tighter leading-[0.9] text-slate-900">
+            <h2 className="text-4xl sm:text-7xl font-black uppercase italic tracking-tighter leading-[0.9] text-slate-900">
               Seu melhor <br />
               <span className="text-emerald-600">Vendedor</span> <br />
               não dorme.
@@ -260,7 +260,7 @@ export default function Landing() {
       <section id="pricing" className="py-32 bg-slate-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-24 space-y-4">
-            <h2 className="text-6xl sm:text-8xl font-black uppercase italic tracking-tighter text-slate-900">Preços.</h2>
+            <h2 className="text-5xl sm:text-8xl font-black uppercase italic tracking-tighter text-slate-900">Preços.</h2>
             <p className="text-xl font-bold text-slate-500 uppercase tracking-widest">Escolha o plano ideal para o seu crescimento.</p>
           </div>
 
@@ -269,18 +269,18 @@ export default function Landing() {
               const isPopular = plan.name === "Pro";
               return (
                 <div key={plan.id} className={cn(
-                  "p-12 bg-white border-2 flex flex-col relative transition-all duration-500 rounded-[3rem]",
+                  "p-8 sm:p-12 bg-white border-2 flex flex-col relative transition-all duration-500 rounded-[2rem] sm:rounded-[3rem]",
                   isPopular ? "border-emerald-500 shadow-[0_40px_80px_-20px_rgba(16,185,129,0.2)] lg:scale-110 z-10" : "border-slate-100 shadow-xl"
                 )}>
                   {isPopular && (
-                    <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-emerald-500 text-white px-8 py-2 font-black uppercase text-xs tracking-widest rounded-full shadow-lg">
+                    <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-emerald-500 text-white px-6 sm:px-8 py-2 font-black uppercase text-[10px] sm:text-xs tracking-widest rounded-full shadow-lg">
                       RECOMENDADO
                     </div>
                   )}
-                  <h3 className="text-3xl font-black uppercase italic mb-6 tracking-tighter text-slate-900">{plan.name}</h3>
-                  <div className="mb-10">
-                    <span className="text-6xl font-black tracking-tighter text-slate-900">{plan.price}</span>
-                    <span className="text-xl font-black uppercase text-slate-400"> MT/mês</span>
+                  <h3 className="text-2xl sm:text-3xl font-black uppercase italic mb-6 tracking-tighter text-slate-900">{plan.name}</h3>
+                  <div className="mb-8 sm:mb-10">
+                    <span className="text-5xl sm:text-6xl font-black tracking-tighter text-slate-900">{plan.price}</span>
+                    <span className="text-lg sm:text-xl font-black uppercase text-slate-400"> MT/mês</span>
                   </div>
                   <ul className="space-y-6 mb-12 flex-1">
                     <li className="flex items-center gap-4 font-bold text-slate-600">

@@ -16,7 +16,12 @@ import {
   Package,
   Terminal,
   Rocket,
-  Clock
+  Clock,
+  MessageCircle,
+  MessageSquareText,
+  FileText,
+  Users2,
+  Hash
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -103,11 +108,12 @@ export default function Layout({ children }: LayoutProps) {
   const navItems = [
     { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { name: "Contatos", path: "/contacts", icon: Users },
-    { name: "Mensagens", path: "/messages", icon: MessageSquare },
+    { name: "Mensagens", path: "/messages", icon: MessageCircle },
     { name: "Automações", path: "/automations", icon: Zap },
-    { name: "Respostas Rápidas", path: "/quick-replies", icon: MessageSquare },
-    { name: "Grupos", path: "/groups", icon: Users },
-    { name: "Modelos", path: "/models", icon: MessageSquare },
+    { name: "Respostas Rápidas", path: "/quick-replies", icon: MessageSquareText },
+    { name: "Grupos", path: "/groups", icon: Users2 },
+    { name: "Menu Inteligente", path: "/menu-builder", icon: Hash },
+    { name: "Modelos", path: "/models", icon: FileText },
     { name: "Agente IA", path: "/agent", icon: Bot },
     { name: "Agendamentos", path: "/schedule", icon: CalendarIcon },
   ];

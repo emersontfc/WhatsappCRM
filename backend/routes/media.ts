@@ -46,51 +46,71 @@ router.post("/upload-audio", authenticate, (req, res) => {
 
       console.log(`[Media] Converting ${inputPath} to ${outputPath}`);
 
-      // Check if ffmpeg is available
-      ffmpeg(inputPath)
-        .toFormat("ogg")
-        .audioCodec("libopus")
-        .on("error", (err) => {
-          console.error("[Media] ffmpeg error:", err.message);
-          // If ffmpeg fails, we might want to return the original file if it's already ogg, 
-          // but here we expect webm from browser. 
-          // Let's try to provide a helpful error.
-          res.status(500).json({ 
-            success: false, 
-            error: "Erro na conversão do áudio. Certifique-se que o ffmpeg está instalado no servidor.",
-            details: err.message
-          });
-          
-          // Cleanup
-          if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        })
-        .on("end", () => {
-          console.log("[Media] Conversion finished");
-          
-          // Delete original webm file
-          if (fs.existsSync(inputPath)) {
-            fs.unlink(inputPath, (err) => {
-              if (err) console.error("[Media] Error deleting temp file:", err);
+      // Get duration first
+      ffmpeg.ffprobe(inputPath, (err, metadata) => {
+        const duration = metadata?.format?.duration || 0;
+        
+        // Convert
+        ffmpeg(inputPath)
+          .audioCodec("libopus")
+          .audioChannels(1)
+          .audioFrequency(16000)
+          .toFormat("ogg")
+          .on("error", (err) => {
+            console.error("[Media] ffmpeg error:", err.message);
+            res.status(500).json({ 
+              success: false, 
+              error: "Erro na conversão do áudio.",
+              details: err.message
             });
-          }
+            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+          })
+          .on("end", () => {
+            console.log("[Media] Conversion finished");
+            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
 
-          const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-          const host = req.headers["x-forwarded-host"] || req.get("host");
-          const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
+            const protocol = req.headers["x-forwarded-proto"] || req.protocol;
+            const host = req.headers["x-forwarded-host"] || req.get("host");
+            const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
 
-          res.json({ 
-            success: true, 
-            url: audioUrl,
-            filename: outputFilename
-          });
-        })
-        .save(outputPath);
+            res.json({ 
+              success: true, 
+              url: audioUrl,
+              filename: outputFilename,
+              duration: Math.floor(duration)
+            });
+          })
+          .save(outputPath);
+      });
 
     } catch (err: any) {
       console.error("[Media] General error:", err);
       res.status(500).json({ success: false, error: err.message || "Erro interno no processamento de mídia" });
     }
   });
+});
+
+router.post("/upload", authenticate, upload.single("file"), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: "Nenhum arquivo enviado" });
+    }
+
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol;
+    const host = req.headers["x-forwarded-host"] || req.get("host");
+    const fileUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
+
+    res.json({
+      success: true,
+      url: fileUrl,
+      filename: req.file.filename,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    });
+  } catch (err: any) {
+    console.error("[Media] General upload error:", err);
+    res.status(500).json({ success: false, error: err.message || "Erro interno no upload" });
+  }
 });
 
 export default router;

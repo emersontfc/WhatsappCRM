@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { VoiceRecorder } from "../components/VoiceRecorder";
 import { 
   Zap, 
   Plus, 
@@ -21,7 +22,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   RefreshCw,
-  Rocket
+  Rocket,
+  Mic,
+  Hash
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId, getUser, isAdmin as checkIsAdmin } from "../supabase";
@@ -32,7 +35,6 @@ import { cn, slugify } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { useSubscription } from "../lib/useSubscription";
 import { UpgradePrompt } from "../components/UpgradePrompt";
-import { AudioRecorder } from "../components/AudioRecorder";
 
 interface Automation {
   id: string;
@@ -45,9 +47,8 @@ interface Automation {
   created_at: string;
   media_url?: string;
   media_type?: string;
-  response_type?: "text" | "audio" | "buttons" | "list";
-  buttons_json?: string;
-  list_json?: string;
+  response_type?: "text" | "audio" | "menu";
+  smart_menu_id?: string;
 }
 
 export default function Automations() {
@@ -56,8 +57,10 @@ export default function Automations() {
   const { subscription, loading: subLoading } = useSubscription();
   const [loading, setLoading] = useState(true);
   const [automations, setAutomations] = useState<Automation[]>([]);
+  const [menus, setMenus] = useState<any[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
   const [uploadingMedia, setUploadingMedia] = useState(false);
   const [recentMessages, setRecentMessages] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
@@ -72,36 +75,13 @@ export default function Automations() {
     delay: 2,
     media_type: "",
     response_type: "text",
-    buttons_json: JSON.stringify({ text: "Como posso ajudar?", buttons: [] }),
-    list_json: JSON.stringify({ 
-      title: "Escolha uma opção", 
-      description: "Selecione o serviço desejado abaixo:",
-      footer: "Agentex Automation",
-      buttonText: "Ver Opções",
-      sections: [{ title: "Serviços", rows: [] }] 
-    })
+    smart_menu_id: ""
   });
 
   // WhatsApp Preview Component
   const WhatsAppPreview = ({ automation }: { automation: Partial<Automation> }) => {
-    let buttons = null;
-    try {
-      buttons = automation.response_type === 'buttons' 
-        ? JSON.parse(automation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}')
-        : null;
-    } catch (e) {
-      buttons = { text: automation.response || "Erro no formato dos botões", buttons: [] };
-    }
+    const selectedMenu = menus.find(m => m.id === automation.smart_menu_id);
     
-    let list = null;
-    try {
-      list = automation.response_type === 'list'
-        ? JSON.parse(automation.list_json || '{"title": "Escolha uma opção", "buttonText": "Ver Opções", "sections": [{"rows": []}]}')
-        : null;
-    } catch (e) {
-      list = { title: "Erro no formato da lista", buttonText: "Erro", sections: [] };
-    }
-
     return (
       <div className="w-full max-w-[320px] mx-auto bg-[#E5DDD5] rounded-[2.5rem] border-[8px] border-slate-900 aspect-[9/18] overflow-hidden shadow-2xl relative flex flex-col">
         {/* Phone Header */}
@@ -143,26 +123,28 @@ export default function Automations() {
                 </div>
               )}
 
-              {automation.response_type === 'buttons' && buttons ? (
+              {automation.response_type === 'menu' && selectedMenu ? (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-slate-900">{buttons.text}</p>
+                  <p className="text-[11px] text-slate-900 font-bold">{selectedMenu.message}</p>
                   <div className="space-y-1">
-                    {buttons.buttons.map((btn: any, i: number) => (
-                      <div key={i} className="bg-white text-emerald-600 text-[10px] font-bold py-2 px-3 rounded-md text-center shadow-sm border border-slate-100">
-                        {btn.label || "Botão"}
-                      </div>
+                    {selectedMenu.options?.map((opt: any, i: number) => (
+                      <p key={i} className="text-[10px] text-slate-700">
+                        {["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"][i + 1] || `${i + 1}️⃣`} {opt.label}
+                      </p>
                     ))}
                   </div>
+                  {selectedMenu.footer && (
+                    <p className="text-[9px] text-slate-400 italic border-t border-emerald-100 pt-1 mt-1">
+                      {selectedMenu.footer}
+                    </p>
+                  )}
                 </div>
-              ) : automation.response_type === 'list' && list ? (
-                <div className="space-y-2">
-                  <p className="text-[11px] font-bold text-slate-900">{list.title}</p>
-                  <p className="text-[10px] text-slate-600">{list.description}</p>
-                  <div className="bg-white text-emerald-600 text-[10px] font-bold py-2 px-3 rounded-md text-center shadow-sm border border-slate-100 flex items-center justify-center gap-2">
-                    <MessageSquare size={12} />
-                    {list.buttonText || "Ver Opções"}
+              ) : automation.response_type === 'audio' ? (
+                <div className="flex items-center gap-2 bg-white/20 p-2 rounded-lg">
+                  <Mic size={16} className="text-emerald-600" />
+                  <div className="h-1 flex-1 bg-slate-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-500 w-1/3"></div>
                   </div>
-                  <p className="text-[8px] text-slate-400 italic">{list.footer}</p>
                 </div>
               ) : (
                 <p className="text-[11px] text-slate-900 whitespace-pre-wrap">
@@ -220,6 +202,17 @@ export default function Automations() {
       
       if (initialAutomations) {
         setAutomations(initialAutomations);
+      }
+
+      // Fetch smart menus
+      const { data: initialMenus } = await supabase
+        .from("smart_menus")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("active", true);
+      
+      if (initialMenus) {
+        setMenus(initialMenus);
       }
 
       // Real-time automations subscription
@@ -307,27 +300,30 @@ export default function Automations() {
       return;
     }
     
-    if (!newAutomation.name || (!newAutomation.response && newAutomation.response_type !== 'buttons' && newAutomation.response_type !== 'list' && newAutomation.response_type !== 'audio')) {
-      toast.error("Preencha o nome e a resposta.");
-      return;
-    }
-
-    if (newAutomation.response_type === 'audio' && !newAutomation.media_url) {
-      toast.error("Grave ou anexe um áudio para esta automação.");
-      return;
+    if (!newAutomation.name || (!newAutomation.response && newAutomation.response_type === 'text')) {
+      if (newAutomation.response_type === 'menu' && !newAutomation.smart_menu_id) {
+        toast.error("Selecione um menu inteligente.");
+        return;
+      }
+      if (newAutomation.response_type === 'text') {
+        toast.error("Preencha o nome e a resposta.");
+        return;
+      }
     }
     
     try {
       const userId = await getUserId();
       if (!userId) throw new Error("Usuário não identificado.");
       
+      const payload = {
+        ...newAutomation,
+        user_id: userId,
+      };
+
       if (editingId) {
         const { data, error } = await supabase
           .from("automations")
-          .update({
-            ...newAutomation,
-            user_id: userId,
-          })
+          .update(payload)
           .eq("id", editingId)
           .select()
           .single();
@@ -338,8 +334,7 @@ export default function Automations() {
         toast.success("Automação atualizada com sucesso!");
       } else {
         const { data, error } = await supabase.from("automations").insert({
-          ...newAutomation,
-          user_id: userId,
+          ...payload,
           created_at: new Date().toISOString()
         }).select().single();
 
@@ -361,7 +356,9 @@ export default function Automations() {
         active: true,
         delay: 2,
         media_url: "",
-        media_type: ""
+        media_type: "",
+        response_type: "text",
+        smart_menu_id: ""
       });
     } catch (err: any) {
       console.error("Error saving automation:", err);
@@ -380,14 +377,7 @@ export default function Automations() {
       media_url: auto.media_url,
       media_type: auto.media_type,
       response_type: auto.response_type || "text",
-      buttons_json: auto.buttons_json || JSON.stringify({ text: "Como posso ajudar?", buttons: [] }),
-      list_json: auto.list_json || JSON.stringify({ 
-        title: "Escolha uma opção", 
-        description: "Selecione o serviço desejado abaixo:",
-        footer: "Agentex Automation",
-        buttonText: "Ver Opções",
-        sections: [{ title: "Serviços", rows: [] }] 
-      })
+      smart_menu_id: auto.smart_menu_id || ""
     });
     setEditingId(auto.id);
     setIsAdding(true);
@@ -405,7 +395,9 @@ export default function Automations() {
       active: true,
       delay: 2,
       media_url: "",
-      media_type: ""
+      media_type: "",
+      response_type: "text",
+      smart_menu_id: ""
     });
   };
 
@@ -509,15 +501,7 @@ export default function Automations() {
               delay: 2,
               media_url: "",
               media_type: "",
-              response_type: "text",
-              buttons_json: JSON.stringify({ text: "Como posso ajudar?", buttons: [] }),
-              list_json: JSON.stringify({ 
-                title: "Escolha uma opção", 
-                description: "Selecione o serviço desejado abaixo:",
-                footer: "Agentex Automation",
-                buttonText: "Ver Opções",
-                sections: [{ title: "Serviços", rows: [] }] 
-              })
+              response_type: "text"
             });
             setIsAdding(true);
           }} 
@@ -608,12 +592,11 @@ export default function Automations() {
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tipo de Resposta</label>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     {[
                       { id: 'text', label: 'Texto', icon: MessageSquare },
                       { id: 'audio', label: 'Áudio', icon: Music },
-                      { id: 'buttons', label: 'Botões', icon: Zap },
-                      { id: 'list', label: 'Lista', icon: ChevronRight }
+                      { id: 'menu', label: 'Menu Inteligente', icon: Hash }
                     ].map((type) => (
                       <button
                         type="button"
@@ -633,239 +616,33 @@ export default function Automations() {
                   </div>
                 </div>
 
-            {newAutomation.response_type === "buttons" && (
-              <div className="space-y-4 border border-slate-200 p-6 rounded-2xl bg-slate-50/50 animate-in zoom-in-95">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Título do Menu</label>
-                  <Input 
-                    placeholder="Ex: Como posso ajudar hoje?" 
-                    value={JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}').text}
-                    onChange={e => {
-                      const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
-                      setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, text: e.target.value})});
-                    }}
-                    className="bg-white border-slate-200 rounded-xl"
-                  />
-                </div>
-                
-                <div className="space-y-3">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Botões (Máx 3)</label>
-                  {JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}').buttons.map((btn: any, index: number) => {
-                    const slug = slugify(btn.label);
-                    const automationExists = automations.some(a => a.trigger === 'keyword' && a.keyword === slug);
-                    
-                    return (
-                      <div key={index} className="flex flex-col gap-3 p-4 border border-slate-200 rounded-xl bg-white shadow-sm group">
-                        <div className="flex items-center justify-between gap-3">
-                          <Input 
-                            placeholder="Texto do Botão" 
-                            value={btn.label}
-                            onChange={e => {
-                              const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
-                              const newButtons = [...current.buttons];
-                              newButtons[index].label = e.target.value;
-                              newButtons[index].id = slugify(e.target.value);
-                              setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: newButtons})});
-                            }}
-                            className="bg-slate-50 border-none rounded-lg"
-                          />
-                          <Button 
-                            variant="ghost" 
-                            size="icon"
-                            className="shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50" 
-                            onClick={() => {
-                              const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
-                              const newButtons = current.buttons.filter((_: any, i: number) => i !== index);
-                              setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: newButtons})});
-                            }}
-                          >
-                            <X size={18} />
-                          </Button>
-                        </div>
-                        
-                        <div className="flex items-center justify-between text-[10px]">
-                          {automationExists ? (
-                            <span className="flex items-center gap-1 text-emerald-500 font-bold uppercase tracking-wider">
-                              <CheckCircle2 size={12} /> Fluxo Conectado
-                            </span>
-                          ) : (
-                            <div className="flex items-center justify-between w-full">
-                              <span className="flex items-center gap-1 text-amber-500 font-bold uppercase tracking-wider">
-                                <AlertTriangle size={12} /> Sem Resposta
-                              </span>
-                              <button 
-                                type="button"
-                                onClick={() => createResponseForButton(btn.label)}
-                                className="text-emerald-500 hover:underline font-bold uppercase tracking-wider"
-                              >
-                                Configurar Resposta
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  
-                  {JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}').buttons.length < 3 && (
-                    <Button 
-                      variant="outline" 
-                      onClick={() => {
-                        const current = JSON.parse(newAutomation.buttons_json || '{"text": "Como posso ajudar?", "buttons": []}');
-                        setNewAutomation({...newAutomation, buttons_json: JSON.stringify({...current, buttons: [...current.buttons, {id: "", label: ""}]})});
-                      }}
-                      className="w-full border-dashed border-2 border-slate-200 text-slate-400 hover:text-emerald-500 hover:border-emerald-500 hover:bg-emerald-50 rounded-xl py-6"
+                {newAutomation.response_type === "menu" && (
+                  <div className="space-y-2 animate-in zoom-in-95">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Selecionar Menu Inteligente</label>
+                    <select 
+                      className="flex h-12 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/20"
+                      value={newAutomation.smart_menu_id}
+                      onChange={e => setNewAutomation({...newAutomation, smart_menu_id: e.target.value})}
                     >
-                      <Plus size={18} className="mr-2" />
-                      Adicionar Botão
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {newAutomation.response_type === "list" && (
-              <div className="space-y-4 border border-slate-200 p-6 rounded-2xl bg-slate-50/50 animate-in zoom-in-95">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Título da Lista</label>
-                    <Input 
-                      placeholder="Ex: Nossos Serviços" 
-                      value={JSON.parse(newAutomation.list_json || '{"title": "Escolha uma opção", "sections": []}').title}
-                      onChange={e => {
-                        const current = JSON.parse(newAutomation.list_json || '{"title": "Escolha uma opção", "sections": []}');
-                        setNewAutomation({...newAutomation, list_json: JSON.stringify({...current, title: e.target.value})});
-                      }}
-                      className="bg-white border-slate-200 rounded-xl"
-                    />
+                      <option value="">Selecione um menu...</option>
+                      {menus.map(menu => (
+                        <option key={menu.id} value={menu.id}>{menu.name}</option>
+                      ))}
+                    </select>
+                    {menus.length === 0 && (
+                      <p className="text-[10px] text-amber-600 font-medium">Você ainda não criou nenhum menu inteligente. <button onClick={() => navigate('/menu-builder')} className="underline">Criar agora</button></p>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Texto do Botão</label>
-                    <Input 
-                      placeholder="Ex: Ver Opções" 
-                      value={JSON.parse(newAutomation.list_json || '{"buttonText": "Ver Opções", "sections": []}').buttonText}
-                      onChange={e => {
-                        const current = JSON.parse(newAutomation.list_json || '{"buttonText": "Ver Opções", "sections": []}');
-                        setNewAutomation({...newAutomation, list_json: JSON.stringify({...current, buttonText: e.target.value})});
-                      }}
-                      className="bg-white border-slate-200 rounded-xl"
-                    />
-                  </div>
-                </div>
-                
-                <div className="space-y-3">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Itens da Lista</label>
-                  {JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}').sections[0].rows.map((row: any, index: number) => {
-                    const slug = slugify(row.title);
-                    const automationExists = automations.some(a => a.trigger === 'keyword' && a.keyword === slug);
-                    
-                    return (
-                      <div key={index} className="flex flex-col gap-3 p-4 border border-slate-200 rounded-xl bg-white shadow-sm group">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex-1 space-y-2">
-                            <Input 
-                              placeholder="Título do Item" 
-                              value={row.title}
-                              onChange={e => {
-                                const current = JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}');
-                                const newRows = [...current.sections[0].rows];
-                                newRows[index].title = e.target.value;
-                                newRows[index].id = slugify(e.target.value);
-                                current.sections[0].rows = newRows;
-                                setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
-                              }}
-                              className="bg-slate-50 border-none rounded-lg text-sm font-bold"
-                            />
-                            <Input 
-                              placeholder="Descrição (Opcional)" 
-                              value={row.description}
-                              onChange={e => {
-                                const current = JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}');
-                                const newRows = [...current.sections[0].rows];
-                                newRows[index].description = e.target.value;
-                                current.sections[0].rows = newRows;
-                                setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
-                              }}
-                              className="bg-slate-50 border-none rounded-lg text-xs"
-                            />
-                          </div>
-                          <Button 
-                            variant="ghost" 
-                            size="icon"
-                            className="shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50" 
-                            onClick={() => {
-                              const current = JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}');
-                              const newRows = current.sections[0].rows.filter((_: any, i: number) => i !== index);
-                              current.sections[0].rows = newRows;
-                              setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
-                            }}
-                          >
-                            <X size={18} />
-                          </Button>
-                        </div>
-                        
-                        <div className="flex items-center justify-between text-[10px]">
-                          {automationExists ? (
-                            <span className="flex items-center gap-1 text-emerald-500 font-bold uppercase tracking-wider">
-                              <CheckCircle2 size={12} /> Fluxo Conectado
-                            </span>
-                          ) : (
-                            <div className="flex items-center justify-between w-full">
-                              <span className="flex items-center gap-1 text-amber-500 font-bold uppercase tracking-wider">
-                                <AlertTriangle size={12} /> Sem Resposta
-                              </span>
-                              <button 
-                                type="button"
-                                onClick={() => createResponseForButton(row.title)}
-                                className="text-emerald-500 hover:underline font-bold uppercase tracking-wider"
-                              >
-                                Configurar Resposta
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  
-                  {JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}').sections[0].rows.length < 10 && (
-                    <Button 
-                      variant="outline" 
-                      onClick={() => {
-                        const current = JSON.parse(newAutomation.list_json || '{"sections": [{"rows": []}]}');
-                        current.sections[0].rows.push({id: "", title: "", description: ""});
-                        setNewAutomation({...newAutomation, list_json: JSON.stringify(current)});
-                      }}
-                      className="w-full border-dashed border-2 border-slate-200 text-slate-400 hover:text-emerald-500 hover:border-emerald-500 hover:bg-emerald-50 rounded-xl py-6"
-                    >
-                      <Plus size={18} className="mr-2" />
-                      Adicionar Item à Lista
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
+                )}
 
             {(newAutomation.response_type === "text" || newAutomation.response_type === "audio") && (
               <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                  {newAutomation.response_type === "audio" ? "Legenda do Áudio (Opcional)" : "Resposta Automática"}
-                </label>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Resposta Automática</label>
                 <textarea 
                   className="flex min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/20 resize-none"
-                  placeholder={newAutomation.response_type === "audio" ? "Digite uma legenda para o áudio..." : "Digite a mensagem que será enviada..."}
+                  placeholder="Digite a mensagem que será enviada..."
                   value={newAutomation.response}
                   onChange={e => setNewAutomation({...newAutomation, response: e.target.value})}
-                />
-              </div>
-            )}
-
-            {newAutomation.response_type === "audio" && (
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Gravar Áudio</label>
-                <AudioRecorder 
-                  onUploadComplete={(url) => setNewAutomation(prev => ({ ...prev, media_url: url, media_type: 'audio' }))}
-                  onCancel={() => {}}
                 />
               </div>
             )}
@@ -895,7 +672,30 @@ export default function Automations() {
                   {uploadingMedia ? "Enviando..." : "Anexar Mídia"}
                 </Button>
 
-                {newAutomation.media_url && (
+                <Button 
+                  type="button" 
+                  variant="outline" 
+                  className="gap-2 rounded-xl border-slate-200"
+                  onClick={() => setIsRecording(!isRecording)}
+                  disabled={uploadingMedia}
+                >
+                  <Mic size={16} />
+                  {isRecording ? "Cancelar Áudio" : "Gravar Áudio"}
+                </Button>
+
+                {isRecording && (
+                  <div className="w-full mt-4">
+                    <VoiceRecorder 
+                      onSend={(url) => {
+                        setNewAutomation(prev => ({ ...prev, media_url: url, media_type: "audio" }));
+                        setIsRecording(false);
+                      }} 
+                      onCancel={() => setIsRecording(false)} 
+                    />
+                  </div>
+                )}
+
+                {newAutomation.media_url && !isRecording && (
                   <div className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 text-emerald-600 rounded-xl text-sm border border-emerald-500/20 animate-in fade-in zoom-in-95">
                     {newAutomation.media_type === 'image' && <ImageIcon size={16} />}
                     {newAutomation.media_type === 'audio' && <Music size={16} />}
@@ -1019,9 +819,7 @@ export default function Automations() {
                     <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500/20" />
                     <p className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">Resposta Automática</p>
                     <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed">
-                      {auto.response_type === 'buttons' ? 'Menu de Botões Interativo' : 
-                       auto.response_type === 'list' ? 'Menu de Lista Interativo' : 
-                       auto.response}
+                      {auto.response}
                     </p>
                     
                     {auto.media_url && (

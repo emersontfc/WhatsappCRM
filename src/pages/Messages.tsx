@@ -118,6 +118,7 @@ export default function Messages() {
           .from("contacts")
           .select("*")
           .eq("user_id", uId)
+          .contains("tags", ["WhatsApp"])
           .order("last_message_at", { ascending: false, nullsFirst: false });
         
         if (isMounted && initialContacts) {
@@ -146,7 +147,9 @@ export default function Messages() {
             const { data: updatedContacts } = await supabase
               .from("contacts")
               .select("*")
-              .eq("user_id", uId);
+              .eq("user_id", uId)
+              .contains("tags", ["WhatsApp"])
+              .order("last_message_at", { ascending: false, nullsFirst: false });
             if (isMounted && updatedContacts) setContacts(updatedContacts);
           })
           .subscribe();
@@ -238,7 +241,7 @@ export default function Messages() {
     setShowChatOnMobile(true);
   };
 
-  const handleSend = async (e?: React.FormEvent, mediaUrl?: string, mediaType?: string, textOverride?: string) => {
+  const handleSend = async (e?: React.FormEvent, mediaUrl?: string, mediaType?: string, textOverride?: string, duration?: number) => {
     if (e) e.preventDefault();
     const textToSend = textOverride !== undefined ? textOverride : newMessage;
     if ((!textToSend.trim() && !mediaUrl) || !selectedContact || !userId) return;
@@ -253,7 +256,8 @@ export default function Messages() {
           jid: `${phone}@s.whatsapp.net`,
           text: textToSend,
           mediaUrl,
-          mediaType
+          mediaType,
+          duration
         }),
       });
 
@@ -467,7 +471,7 @@ export default function Messages() {
             <div className="p-3 sm:p-4 bg-white border-t border-slate-100">
               {isRecording ? (
                 <VoiceRecorder 
-                  onSend={(url) => handleSend(undefined, url, "audio")} 
+                  onSend={(url, duration) => handleSend(undefined, url, "audio", undefined, duration)} 
                   onCancel={() => setIsRecording(false)} 
                 />
               ) : (

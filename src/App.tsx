@@ -17,6 +17,7 @@ import AdminPacks from "./pages/AdminPacks";
 import UserModels from "./pages/UserModels";
 import QuickReplies from "./pages/QuickReplies";
 import Groups from "./pages/Groups";
+import MenuBuilderPage from "./pages/MenuBuilderPage";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -101,6 +102,10 @@ export default function App() {
         <Route
           path="/groups"
           element={user ? <Layout><Groups key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/menu-builder"
+          element={user ? <Layout><MenuBuilderPage key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/admin/packs"

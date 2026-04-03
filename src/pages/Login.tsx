@@ -72,7 +72,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row overflow-x-hidden">
+    <div className="min-h-[100dvh] bg-slate-50 flex flex-col lg:flex-row overflow-x-hidden">
       {/* Left Side - Visual/Branding */}
       <div className="hidden lg:flex lg:w-1/2 relative bg-white items-center justify-center p-12 overflow-hidden border-r border-slate-200">
         <div className="absolute top-0 left-0 w-full h-full opacity-10">

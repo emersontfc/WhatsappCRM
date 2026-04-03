@@ -36,19 +36,25 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             await new Promise(resolve => setTimeout(resolve, delayMs + (Math.random() * 1000)));
           }
 
-          const presenceType = automation.media_type === "audio" ? "recording" : "composing";
+          const presenceType = (automation.response_type === "audio" && automation.media_url) ? "recording" : "composing";
           await whatsappManager.sendPresenceUpdate(userId, jid, presenceType);
           await new Promise(resolve => setTimeout(resolve, 2000));
           await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
 
-          if (automation.response_type === "buttons") {
-            const buttonsData = JSON.parse(automation.buttons_json);
-            await whatsappManager.sendButtonsMessage(userId, jid, buttonsData.text, buttonsData.buttons);
-            await whatsappManager.log(userId, "success", `Bot "${automation.name}" (Menu) disparado para ${jid}`, { trigger: normalizedText, buttons: buttonsData });
-          } else if (automation.response_type === "list") {
-            const listData = JSON.parse(automation.list_json);
-            await whatsappManager.sendListMessage(userId, jid, listData);
-            await whatsappManager.log(userId, "success", `Bot "${automation.name}" (Lista) disparado para ${jid}`, { trigger: normalizedText, list: listData });
+          if (automation.response_type === "menu" && automation.smart_menu_id) {
+            const { data: menu, error: menuError } = await supabaseAdmin
+              .from("smart_menus")
+              .select("*")
+              .eq("id", automation.smart_menu_id)
+              .single();
+
+            if (menu && !menuError) {
+              await whatsappManager.sendMenu(userId, jid, menu);
+              await whatsappManager.log(userId, "success", `Menu Inteligente "${menu.name}" disparado para ${jid}`, { trigger: normalizedText });
+            } else {
+              console.error("Error fetching menu for automation:", menuError);
+              await whatsappManager.sendMessage(userId, jid, "Desculpe, houve um erro ao carregar o menu.");
+            }
           } else {
             await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type);
             await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: automation.media_type });
@@ -65,9 +71,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             await supabaseAdmin.from("messages").insert({
               user_id: userId,
               contact_id: contact?.id || "automated",
-              text: automation.response_type === "buttons" ? JSON.parse(automation.buttons_json).text : 
-                    automation.response_type === "list" ? JSON.parse(automation.list_json).title : 
-                    automation.response,
+              text: automation.response_type === "menu" ? "Menu Inteligente Enviado" : automation.response,
               type: "outbound",
               timestamp: new Date().toISOString(),
               is_automated: true,

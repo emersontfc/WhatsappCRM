@@ -77,6 +77,8 @@ export default function Dashboard() {
     automations: 0
   });
   const [recentMessages, setRecentMessages] = useState<any[]>([]);
+  const [systemLogs, setSystemLogs] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<"messages" | "logs">("messages");
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState("Usuário");
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -385,65 +387,92 @@ export default function Dashboard() {
         // Initial fetch for recent messages
         const { data: initialMessages, error: msgError } = await supabase
           .from("messages")
-          .select("*, contacts(name, phone)")
+          .select("*")
           .eq("user_id", uId)
           .order("timestamp", { ascending: false })
-          .limit(10);
+          .limit(20);
         
         if (msgError) console.error("Error fetching messages:", msgError);
-        else console.log("Fetched messages:", initialMessages?.length);
         
-        if (initialMessages) {
-          // Filter to show unique contacts (active chats)
-          const uniqueChats: any[] = [];
-          const seenContacts = new Set();
+        if (initialMessages && initialMessages.length > 0) {
+          const contactIds = [...new Set(initialMessages.map(m => m.contact_id))];
+          const { data: contactsData } = await supabase
+            .from("contacts")
+            .select("id, name, phone")
+            .in("id", contactIds);
+            
+          const contactsMap = new Map(contactsData?.map(c => [c.id, c]) || []);
           
-          for (const msg of initialMessages) {
-            if (!seenContacts.has(msg.contact_id)) {
-              seenContacts.add(msg.contact_id);
-              uniqueChats.push(msg);
-            }
-            if (uniqueChats.length >= 5) break;
-          }
+          const mappedMessages = initialMessages.map(msg => ({
+            ...msg,
+            contacts: contactsMap.get(msg.contact_id)
+          }));
           
-          setRecentMessages(uniqueChats);
+          setRecentMessages(mappedMessages);
+        }
+
+        // Initial fetch for logs
+        const { data: initialLogs } = await supabase
+          .from("logs")
+          .select("*")
+          .eq("user_id", uId)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        
+        if (initialLogs) {
+          setSystemLogs(initialLogs);
         }
         
         // Real-time subscription for messages
         const messagesSubscription = supabase
-          .channel('public:messages')
+          .channel('dashboard-messages')
           .on('postgres_changes', { 
             event: '*', 
             schema: 'public', 
             table: 'messages',
             filter: `user_id=eq.${uId}`
           }, async () => {
-            // Re-fetch top 10 when changes occur
             const { data: updatedMessages } = await supabase
               .from("messages")
-              .select("*, contacts(name, phone)")
+              .select("*")
               .eq("user_id", uId)
               .order("timestamp", { ascending: false })
-              .limit(10);
+              .limit(20);
             
-            if (updatedMessages) {
-              const uniqueChats: any[] = [];
-              const seenContacts = new Set();
+            if (updatedMessages && updatedMessages.length > 0) {
+              const contactIds = [...new Set(updatedMessages.map(m => m.contact_id))];
+              const { data: contactsData } = await supabase
+                .from("contacts")
+                .select("id, name, phone")
+                .in("id", contactIds);
+                
+              const contactsMap = new Map(contactsData?.map(c => [c.id, c]) || []);
               
-              for (const msg of updatedMessages) {
-                if (!seenContacts.has(msg.contact_id)) {
-                  seenContacts.add(msg.contact_id);
-                  uniqueChats.push(msg);
-                }
-                if (uniqueChats.length >= 5) break;
-              }
-              setRecentMessages(uniqueChats);
+              const mappedMessages = updatedMessages.map(msg => ({
+                ...msg,
+                contacts: contactsMap.get(msg.contact_id)
+              }));
+              setRecentMessages(mappedMessages);
             }
+          })
+          .subscribe();
+
+        // Real-time subscription for logs
+        const logsSubscription = supabase
+          .channel('dashboard-logs')
+          .on('postgres_changes', { 
+            event: 'INSERT', 
+            schema: 'public', 
+            table: 'logs',
+            filter: `user_id=eq.${uId}`
+          }, (payload) => {
+            setSystemLogs(prev => [payload.new, ...prev].slice(0, 20));
           })
           .subscribe();
         
         return () => {
           supabase.removeChannel(messagesSubscription);
+          supabase.removeChannel(logsSubscription);
         };
       }
       return () => {};
@@ -710,51 +739,132 @@ export default function Dashboard() {
         </div>
 
         {/* Real-time Monitor */}
-        <div className="lg:col-span-7 xl:col-span-8">
-          <Card className="border-slate-100 shadow-sm overflow-hidden h-full flex flex-col">
-            <CardHeader className="p-6 border-b border-slate-50 flex flex-row items-center justify-between">
-              <CardTitle className="text-lg font-bold text-slate-900">Monitor em Tempo Real</CardTitle>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Live</span>
-                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+        <div className="lg:col-span-12">
+          <Card className="border-slate-100 shadow-sm overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-slate-100 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
+                  <Activity size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900">Monitor em Tempo Real</h3>
+                  <p className="text-xs text-slate-500">Acompanhe as atividades do seu bot</p>
+                </div>
               </div>
-            </CardHeader>
+              <div className="flex bg-slate-100 p-1 rounded-lg w-full sm:w-auto">
+                <button 
+                  onClick={() => setActiveTab("messages")}
+                  className={cn(
+                    "flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all",
+                    activeTab === "messages" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  )}
+                >
+                  Mensagens
+                </button>
+                <button 
+                  onClick={() => setActiveTab("logs")}
+                  className={cn(
+                    "flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all",
+                    activeTab === "logs" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  )}
+                >
+                  Logs do Sistema
+                </button>
+              </div>
+            </div>
             <CardContent className="p-0 flex-1">
               <div className="h-[400px] overflow-y-auto custom-scrollbar">
-                {recentMessages.length > 0 ? (
+                {activeTab === "messages" ? (
                   <div className="divide-y divide-slate-50">
-                    {recentMessages.map((msg, i) => (
-                      <div key={i} className="p-4 hover:bg-slate-50/50 transition-colors">
-                        <div className="flex items-start gap-3">
+                    {recentMessages.length > 0 ? (
+                      recentMessages.map((msg, i) => (
+                        <div key={i} className="p-4 hover:bg-slate-50/50 transition-colors flex items-start gap-4">
                           <div className={cn(
-                            "h-8 w-8 rounded-lg flex items-center justify-center shrink-0",
-                            msg.type === "outbound" ? "bg-emerald-50 text-emerald-600" : "bg-blue-50 text-blue-600"
+                            "h-10 w-10 rounded-full flex items-center justify-center shrink-0 shadow-sm font-bold text-xs",
+                            msg.type === "inbound" ? "bg-blue-50 text-blue-600" : "bg-emerald-50 text-emerald-600"
                           )}>
-                            {msg.type === "outbound" ? <Zap size={14} /> : <MessageSquare size={14} />}
+                            {(msg.contacts?.name || msg.contacts?.phone || "D").charAt(0).toUpperCase()}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between mb-0.5">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase">
-                                {msg.type === "outbound" ? "Enviada" : "Recebida"}
-                              </span>
-                              <span className="text-[10px] text-slate-300">
-                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            <div className="flex justify-between items-start mb-1">
+                              <p className="font-bold text-sm text-slate-900 truncate">
+                                {msg.contacts?.name || msg.contacts?.phone || "Desconhecido"}
+                              </p>
+                              <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             </div>
-                            <p className="text-sm font-bold text-slate-900 truncate">
-                              {msg.contacts?.name || msg.to || msg.from || "Desconhecido"}
+                            <p className="text-sm text-slate-600 line-clamp-2 leading-relaxed">
+                              {msg.text}
                             </p>
-                            <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">{msg.text}</p>
+                            <div className="flex items-center gap-3 mt-2">
+                              <span className={cn(
+                                "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded",
+                                msg.type === "inbound" ? "bg-blue-100 text-blue-700" : "bg-emerald-100 text-emerald-700"
+                              )}>
+                                {msg.type === "inbound" ? "Recebida" : "Enviada"}
+                              </span>
+                              {msg.is_automated && (
+                                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-700 flex items-center gap-1">
+                                  <Zap size={10} />
+                                  Automática
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
+                      ))
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                        <MessageSquare size={32} className="text-slate-200 mb-3" />
+                        <p className="text-sm font-bold text-slate-400">Aguardando mensagens...</p>
                       </div>
-                    ))}
+                    )}
                   </div>
                 ) : (
-                  <div className="h-full flex flex-col items-center justify-center p-8 text-center">
-                    <Terminal size={32} className="text-slate-200 mb-3" />
-                    <p className="text-sm font-bold text-slate-400">Aguardando atividade...</p>
-                    <p className="text-xs text-slate-300 mt-1">Mensagens aparecerão aqui em tempo real</p>
+                  <div className="divide-y divide-slate-50 font-mono">
+                    {systemLogs.length > 0 ? (
+                      systemLogs.map((log) => (
+                        <div key={log.id} className="p-4 hover:bg-slate-50/50 transition-colors flex items-start gap-4">
+                          <div className={cn(
+                            "h-2 w-2 rounded-full mt-2 shrink-0",
+                            log.level === "error" ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" :
+                            log.level === "warn" ? "bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]" :
+                            log.level === "success" ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" :
+                            "bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]"
+                          )} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className={cn(
+                                "text-[10px] font-bold uppercase tracking-widest",
+                                log.level === "error" ? "text-red-600" :
+                                log.level === "warn" ? "text-amber-600" :
+                                log.level === "success" ? "text-emerald-600" :
+                                "text-blue-600"
+                              )}>
+                                {log.level}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(log.created_at).toLocaleTimeString()}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-700 leading-relaxed">
+                              {log.message}
+                            </p>
+                            {log.details && Object.keys(log.details).length > 0 && (
+                              <pre className="mt-2 text-[10px] bg-slate-900 text-slate-300 p-2 rounded-lg overflow-x-auto max-h-32">
+                                {JSON.stringify(log.details, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                        <Terminal size={32} className="text-slate-200 mb-3" />
+                        <p className="text-sm font-bold text-slate-400">Nenhum log disponível...</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -763,9 +873,9 @@ export default function Dashboard() {
               <Button 
                 variant="ghost" 
                 className="w-full h-9 rounded-lg text-xs font-bold text-slate-500 hover:text-slate-900"
-                onClick={() => navigate("/messages")}
+                onClick={() => navigate(activeTab === "messages" ? "/messages" : "/logs")}
               >
-                Ver Histórico Completo
+                {activeTab === "messages" ? "Ver Histórico Completo" : "Ver Todos os Logs"}
                 <ChevronRight size={14} className="ml-1" />
               </Button>
             </div>

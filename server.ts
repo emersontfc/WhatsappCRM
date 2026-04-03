@@ -10,6 +10,7 @@ import agentRoutes from "./backend/routes/agent";
 import templateRoutes from "./backend/routes/templates";
 import packRoutes from "./backend/routes/packs";
 import mediaRoutes from "./backend/routes/media";
+import menuRoutes from "./backend/routes/menus";
 import { startScheduler } from "./backend/scheduler";
 import { authenticate } from "./backend/middleware/auth";
 import fs from "fs";
@@ -20,35 +21,59 @@ import { supabaseAdmin } from "./backend/supabaseAdmin";
 async function initDatabase() {
   try {
     console.log("[Database] Initializing tables...");
-    // Create group_rules table if it doesn't exist
-    const { error } = await supabaseAdmin.rpc('exec_sql', {
-      sql_query: `
-        CREATE TABLE IF NOT EXISTS group_rules (
-          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-          user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-          group_jid TEXT NOT NULL,
-          anti_link BOOLEAN DEFAULT FALSE,
-          anti_spam BOOLEAN DEFAULT FALSE,
-          anti_flood BOOLEAN DEFAULT FALSE,
-          welcome_msg TEXT,
-          active BOOLEAN DEFAULT TRUE,
-          created_at TIMESTAMPTZ DEFAULT NOW(),
-          updated_at TIMESTAMPTZ DEFAULT NOW(),
-          UNIQUE(user_id, group_jid)
-        );
-      `
-    });
+    const sql = `
+      CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+      CREATE TABLE IF NOT EXISTS group_rules (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        group_jid TEXT NOT NULL,
+        anti_link BOOLEAN DEFAULT FALSE,
+        anti_spam BOOLEAN DEFAULT FALSE,
+        anti_flood BOOLEAN DEFAULT FALSE,
+        anti_delete BOOLEAN DEFAULT FALSE,
+        welcome_msg TEXT,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, group_jid)
+      );
+
+      CREATE TABLE IF NOT EXISTS smart_menus (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        message TEXT NOT NULL,
+        footer TEXT,
+        options JSONB NOT NULL,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      ALTER TABLE automations ADD COLUMN IF NOT EXISTS smart_menu_id UUID REFERENCES smart_menus(id) ON DELETE SET NULL;
+    `;
+
+    // Try to check if table exists first
+    const { error: checkError } = await supabaseAdmin.from('group_rules').select('id').limit(1);
+    const { error: checkMenuError } = await supabaseAdmin.from('smart_menus').select('id').limit(1);
     
-    if (error) {
-      // Fallback if RPC is not available: try a simple query to check if table exists
-      const { error: checkError } = await supabaseAdmin.from('group_rules').select('id').limit(1);
-      if (checkError && checkError.code === 'PGRST116') {
-        console.warn("[Database] group_rules table might be missing. Please run the migration manually.");
+    const groupRulesMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
+    const smartMenusMissing = checkMenuError && (checkMenuError.code === 'PGRST116' || checkMenuError.message.includes('does not exist'));
+
+    if (groupRulesMissing || smartMenusMissing) {
+      console.log(`[Database] Missing tables: ${groupRulesMissing ? 'group_rules ' : ''}${smartMenusMissing ? 'smart_menus' : ''}. Attempting to create...`);
+      const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
+      
+      if (createError) {
+        console.warn("[Database] Could not run automatic migration via exec_sql RPC.");
+        console.warn("[Database] PLEASE RUN THIS SQL IN SUPABASE SQL EDITOR TO FIX DATABASE:");
+        console.warn(sql);
       } else {
-        console.log("[Database] group_rules table verified.");
+        console.log("[Database] Database tables created/updated successfully.");
       }
     } else {
-      console.log("[Database] group_rules table initialized.");
+      console.log("[Database] All required database tables already exist.");
     }
   } catch (err) {
     console.error("[Database] Initialization error:", err);
@@ -56,27 +81,37 @@ async function initDatabase() {
 }
 
 async function startServer() {
-  await initDatabase();
+  console.log("[Startup] Starting server...");
+  console.log("[Startup] NODE_ENV:", process.env.NODE_ENV);
+  console.log("[Startup] PORT:", process.env.PORT);
+  
+  if (supabaseAdmin) {
+    await initDatabase();
+  } else {
+    console.warn("[Startup] Skipping database initialization because Supabase Admin is not available.");
+  }
+
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT || 10000;
 
   app.use(cors());
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // Health check
   app.get("/api/health", (req, res) => {
     res.json({
       success: true,
-      message: "API is working 🚀"
+      message: "API is working 🚀",
+      timestamp: new Date().toISOString(),
+      env: process.env.NODE_ENV
     });
   });
-  console.log("Health check route loaded");
 
-  // Global Request Logger
+  // Global Request Logger (Simplified for production)
   app.use((req, res, next) => {
-    if (req.url.startsWith("/api")) {
-      console.log(`[API Request] ${req.method} ${req.url} - Headers: ${JSON.stringify(req.headers)}`);
+    if (req.url.startsWith("/api") && process.env.NODE_ENV !== "production") {
+      console.log(`[API Request] ${req.method} ${req.url}`);
     }
     next();
   });
@@ -95,23 +130,19 @@ async function startServer() {
   });
 
   // API Routes
-  app.use("/api/whatsapp", (req, res, next) => {
-    console.log(`[WhatsApp Route Attempt] ${req.method} ${req.url}`);
-    next();
-  }, authenticate, whatsappRoutes);
-
+  app.use("/api/whatsapp", authenticate, whatsappRoutes);
   app.use("/api/auth", authRoutes);
   
-  // Public Plans Route (Duplicated from auth for convenience)
+  // Public Plans Route
   app.get("/api/plans", async (req, res) => {
     try {
-      const { data, error } = await (await import("./backend/supabaseAdmin")).supabaseAdmin
+      if (!supabaseAdmin) throw new Error("Database not connected");
+      const { data, error } = await supabaseAdmin
         .from("plans")
         .select("*")
         .order("price", { ascending: true });
         
       if (error) throw error;
-      
       res.json({ success: true, data });
     } catch (err: any) {
       console.error("Failed to fetch plans:", err);
@@ -126,6 +157,7 @@ async function startServer() {
   app.use("/api/templates", authenticate, templateRoutes);
   app.use("/api/packs", authenticate, packRoutes);
   app.use("/api/media", authenticate, mediaRoutes);
+  app.use("/api/menus", authenticate, menuRoutes);
 
   // Serve uploads directory
   const uploadsDir = path.join(process.cwd(), "uploads");
@@ -136,15 +168,20 @@ async function startServer() {
 
   // Catch-all for unmatched API routes
   app.all("/api/*", (req, res) => {
-    console.warn(`[API Route Not Found] ${req.method} ${req.originalUrl}`);
     res.status(404).json({ 
       success: false, 
       error: `API route not found: ${req.method} ${req.originalUrl}` 
     });
   });
 
-  // Start background tasks
-  startScheduler();
+  // Disable problematic background tasks for now if requested
+  if (process.env.DISABLE_SCHEDULER !== "true") {
+    try {
+      startScheduler();
+    } catch (err) {
+      console.error("Failed to start scheduler:", err);
+    }
+  }
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -160,6 +197,7 @@ async function startServer() {
     }
   } else {
     const distPath = path.join(process.cwd(), "dist");
+    console.log("[Startup] Serving static files from:", distPath);
     
     // Serve static files from dist
     app.use(express.static(distPath));
@@ -170,6 +208,7 @@ async function startServer() {
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
       } else {
+        console.error("[Static] index.html not found at:", indexPath);
         res.status(404).send("Frontend build not found. Please run 'npm run build'.");
       }
     });
@@ -180,8 +219,7 @@ async function startServer() {
     console.error("Global error handler caught:", err);
     res.status(err.status || 500).json({
       success: false,
-      error: err.message || "Erro interno do servidor",
-      stack: process.env.NODE_ENV === "production" ? undefined : err.stack
+      error: err.message || "Internal Server Error"
     });
   });
 
@@ -191,38 +229,19 @@ async function startServer() {
   });
 
   process.on("uncaughtException", (err: any) => {
-    if (err.code === 'EPIPE') {
-      console.warn("Caught EPIPE error, ignoring to prevent crash.");
-      return;
-    }
+    if (err.code === 'EPIPE') return;
     console.error("CRITICAL: Uncaught Exception:", err);
   });
 
   app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-    console.log(`[Startup] SUPABASE_URL present: ${!!process.env.SUPABASE_URL}`);
-    console.log(`[Startup] VITE_SUPABASE_URL present: ${!!process.env.VITE_SUPABASE_URL}`);
-    console.log(`[Startup] SUPABASE_SERVICE_ROLE_KEY present: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY}`);
-    console.log(`[Startup] SUPABASE_SERVICE_KEY present: ${!!process.env.SUPABASE_SERVICE_KEY}`);
+    console.log(`[Startup] Server listening on port ${PORT}`);
     
-    // Debug: List tables
-    supabaseAdmin
-      .from("information_schema.tables")
-      .select("table_name")
-      .eq("table_schema", "public")
-      .then(({ data, error }) => {
-        if (error) console.error("Error listing tables:", error);
-        else {
-          const tableNames = data?.map(t => t.table_name);
-          console.log("Tables in public schema:", tableNames);
-          fs.writeFileSync('tables.txt', JSON.stringify(tableNames));
-        }
-      });
-
     // Reconnect existing WhatsApp sessions in background
-    whatsappManager.reconnectAllSessions().catch(err => {
-      console.error("Failed to start session reconnection process:", err);
-    });
+    if (process.env.DISABLE_WHATSAPP_RECONNECT !== "true") {
+      whatsappManager.reconnectAllSessions().catch(err => {
+        console.error("Failed to start session reconnection process:", err);
+      });
+    }
   });
 }
 

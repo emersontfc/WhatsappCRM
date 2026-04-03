@@ -13,6 +13,8 @@ import { Boom } from "@hapi/boom";
 import pino from "pino";
 import path from "path";
 import fs from "fs";
+import ffmpeg from 'fluent-ffmpeg';
+import { Readable } from 'stream';
 import { supabaseAdmin } from "./supabaseAdmin";
 import { handleIncomingMessage } from "./automationManager";
 import { handleAgentMessage } from "./agentManager";
@@ -31,6 +33,70 @@ class WhatsAppManager {
   private reconnectAttempts: Map<string, number> = new Map();
   private activeTasks: number = 0;
   private maxConcurrentTasks: number = 10;
+
+  private activeMenus: Map<string, any> = new Map();
+
+  async sendMenu(userId: string, jid: string, menu: any) {
+    const session = await this.ensureConnection(userId);
+    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
+
+    const numberEmojis = ["0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+    
+    let menuText = `*${menu.body}*\n\n`;
+    menu.options.forEach((opt: any, index: number) => {
+      const emoji = numberEmojis[index + 1] || `${index + 1}️⃣`;
+      menuText += `${emoji} ${opt.label}\n`;
+    });
+
+    if (menu.footer) {
+      menuText += `\n_${menu.footer}_`;
+    }
+
+    // Store active menu for this customer
+    this.activeMenus.set(`${userId}:${jid}`, menu);
+
+    return await session.socket.sendMessage(jid, { text: menuText });
+  }
+
+  async handleMenuResponse(userId: string, jid: string, text: string) {
+    const menu = this.activeMenus.get(`${userId}:${jid}`);
+    if (!menu) return null;
+
+    // Clean input (remove emojis, spaces, etc)
+    const cleanInput = text.trim().replace(/\D/g, "");
+    const selectedOption = menu.options.find((opt: any) => opt.key === cleanInput);
+
+    if (selectedOption) {
+      // Clear menu if it has a final response, or update if it has a submenu
+      if (selectedOption.submenu) {
+        this.activeMenus.set(`${userId}:${jid}`, selectedOption.submenu);
+        await this.sendMenu(userId, jid, selectedOption.submenu);
+        return { type: "submenu", data: selectedOption.submenu };
+      } else {
+        this.activeMenus.delete(`${userId}:${jid}`);
+        const session = await this.ensureConnection(userId);
+        if (session && session.status === "connected") {
+          if (selectedOption.response_type === "audio" && selectedOption.media_url) {
+            await this.sendMessage(userId, jid, "", selectedOption.media_url, "audio");
+          } else if (selectedOption.response_type === "image" && selectedOption.media_url) {
+            await this.sendMessage(userId, jid, selectedOption.response, selectedOption.media_url, "image");
+          } else if (selectedOption.response_type === "document" && selectedOption.media_url) {
+            await this.sendMessage(userId, jid, selectedOption.response, selectedOption.media_url, "document");
+          } else {
+            await session.socket.sendMessage(jid, { text: selectedOption.response });
+          }
+        }
+        return { type: "response", text: selectedOption.response, media_url: selectedOption.media_url, response_type: selectedOption.response_type };
+      }
+    }
+
+    // If invalid input but menu is active, send a small hint
+    const session = await this.ensureConnection(userId);
+    if (session && session.status === "connected") {
+      await session.socket.sendMessage(jid, { text: "❌ Opção inválida. Por favor, digite apenas o número da opção desejada." });
+    }
+    return { type: "invalid" };
+  }
 
   async reconnectAllSessions() {
     const sessionsDir = path.join(process.cwd(), "sessions");
@@ -63,6 +129,64 @@ class WhatsAppManager {
       }
     } catch (err) {
       console.error("Error during reconnectAllSessions:", err);
+    }
+  }
+
+  private async convertAudioToWhatsAppFormat(input: Buffer): Promise<{ buffer: Buffer, duration: number }> {
+    const tempInput = path.join(process.cwd(), `temp_audio_in_${Date.now()}.tmp`);
+    const tempOutput = path.join(process.cwd(), `temp_audio_out_${Date.now()}.ogg`);
+    
+    try {
+      await fs.promises.writeFile(tempInput, input);
+      
+      // Get duration first
+      const duration = await new Promise<number>((resolve) => {
+        ffmpeg.ffprobe(tempInput, (err, metadata) => {
+          if (err || !metadata || !metadata.format || !metadata.format.duration) {
+            console.warn("[WhatsAppManager] ffprobe failed to get duration:", err);
+            resolve(0);
+          } else {
+            resolve(Math.floor(metadata.format.duration));
+          }
+        });
+      });
+      
+      const buffer = await new Promise<Buffer>((resolve, reject) => {
+        ffmpeg(tempInput)
+          .audioCodec('libopus')
+          .audioChannels(1)
+          .audioFrequency(16000)
+          .format('ogg')
+          .on('error', (err) => {
+            console.error("[WhatsAppManager] ffmpeg conversion error:", err);
+            reject(err);
+          })
+          .on('end', async () => {
+            try {
+              if (fs.existsSync(tempOutput)) {
+                const outputBuffer = await fs.promises.readFile(tempOutput);
+                resolve(outputBuffer);
+              } else {
+                reject(new Error("Output file not found after conversion"));
+              }
+            } catch (err) {
+              reject(err);
+            }
+          })
+          .save(tempOutput);
+      });
+      
+      return { buffer, duration };
+    } catch (err) {
+      console.error("[WhatsAppManager] Error in convertAudioToWhatsAppFormat:", err);
+      // If conversion fails, return original buffer with 0 duration as fallback
+      return { buffer: input, duration: 0 };
+    } finally {
+      // Cleanup
+      try {
+        if (fs.existsSync(tempInput)) await fs.promises.unlink(tempInput).catch(() => {});
+        if (fs.existsSync(tempOutput)) await fs.promises.unlink(tempOutput).catch(() => {});
+      } catch (e) {}
     }
   }
 
@@ -348,19 +472,29 @@ class WhatsAppManager {
       }
     });
 
-    // Sync Contacts - DISABLED to prevent database pollution
-    /*
+    // Sync Contacts
     socket.ev.on("contacts.upsert", async (contacts) => {
-      console.log(`Received ${contacts.length} contacts for ${userId}`);
+      console.log(`[WhatsApp] Received ${contacts.length} contacts for ${userId}`);
       for (const contact of contacts) {
-        await this.syncContact(userId, contact);
+        // Only sync if it's a real person (not a group) and has a name or notify
+        if (contact.id && !contact.id.includes("@g.us") && (contact.name || contact.notify)) {
+          await this.syncContact(userId, contact);
+        }
       }
     });
-    */
 
-    socket.ev.on("messaging-history.set", async ({ contacts, messages }) => {
+    socket.ev.on("messaging-history.set", async ({ contacts, messages, isLatest }) => {
       try {
-        console.log(`Received history for ${userId}: ${contacts?.length || 0} contacts, ${messages?.length || 0} messages`);
+        console.log(`[WhatsApp] Received history for ${userId}: ${contacts?.length || 0} contacts, ${messages?.length || 0} messages (isLatest: ${isLatest})`);
+        
+        if (contacts) {
+          for (const contact of contacts) {
+            if (contact.id && !contact.id.includes("@g.us")) {
+              await this.syncContact(userId, contact);
+            }
+          }
+        }
+
         if (messages) {
           for (const msg of messages) {
             await this.syncMessage(userId, msg);
@@ -368,6 +502,91 @@ class WhatsAppManager {
         }
       } catch (err) {
         console.error(`[WhatsApp] Error in messaging-history.set for user ${userId}:`, err);
+      }
+    });
+
+    // Handle Group Participants Update (Welcome/Goodbye)
+    socket.ev.on("group-participants.update", async ({ id, participants, action }) => {
+      try {
+        const participantJids = participants.map(p => typeof p === 'string' ? p : (p as any).id);
+        console.log(`[WhatsApp] Group participants update for ${id}: ${action} - ${participantJids.join(", ")}`);
+        
+        const { data: rules } = await supabaseAdmin
+          .from("group_rules")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("group_jid", id)
+          .eq("active", true)
+          .maybeSingle();
+
+        if (rules && rules.welcome_msg && action === "add") {
+          for (const participant of participantJids) {
+            const welcome = rules.welcome_msg.replace("@user", `@${participant.split("@")[0]}`);
+            await socket.sendMessage(id, { 
+              text: welcome,
+              mentions: [participant]
+            });
+          }
+        }
+      } catch (err) {
+        console.error(`[WhatsApp] Error in group-participants.update for user ${userId}:`, err);
+      }
+    });
+
+    // Handle Message Deletion (Anti-Delete)
+    socket.ev.on("messages.update", async (updates) => {
+      for (const update of updates) {
+        if (update.update.message === null) { // Message deleted
+          try {
+            const jid = update.key.remoteJid!;
+            const msgId = update.key.id!;
+
+            const { data: msg } = await supabaseAdmin
+              .from("messages")
+              .select("*, contacts(name, phone)")
+              .eq("user_id", userId)
+              .eq("msg_id", msgId)
+              .maybeSingle();
+
+            if (msg) {
+              const contactName = msg.contacts?.name || msg.contacts?.phone || "Desconhecido";
+              
+              // Check if anti-delete is enabled for this group
+              let shouldPreserve = false;
+              if (jid.includes("@g.us")) {
+                const { data: rule } = await supabaseAdmin
+                  .from("group_rules")
+                  .select("anti_delete")
+                  .eq("user_id", userId)
+                  .eq("group_jid", jid)
+                  .maybeSingle();
+                
+                if (rule?.anti_delete) {
+                  shouldPreserve = true;
+                }
+              } else {
+                // For private chats, we can default to true or false. Let's default to true for now as a feature.
+                shouldPreserve = true;
+              }
+
+              if (shouldPreserve) {
+                await this.log(userId, "warn", `Anti-Delete: Mensagem deletada por ${contactName} preservada.`, { 
+                  text: msg.text, 
+                  timestamp: msg.timestamp,
+                  jid
+                });
+                
+                // Mark as deleted in DB instead of removing
+                await supabaseAdmin
+                  .from("messages")
+                  .update({ text: `🚫 [Mensagem Deletada]: ${msg.text}` })
+                  .eq("id", msg.id);
+              }
+            }
+          } catch (err) {
+            console.error("[WhatsApp] Error handling message deletion:", err);
+          }
+        }
       }
     });
 
@@ -438,6 +657,14 @@ class WhatsAppManager {
                     }
 
                     console.log(`[WhatsApp] Processing message for user ${userId}: "${text}" (isButton: ${isButton}) (isGroup: ${isGroup}) (Active Tasks: ${this.activeTasks})`);
+                    
+                    // Check if there's an active numeric menu for this user
+                    const menuHandled = await this.handleMenuResponse(userId, remoteJid, text);
+                    if (menuHandled) {
+                      console.log(`[WhatsApp] Menu response handled for user ${userId}: ${menuHandled.type}`);
+                      return;
+                    }
+
                     const triggered = await handleIncomingMessage(this, userId, remoteJid, text, isButton);
                     if (!triggered) {
                       console.log(`[WhatsApp] No automation triggered for user ${userId}, calling AI agent.`);
@@ -523,12 +750,17 @@ class WhatsAppManager {
           timestamp: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
           msg_id: msg.key.id,
         });
+      }
 
-        // Update contact's last message info
+      // Always update contact's last message info if it's a recent message
+      const msgDate = new Date((msg.messageTimestamp as number) * 1000);
+      const now = new Date();
+      // If message is from last 7 days, update last_message_at
+      if (now.getTime() - msgDate.getTime() < 7 * 24 * 60 * 60 * 1000) {
         await supabaseAdmin
           .from("contacts")
           .update({
-            last_message_at: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
+            last_message_at: msgDate.toISOString(),
             last_message_text: text.substring(0, 100)
           })
           .eq("id", contactId);
@@ -540,9 +772,6 @@ class WhatsAppManager {
 
   private async syncContact(userId: string, contact: BaileysContact) {
     try {
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(userId)) return;
-
       const jid = contact.id;
       if (!jid || jid.includes("@g.us")) return; // Skip groups for now
 
@@ -551,7 +780,7 @@ class WhatsAppManager {
 
       const { data: existingContact } = await supabaseAdmin
         .from("contacts")
-        .select("id, tags")
+        .select("id, tags, last_message_at")
         .eq("user_id", userId)
         .eq("phone", phone)
         .maybeSingle();
@@ -599,7 +828,7 @@ class WhatsAppManager {
         await supabaseAdmin
           .from("contacts")
           .update({ 
-            name,
+            name: name !== phone ? name : undefined, // Only update name if it's not just the phone
             tags: updatedTags
           })
           .eq("id", existingContact.id);
@@ -689,7 +918,7 @@ class WhatsAppManager {
     return this.sessions.get(userId);
   }
 
-  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string) {
+  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number) {
     let session = await this.ensureConnection(userId);
 
     if (!session || session.status !== "connected") {
@@ -698,22 +927,99 @@ class WhatsAppManager {
     }
     
     if (mediaUrl && mediaType) {
-      await this.log(userId, "info", `Enviando mídia (${mediaType}) para ${jid}`);
+      await this.log(userId, "info", `Enviando mídia (${mediaType}) para ${jid}. URL: ${mediaUrl}`);
       try {
+        let mediaContent: any = { url: mediaUrl };
+        let isLocalOgg = false;
+        
+        // If it's our own upload URL, read it directly from disk to avoid proxy/HTML fallback issues
+        if (mediaUrl.startsWith('http')) {
+          const urlObj = new URL(mediaUrl);
+          if (urlObj.pathname.startsWith('/uploads/')) {
+            const localPath = path.join(process.cwd(), urlObj.pathname);
+            console.log(`[WhatsAppManager] Reading local media directly: ${localPath}`);
+            try {
+              mediaContent = fs.readFileSync(localPath);
+              if (urlObj.pathname.endsWith('.ogg')) {
+                isLocalOgg = true;
+              }
+            } catch (err) {
+              console.warn(`[WhatsAppManager] Failed to read local media directly, falling back to URL: ${err}`);
+              mediaContent = { url: mediaUrl };
+            }
+          }
+        } else if (mediaUrl.startsWith('file://')) {
+          try {
+            const filePath = mediaUrl.replace('file://', '');
+            mediaContent = fs.readFileSync(filePath);
+            if (filePath.endsWith('.ogg')) {
+              isLocalOgg = true;
+            }
+          } catch (err) {
+            console.warn(`[WhatsAppManager] Failed to read local file: ${err}`);
+            throw new Error(`Local file not found: ${mediaUrl}`);
+          }
+        }
+
         if (mediaType === 'image') {
-          return await session.socket.sendMessage(jid, { image: { url: mediaUrl }, caption: text });
+          return await session.socket.sendMessage(jid, { image: mediaContent, mimetype: 'image/jpeg', caption: text });
         } else if (mediaType === 'audio') {
-          return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: 'audio/ogg', ptt: true });
+          let audioBuffer: Buffer;
+          try {
+            // If we already have duration and it's an ogg file, we can skip conversion
+            if (duration && duration > 0 && isLocalOgg && Buffer.isBuffer(mediaContent)) {
+              console.log(`[WhatsAppManager] Skipping conversion for local ogg with duration: ${duration}`);
+              return await session.socket.sendMessage(jid, { 
+                audio: mediaContent, 
+                mimetype: 'audio/ogg; codecs=opus', 
+                ptt: true, 
+                seconds: duration 
+              });
+            }
+
+            if (Buffer.isBuffer(mediaContent)) {
+              audioBuffer = mediaContent;
+            } else {
+              const response = await fetch(mediaUrl);
+              if (!response.ok) throw new Error(`Failed to fetch audio: ${response.statusText}`);
+              audioBuffer = Buffer.from(await response.arrayBuffer());
+            }
+            
+            console.log(`[WhatsAppManager] Converting audio and getting duration for: ${mediaUrl}`);
+            const { buffer: formattedAudio, duration: detectedDuration } = await this.convertAudioToWhatsAppFormat(audioBuffer);
+            
+            // Use provided duration if conversion failed to get one
+            const finalDuration = (detectedDuration > 0 ? detectedDuration : (duration || 1));
+            
+            return await session.socket.sendMessage(jid, { 
+              audio: formattedAudio, 
+              mimetype: 'audio/ogg; codecs=opus', 
+              ptt: true, 
+              seconds: finalDuration 
+            });
+          } catch (audioErr) {
+            console.error("[WhatsAppManager] Error processing audio message:", audioErr);
+            await this.log(userId, "error", `Erro ao processar áudio para ${jid}: ${audioErr}`);
+            // If it fails, try to send as document if it's not empty
+            if (text) {
+              return await session.socket.sendMessage(jid, { text });
+            }
+            throw audioErr;
+          }
         } else if (mediaType === 'document') {
           // Extract filename from URL or use a default
           const fileName = mediaUrl.split('/').pop() || 'documento';
-          return await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: 'application/pdf', fileName, caption: text });
+          return await session.socket.sendMessage(jid, { document: mediaContent, mimetype: 'application/pdf', fileName, caption: text });
         }
+
       } catch (err) {
         console.error("Error sending media message:", err);
-        await this.log(userId, "error", `Falha ao enviar mídia para ${jid}`);
-        // Fallback to text if media fails
-        return await session.socket.sendMessage(jid, { text });
+        await this.log(userId, "error", `Falha ao enviar mídia para ${jid}: ${err}`);
+        // Fallback to text if media fails and text is not empty
+        if (text && text.trim()) {
+          return await session.socket.sendMessage(jid, { text });
+        }
+        throw err;
       }
     }
 
@@ -731,63 +1037,38 @@ class WhatsAppManager {
 
     try {
       // Modern Baileys Buttons (Interactive Message - Native Flow)
-      const message = {
-        interactiveMessage: {
-          header: { title: "Menu", hasMediaAttachment: false },
-          body: { text: text },
-          footer: { text: "Selecione uma opção" },
-          nativeFlowMessage: {
-            buttons: buttons.map(b => ({
-              name: "quick_reply",
-              buttonParamsJson: JSON.stringify({
-                display_text: b.label,
-                id: b.id
-              })
-            }))
+      const msg = generateWAMessageFromContent(jid, {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: {
+              deviceListMetadata: {},
+              deviceListMetadataVersion: 2
+            },
+            interactiveMessage: {
+              body: { text: text },
+              footer: { text: "Selecione uma opção" },
+              header: { hasMediaAttachment: false },
+              nativeFlowMessage: {
+                buttons: buttons.map(b => ({
+                  name: "quick_reply",
+                  buttonParamsJson: JSON.stringify({
+                    display_text: b.label,
+                    id: b.id
+                  })
+                })),
+                messageVersion: 1
+              }
+            }
           }
         }
-      };
+      }, { userJid: session.socket.user?.id });
 
       await this.log(userId, "info", `Enviando botões interativos para ${jid}`);
       
-      const genMsg = await generateWAMessageFromContent(jid, { 
-        viewOnceMessage: { 
-          message 
-        } 
-      }, { userJid: session.socket.user?.id });
-
-      return await session.socket.relayMessage(jid, genMsg.message!, { messageId: genMsg.key.id! });
+      return await session.socket.relayMessage(jid, msg.message!, { messageId: msg.key.id! });
     } catch (err) {
-      console.error("Error sending interactive buttons, falling back to legacy buttons:", err);
-      
-      try {
-        // Fallback 1: Legacy Buttons (Still works on some clients)
-        const legacyButtons = buttons.map(b => ({
-          buttonId: b.id,
-          buttonText: { displayText: b.label },
-          type: 1
-        }));
-
-        const buttonMessage = {
-          text: text,
-          buttons: legacyButtons,
-          headerType: 1
-        };
-        await this.log(userId, "warn", `Botões interativos falharam, tentando Legacy Buttons para ${jid}`);
-        return await session.socket.sendMessage(jid, buttonMessage);
-      } catch (legacyErr) {
-        console.error("Legacy buttons also failed, falling back to plain text:", legacyErr);
-        
-        // Fallback 2: Plain Text with numbered options
-        let fallbackText = `*${text}*\n\n`;
-        buttons.forEach((b, i) => {
-          fallbackText += `${i + 1}. ${b.label}\n`;
-        });
-        fallbackText += "\n_Responda com o número ou o texto da opção._";
-        
-        await this.log(userId, "warn", `Legacy Buttons falharam, enviando texto simples para ${jid}`);
-        return await session.socket.sendMessage(jid, { text: fallbackText });
-      }
+      console.error("Error sending interactive buttons:", err);
+      throw err;
     }
   }
 
@@ -804,84 +1085,52 @@ class WhatsAppManager {
       const sections = listData.sections.map((section: any) => ({
         title: section.title,
         rows: section.rows.map((row: any) => ({
-          header: "",
           title: row.title,
           description: row.description || "",
           id: row.id || row.title
         }))
       }));
 
-      const message = {
-        interactiveMessage: {
-          body: { text: listData.description || "Selecione uma opção" },
-          footer: { text: listData.footer || "" },
-          header: { title: listData.title || "Menu", hasMediaAttachment: false },
-          nativeFlowMessage: {
-            buttons: [
-              {
-                name: "single_select",
-                buttonParamsJson: JSON.stringify({
-                  title: listData.buttonText || "Ver Opções",
-                  sections: sections
-                })
-              }
-            ]
-          }
+      const interactiveMessage: any = {
+        body: { text: listData.description || "Selecione uma opção" },
+        footer: { text: listData.footer || "" },
+        header: { hasMediaAttachment: false },
+        nativeFlowMessage: {
+          buttons: [
+            {
+              name: "single_select",
+              buttonParamsJson: JSON.stringify({
+                title: listData.buttonText || "Ver Opções",
+                sections: sections
+              })
+            }
+          ],
+          messageVersion: 1
         }
       };
+      
+      if (listData.title) {
+        interactiveMessage.header.title = listData.title;
+      }
 
       await this.log(userId, "info", `Enviando lista interativa (moderna) para ${jid}`);
       
-      const genMsg = await generateWAMessageFromContent(jid, { 
-        viewOnceMessage: { 
-          message 
-        } 
+      const msg = generateWAMessageFromContent(jid, {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: {
+              deviceListMetadata: {},
+              deviceListMetadataVersion: 2
+            },
+            interactiveMessage: interactiveMessage
+          }
+        }
       }, { userJid: session.socket.user?.id });
-
-      return await session.socket.relayMessage(jid, genMsg.message!, { messageId: genMsg.key.id! });
-    } catch (err) {
-      console.error("Error sending modern list message, falling back to legacy list:", err);
       
-      try {
-        // Fallback 1: Legacy List Message
-        const legacyListMessage: any = {
-          text: listData.description || "Selecione uma opção",
-          footer: listData.footer || "",
-          title: listData.title || "Menu",
-          buttonText: listData.buttonText || "Ver Opções",
-          sections: listData.sections.map((section: any) => ({
-            title: section.title,
-            rows: section.rows.map((row: any) => ({
-              title: row.title,
-              description: row.description || "",
-              rowId: row.id || row.title
-            }))
-          }))
-        };
-        await this.log(userId, "warn", `Lista moderna falhou, tentando Legacy List para ${jid}`);
-        return await session.socket.sendMessage(jid, legacyListMessage);
-      } catch (legacyListErr) {
-        console.error("Legacy list message also failed, falling back to text:", legacyListErr);
-        
-        // Fallback 2: Plain Text
-        let fallbackText = `${listData.title || "Menu"}\n${listData.description || ""}\n\n`;
-        let optionNum = 1;
-        
-        listData.sections.forEach((section: any) => {
-          if (section.title) fallbackText += `*${section.title}*\n`;
-          section.rows.forEach((row: any) => {
-            fallbackText += `${optionNum}. ${row.title}\n`;
-            if (row.description) fallbackText += `   ${row.description}\n`;
-            optionNum++;
-          });
-          fallbackText += '\n';
-        });
-        
-        fallbackText += `Responda com o número da opção desejada.`;
-        
-        await this.log(userId, "warn", `Lista legada falhou, enviando texto puro para ${jid}`);
-        return await session.socket.sendMessage(jid, { text: fallbackText });
-      }
+      return await session.socket.relayMessage(jid, msg.message!, { messageId: msg.key.id! });
+    } catch (err) {
+      console.error("Error sending modern list message:", err);
+      throw err;
     }
   }
 

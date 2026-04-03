@@ -365,6 +365,8 @@ export default function Schedule() {
           contact_name: selectedContact?.name || "Desconhecido",
           phone: selectedContact?.phone || "", // Satisfy old DB constraint
           text: newMessage.message || "", // Satisfy old DB constraint
+          media_url: newMessage.media_url || "",
+          media_type: newMessage.media_type || "",
           user_id: userId,
           status: "pending",
           scheduled_at: scheduledDate.toISOString(),

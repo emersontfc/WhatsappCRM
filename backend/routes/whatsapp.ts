@@ -95,7 +95,7 @@ router.get("/me", (req: AuthRequest, res) => {
 
 router.post("/send", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  let { jid, text, to, mediaUrl, mediaType } = req.body;
+  let { jid, text, to, mediaUrl, mediaType, duration } = req.body;
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -132,7 +132,7 @@ router.post("/send", async (req: AuthRequest, res) => {
   }
 
   try {
-    const result = await whatsappManager.sendMessage(userId, jid, text || "", mediaUrl, mediaType);
+    const result = await whatsappManager.sendMessage(userId, jid, text || "", mediaUrl, mediaType, duration);
     
     // Increment usage
     await supabaseAdmin
@@ -299,12 +299,13 @@ router.post("/groups/:jid/rules", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
+    const { id, created_at, ...rulesToSave } = rules;
     const { data, error } = await supabaseAdmin
       .from("group_rules")
       .upsert({
         user_id: userId,
         group_jid: jid,
-        ...rules,
+        ...rulesToSave,
         updated_at: new Date().toISOString()
       }, { onConflict: 'user_id,group_jid' })
       .select()

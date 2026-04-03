@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
 
 interface VoiceRecorderProps {
-  onSend: (audioUrl: string) => void;
+  onSend: (audioUrl: string, duration?: number) => void;
   onCancel: () => void;
 }
 
@@ -43,6 +43,7 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
 
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        console.log("Recording stopped, blob size:", blob.size);
         setAudioBlob(blob);
         stream.getTracks().forEach(track => track.stop());
       };
@@ -88,7 +89,7 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
       });
 
       if (result.success) {
-        onSend(result.url);
+        onSend(result.url, result.duration);
         toast.success("Áudio enviado com sucesso!");
       } else {
         throw new Error(result.error || "Erro ao fazer upload do áudio");

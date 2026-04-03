@@ -21,6 +21,12 @@ export const supabase = (supabaseUrl && isValidAnonKey)
               if (authProp === 'getUser') {
                 return async () => ({ data: { user: null }, error: null });
               }
+              if (authProp === 'getSession') {
+                return async () => ({ data: { session: null }, error: null });
+              }
+              if (authProp === 'onAuthStateChange') {
+                return () => ({ data: { subscription: { unsubscribe: () => {} } } });
+              }
               return () => { throw new Error("Supabase client not initialized."); };
             }
           });
@@ -32,9 +38,7 @@ export const supabase = (supabaseUrl && isValidAnonKey)
     }) as any;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase URL or Anon Key is missing. Please configure them in Settings.");
-} else if (!isValidAnonKey) {
-  console.error("Supabase Anon Key is invalid. It should be a JWT token with 3 parts separated by dots.");
+  console.warn("[Supabase] URL or Anon Key is missing. Please configure them in Settings.");
 }
 
 // Helper to get current session with simple promise caching to avoid concurrent auth lock issues

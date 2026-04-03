@@ -61,17 +61,35 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeout = 100
 
 async function runGemini(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
   const apiKey = agent.api_key ? decrypt(agent.api_key) : process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Gemini API Key missing");
+  if (!apiKey) throw new Error("Gemini API Key missing. Please set GEMINI_API_KEY in Settings.");
   
   const ai = new GoogleGenAI({ apiKey });
-  const response = await ai.models.generateContent({
-    model: agent.model || "gemini-3.1-flash-preview",
-    contents: prompt,
-    config: {
-      systemInstruction
+  const modelName = agent.model || "gemini-3-flash-preview";
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        systemInstruction
+      }
+    });
+    return response.text || "Sem resposta.";
+  } catch (err: any) {
+    console.error(`[AI Engine] Gemini Error (${modelName}):`, err.message);
+    if (err.message.includes("404") || err.message.includes("not found")) {
+      // Try fallback model name
+      const fallbackModel = "gemini-1.5-flash";
+      console.log(`[AI Engine] Retrying with fallback model: ${fallbackModel}`);
+      const fallbackRes = await ai.models.generateContent({
+        model: fallbackModel,
+        contents: prompt,
+        config: { systemInstruction }
+      });
+      return fallbackRes.text || "Sem resposta.";
     }
-  });
-  return response.text || "Sem resposta.";
+    throw err;
+  }
 }
 
 async function runOpenAI(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
@@ -170,7 +188,20 @@ async function runCustom(agent: any, prompt: string, systemInstruction?: string)
   if (!agent.api_url) throw new Error("Custom API URL missing");
   
   const apiKey = agent.api_key ? decrypt(agent.api_key) : "";
-  const fullPrompt = `SYSTEM:\n${systemInstruction}\n\n${prompt}`;
+  const isChatCompletion = agent.api_url.includes("/chat/completions") || agent.model;
+
+  const body = isChatCompletion ? {
+    model: agent.model || "gpt-3.5-turbo",
+    messages: [
+      { role: "system", content: systemInstruction },
+      { role: "user", content: prompt }
+    ],
+    max_tokens: 500
+  } : {
+    message: prompt,
+    system: systemInstruction,
+    prompt: `SYSTEM:\n${systemInstruction}\n\nUSER:\n${prompt}`
+  };
 
   const response = await fetchWithTimeout(agent.api_url, {
     method: "POST",
@@ -178,10 +209,7 @@ async function runCustom(agent: any, prompt: string, systemInstruction?: string)
       "Content-Type": "application/json", 
       ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {}) 
     },
-    body: JSON.stringify({
-      message: fullPrompt,
-      system: systemInstruction
-    })
+    body: JSON.stringify(body)
   });
   
   if (!response.ok) {
