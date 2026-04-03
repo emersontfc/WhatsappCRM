@@ -14,7 +14,6 @@ router.use((req, res, next) => {
 
 router.post("/connect", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  const { phoneNumber } = req.body;
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -23,7 +22,7 @@ router.post("/connect", async (req: AuthRequest, res) => {
 
   try {
     await whatsappManager.deleteSession(userId);
-    await whatsappManager.createSession(userId, phoneNumber);
+    await whatsappManager.createSession(userId);
     const session = whatsappManager.getSession(userId);
     res.json({ success: true, status: session?.status || "connecting" });
   } catch (error: any) {
@@ -49,8 +48,7 @@ router.get("/qr", (req: AuthRequest, res) => {
     res.json({
       success: true,
       qr: session.qr,
-      status: session.status,
-      pairingCode: session.pairingCode
+      status: session.status
     });
   } catch (error) {
     console.error(`[WhatsApp QR] Error for user ${userId}:`, error);

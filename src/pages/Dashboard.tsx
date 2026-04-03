@@ -64,12 +64,9 @@ export default function Dashboard() {
   const { isActivated, plan, planDetails, loading: activationLoading } = useActivation();
   const [status, setStatus] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
-  const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [me, setMe] = useState<any>(null);
-  const [phoneNumber, setPhoneNumber] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connectMethod, setConnectMethod] = useState<"qr" | "number">("number");
   const [stats, setStats] = useState({
     contacts: 0,
     messages: 0,
@@ -205,7 +202,6 @@ export default function Dashboard() {
         qrSince.current = null;
         setStatus("connected");
         setQr(null);
-        setPairingCode(null);
         if (manual) toast.success("Conectado com sucesso!");
         
         // Fetch 'me' info if connected
@@ -213,47 +209,40 @@ export default function Dashboard() {
           const meData = await apiFetch(`/api/whatsapp/me`);
           if (meData.me) setMe(meData.me);
         } catch (e) {}
-      } else if (data.status === "qr" || data.status === "pairing") {
+      } else if (data.status === "qr") {
         connectingSince.current = null;
         
-        // Check how long it's been showing QR/Pairing
+        // Check how long it's been showing QR
         if (!qrSince.current) {
           qrSince.current = Date.now();
         } else if (Date.now() - qrSince.current > 60000) { // 60 seconds timeout
-          console.log("[WhatsApp] QR/Pairing timeout reached, resetting...");
+          console.log("[WhatsApp] QR timeout reached, resetting...");
           qrSince.current = null;
           await resetSession();
           setStatus("disconnected");
           setQr(null);
-          setPairingCode(null);
           toast.error("O código expirou. Tente novamente.");
           return;
         }
 
-        // Fetch QR/Pairing code specifically FIRST to avoid UI flicker
+        // Fetch QR code specifically FIRST to avoid UI flicker
         const qrData = await apiFetch(`/api/whatsapp/qr`);
         
         if (qrData.qr) {
           setQr(qrData.qr);
-          setPairingCode(null);
-          setStatus(data.status);
-        } else if (qrData.pairingCode) {
-          setPairingCode(qrData.pairingCode);
-          setQr(null);
           setStatus(data.status);
         } else if (qrData.status === "connecting") {
           // Just wait if it's still connecting
           setStatus("connecting");
           setQr(null);
-          setPairingCode(null);
-        } else if (!qrData.qr && !qrData.pairingCode && data.status !== "connecting") {
+        } else if (!qrData.qr && data.status !== "connecting") {
           // Only reconnect if we are supposed to have a code but don't, and we aren't already connecting
           if (manual) {
             toast.info("Gerando novo código...");
             await connect();
           }
         }
-        if (manual) toast.info(data.status === "qr" ? "Aguardando leitura do QR Code." : "Aguardando pareamento.");
+        if (manual) toast.info("Aguardando leitura do QR Code.");
       } else if (data.status === "connecting") {
         qrSince.current = null;
         // Check how long it's been connecting
@@ -265,20 +254,17 @@ export default function Dashboard() {
           await resetSession();
           setStatus("disconnected");
           setQr(null);
-          setPairingCode(null);
           toast.error("A conexão demorou muito. Tente novamente.");
           return;
         }
         // Just wait if it's still connecting
         setStatus("connecting");
         setQr(null);
-        setPairingCode(null);
       } else {
         connectingSince.current = null;
         qrSince.current = null;
         setStatus(data.status || "disconnected");
         setQr(null);
-        setPairingCode(null);
         if (manual && data.status === "disconnected") toast.info("Desconectado.");
       }
       
@@ -316,8 +302,7 @@ export default function Dashboard() {
     setError(null);
     try {
       const data = await apiFetch(`/api/whatsapp/connect`, {
-        method: "POST",
-        body: JSON.stringify({ phoneNumber: connectMethod === "number" ? phoneNumber : undefined })
+        method: "POST"
       });
       
       setStatus(data.status || "connecting");
@@ -340,7 +325,6 @@ export default function Dashboard() {
       });
       setStatus("disconnected");
       setQr(null);
-      setPairingCode(null);
       setMe(null);
       toast.success("Sessão resetada com sucesso!");
     } catch (err: any) {
@@ -604,22 +588,6 @@ export default function Dashboard() {
                           exit={{ opacity: 0 }}
                           className="w-full space-y-6"
                         >
-                          {/* Method Selector */}
-                          <div className="flex p-1 bg-slate-50 rounded-xl border border-slate-100">
-                            <button 
-                              className={cn("flex-1 py-2 text-xs font-bold rounded-lg transition-all", connectMethod === "number" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400")}
-                              onClick={() => setConnectMethod("number")}
-                            >
-                              Número
-                            </button>
-                            <button 
-                              className={cn("flex-1 py-2 text-xs font-bold rounded-lg transition-all", connectMethod === "qr" ? "bg-white text-slate-900 shadow-sm" : "text-slate-400")}
-                              onClick={() => setConnectMethod("qr")}
-                            >
-                              QR Code
-                            </button>
-                          </div>
-
                           {/* Content Area */}
                           <div className="relative min-h-[200px] flex flex-col items-center justify-center">
                             {loading || status === "connecting" ? (
@@ -627,7 +595,7 @@ export default function Dashboard() {
                                 <div className="h-12 w-12 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent" />
                                 <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Iniciando...</p>
                               </div>
-                            ) : qr && connectMethod === "qr" ? (
+                            ) : qr ? (
                               <motion.div 
                                 initial={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
@@ -652,60 +620,6 @@ export default function Dashboard() {
                                   Atualizar QR Code
                                 </Button>
                               </motion.div>
-                            ) : pairingCode && connectMethod === "number" ? (
-                              <motion.div 
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="space-y-6 w-full"
-                              >
-                                <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 shadow-sm">
-                                  <p className="text-[10px] font-black text-emerald-600 mb-4 uppercase tracking-[0.2em]">Código de Pareamento</p>
-                                  <div className="flex justify-center gap-2">
-                                    {pairingCode.split('').map((char, i) => (
-                                      <div key={i} className="w-9 h-12 bg-white border border-emerald-200 rounded-xl flex items-center justify-center text-xl font-black text-emerald-600 shadow-sm">
-                                        {char}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                                <div className="space-y-1">
-                                  <p className="text-sm font-bold text-slate-900">Digite no seu WhatsApp</p>
-                                  <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">Aparelhos Conectados {">"} Conectar com número</p>
-                                </div>
-                                <Button 
-                                  variant="ghost" 
-                                  size="sm" 
-                                  className="text-[10px] font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest"
-                                  onClick={() => {
-                                    setPairingCode(null);
-                                    setStatus("disconnected");
-                                  }}
-                                >
-                                  Tentar outro número
-                                </Button>
-                              </motion.div>
-                            ) : connectMethod === "number" ? (
-                              <div className="w-full space-y-4">
-                                <div className="space-y-2 text-left">
-                                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-1">Número com DDI</label>
-                                  <div className="relative">
-                                    <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                                    <Input 
-                                      placeholder="Ex: 258840000000" 
-                                      className="h-14 px-12 bg-white border-slate-200 rounded-2xl focus:ring-emerald-500/20 text-base font-bold tracking-tight"
-                                      value={phoneNumber}
-                                      onChange={e => setPhoneNumber(e.target.value.replace(/\D/g, ''))}
-                                    />
-                                  </div>
-                                </div>
-                                <Button 
-                                  className="w-full h-14 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 transition-all"
-                                  onClick={connect}
-                                  disabled={loading || !phoneNumber}
-                                >
-                                  {loading ? <RefreshCw className="animate-spin" /> : "GERAR CÓDIGO"}
-                                </Button>
-                              </div>
                             ) : (
                               <div className="flex flex-col items-center gap-6 py-4">
                                 <div className="h-24 w-24 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200 flex items-center justify-center text-slate-300 relative">
