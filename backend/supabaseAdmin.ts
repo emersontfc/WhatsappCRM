@@ -11,20 +11,14 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 }
 
 // Admin client for backend operations (service role key)
-export const supabaseAdmin = (supabaseUrl && supabaseServiceRoleKey)
-  ? createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    })
-  : null as any;
+export const supabaseAdmin = createClient(
+  supabaseUrl || "https://placeholder.supabase.co",
+  supabaseServiceRoleKey || "placeholder"
+);
 
-// Alias for convenience if needed, but we use supabaseAdmin throughout the app
+// Alias for convenience
 export const supabase = supabaseAdmin;
 
-if (supabaseAdmin) {
+if (supabaseUrl && supabaseServiceRoleKey) {
   console.log(`[Supabase Admin] Initialized successfully.`);
-} else {
-  console.error("[Supabase Admin] FAILED to initialize. Backend will not function correctly.");
 }

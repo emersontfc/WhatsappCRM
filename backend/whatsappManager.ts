@@ -1,13 +1,18 @@
 import makeWASocket, { 
   DisconnectReason, 
-  useMultiFileAuthState, 
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   WASocket,
   Contact as BaileysContact,
   Browsers,
   generateWAMessageFromContent,
-  prepareWAMessageMedia
+  prepareWAMessageMedia,
+  AuthenticationState,
+  AuthenticationCreds,
+  SignalDataTypeMap,
+  initAuthCreds,
+  BufferJSON,
+  proto
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
@@ -18,6 +23,7 @@ import { Readable } from 'stream';
 import { supabaseAdmin } from "./supabaseAdmin";
 import { handleIncomingMessage } from "./automationManager";
 import { handleAgentMessage } from "./agentManager";
+import { useSupabaseAuthState } from "./lib/supabaseAuthState";
 
 const logger = pino({ level: "info" }); // Set to info to see Baileys logs for debugging crashes
 
@@ -243,36 +249,8 @@ class WhatsAppManager {
 
     console.log(`Creating new WhatsApp session for ${userId}`);
     await this.log(userId, "info", "Iniciando nova sessão WhatsApp...");
-    const sessionDir = path.join(process.cwd(), "sessions", userId);
-    try {
-      if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-      }
-      fs.accessSync(sessionDir, fs.constants.W_OK);
-      console.log(`Session directory is writable: ${sessionDir}`);
-      
-      // Remove paused state if user is manually connecting
-      const pausedFile = path.join(sessionDir, "paused.txt");
-      if (fs.existsSync(pausedFile)) {
-        fs.unlinkSync(pausedFile);
-      }
-    } catch (err) {
-      console.error(`Session directory error for ${userId}:`, err);
-      throw new Error(`Cannot write to session directory: ${sessionDir}`);
-    }
-
-    let state, saveCreds;
-    try {
-      const authState = await useMultiFileAuthState(sessionDir);
-      state = authState.state;
-      saveCreds = authState.saveCreds;
-    } catch (err) {
-      console.error(`Corrupted session directory for ${userId}, clearing it:`, err);
-      fs.rmSync(sessionDir, { recursive: true, force: true });
-      const authState = await useMultiFileAuthState(sessionDir);
-      state = authState.state;
-      saveCreds = authState.saveCreds;
-    }
+    
+    const { state, saveCreds } = await useSupabaseAuthState(userId);
     
     let version;
     try {
@@ -288,12 +266,8 @@ class WhatsAppManager {
       version,
       printQRInTerminal: false,
       browser: Browsers.ubuntu("Chrome"),
-      auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
-      },
+      auth: state,
       logger,
-      // Performance and stability options
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: true,
@@ -306,38 +280,64 @@ class WhatsAppManager {
 
     this.sessions.set(userId, { socket, status: "connecting" });
 
-    console.log(`[WhatsApp] createSession for ${userId}. PhoneNumber: ${phoneNumber}. Registered: ${state.creds.registered}`);
+    socket.ev.on("creds.update", saveCreds);
+
+      socket.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        const session = this.sessions.get(userId);
+        if (!session) return;
+
+        if (qr) {
+          session.qr = qr;
+          session.status = "qr";
+          onUpdate?.("qr", qr);
+          await this.log(userId, "info", "QR Code gerado.");
+        }
+
+        if (connection === "open") {
+          session.status = "connected";
+          session.qr = undefined;
+          session.pairingCode = undefined;
+          this.reconnectAttempts.delete(userId);
+          await this.log(userId, "success", "WhatsApp conectado!");
+          onUpdate?.("connected");
+        }
+
+        if (connection === "close") {
+          const boomErr = lastDisconnect?.error as Boom | undefined;
+          const statusCode = boomErr?.output?.statusCode;
+          
+          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}`);
+          
+          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          
+          if (shouldReconnect) {
+            console.log(`[WhatsApp] Reconnecting session for ${userId}...`);
+            setTimeout(() => this.createSession(userId, phoneNumber, onUpdate), 5000);
+          } else {
+            console.log(`[WhatsApp] Logged out. Clearing session.`);
+            await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+            this.sessions.delete(userId);
+            onUpdate?.("disconnected");
+          }
+        }
+      });
+
     if (phoneNumber && !state.creds.registered) {
-      // Small delay to ensure socket is ready before requesting pairing code
       setTimeout(async () => {
         try {
-          console.log(`[WhatsApp] Requesting pairing code for ${userId} with phone ${phoneNumber}`);
           const code = await socket.requestPairingCode(phoneNumber);
-          console.log(`Pairing code for ${userId}: ${code}`);
           const session = this.sessions.get(userId);
           if (session) {
             session.pairingCode = code;
             session.status = "pairing";
             onUpdate?.("pairing", code);
           }
-        } catch (err: any) {
+        } catch (err) {
           console.error(`Failed to request pairing code for ${userId}:`, err);
-          
-          // If it's a 401 or connection closed, clear the session to allow retry
-          if (err.message?.includes("Connection Closed") || err.message?.includes("401")) {
-            const sessionDir = path.join(process.cwd(), "sessions", userId);
-            if (fs.existsSync(sessionDir)) {
-              fs.rmSync(sessionDir, { recursive: true, force: true });
-            }
-          }
-          
-          this.sessions.delete(userId);
-          onUpdate?.("disconnected");
         }
       }, 3000);
     }
-
-    socket.ev.on("creds.update", saveCreds);
 
     // Welcome Message Logic
     socket.ev.on("group-participants.update", async (update) => {
@@ -365,173 +365,7 @@ class WhatsAppManager {
       }
     });
 
-    socket.ev.on("connection.update", async (update) => {
-      console.log(`[WhatsApp] Connection update for ${userId}:`, JSON.stringify(update, (key, value) => key === 'qr' ? '***' : value));
-      try {
-        const { connection, lastDisconnect, qr } = update;
-        const session = this.sessions.get(userId);
-        if (!session) {
-          console.warn(`[WhatsApp] Connection update for ${userId} but no session found in map.`);
-          return;
-        }
 
-        if (qr) {
-          session.qr = qr;
-          session.status = "qr";
-          onUpdate?.("qr", qr);
-          await this.log(userId, "info", `QR Code gerado com sucesso. Status: ${session.status}`);
-          console.log(`[WhatsApp] QR Code generated for ${userId}. Length: ${qr.length}`);
-        }
-
-        if (connection === "open") {
-          session.status = "connected";
-          session.qr = undefined;
-          session.pairingCode = undefined;
-          this.reconnectAttempts.delete(userId);
-          await this.log(userId, "success", "WhatsApp conectado com sucesso!");
-          console.log(`[WhatsApp] Session ${userId} is now OPEN and READY.`);
-          onUpdate?.("connected");
-        }
-
-        if (connection === "close") {
-          const boomErr = lastDisconnect?.error as Boom | undefined;
-          const statusCode = boomErr?.output?.statusCode;
-          const reason = boomErr?.message || "Graceful close or unknown reason";
-          
-          console.error(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode || 'Unknown'}. Reason: ${reason}`);
-          
-          if (reason === "QR refs attempts ended") {
-            console.log(`[WhatsApp] QR refs attempts ended for ${userId}. Clearing session directory.`);
-            const sessionDir = path.join(process.cwd(), "sessions", userId);
-            if (fs.existsSync(sessionDir)) {
-              fs.rmSync(sessionDir, { recursive: true, force: true });
-            }
-          }
-
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-          
-          console.log(`[WhatsApp] Connection closed for ${userId}. Should reconnect: ${shouldReconnect}`);
-
-          // Auto-clear session on 401 or sync failure to force a fresh start
-          if (statusCode === 401 || reason.includes("failed to sync state")) {
-            console.log(`[WhatsApp] Critical error ${statusCode} (${reason}) for ${userId}. Clearing session directory.`);
-            const sessionDir = path.join(process.cwd(), "sessions", userId);
-            if (fs.existsSync(sessionDir)) {
-              fs.rmSync(sessionDir, { recursive: true, force: true });
-            }
-          }
-
-          if (statusCode === 515) {
-            const attempts = this.reconnectAttempts.get(userId) || 0;
-            console.log(`[WhatsApp] Stream Error 515 for ${userId} (Attempt ${attempts + 1}).`);
-            
-            // If it fails too many times with 515, the session might be corrupted
-            if (attempts >= 3) {
-              console.log(`[WhatsApp] Stream Error 515 persisted for ${userId}. Clearing session directory to force fresh start.`);
-              const sessionDir = path.join(process.cwd(), "sessions", userId);
-              if (fs.existsSync(sessionDir)) {
-                fs.rmSync(sessionDir, { recursive: true, force: true });
-              }
-              this.reconnectAttempts.delete(userId); // Reset attempts for the fresh start
-            }
-          }
-
-          session.status = "disconnected";
-          onUpdate?.("disconnected");
-
-          // Reset session safely
-          this.sessions.delete(userId);
-
-          if (shouldReconnect) {
-            const attempts = this.reconnectAttempts.get(userId) || 0;
-            const maxAttempts = statusCode === 515 ? 10 : 3; // More attempts for stream errors
-            
-            if (attempts < maxAttempts) {
-              this.reconnectAttempts.set(userId, attempts + 1);
-              const delay = statusCode === 515 ? 5000 : 10000; // Faster reconnect for stream errors
-              console.log(`[WhatsApp] Auto-reconnecting for ${userId} (Attempt ${attempts + 1}/${maxAttempts}) in ${delay}ms...`);
-              setTimeout(() => {
-                // Double check if session was already recreated by another event
-                if (!this.sessions.has(userId)) {
-                  console.log(`[WhatsApp] Executing auto-reconnect for ${userId}`);
-                  this.createSession(userId, phoneNumber, onUpdate).catch(err => {
-                    console.error(`[WhatsApp] Auto-reconnect failed for ${userId}:`, err);
-                  });
-                } else {
-                  console.log(`[WhatsApp] Skipping auto-reconnect for ${userId} as session already exists.`);
-                }
-              }, delay);
-            } else {
-              console.log(`[WhatsApp] Max reconnection attempts (${maxAttempts}) reached for ${userId}. Stopping.`);
-              this.reconnectAttempts.delete(userId);
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`Error in connection.update for ${userId}:`, err);
-      }
-    });
-
-    // Sync Contacts
-    socket.ev.on("contacts.upsert", async (contacts) => {
-      console.log(`[WhatsApp] Received ${contacts.length} contacts for ${userId}`);
-      for (const contact of contacts) {
-        // Only sync if it's a real person (not a group) and has a name or notify
-        if (contact.id && !contact.id.includes("@g.us") && (contact.name || contact.notify)) {
-          await this.syncContact(userId, contact);
-        }
-      }
-    });
-
-    socket.ev.on("messaging-history.set", async ({ contacts, messages, isLatest }) => {
-      try {
-        console.log(`[WhatsApp] Received history for ${userId}: ${contacts?.length || 0} contacts, ${messages?.length || 0} messages (isLatest: ${isLatest})`);
-        
-        if (contacts) {
-          for (const contact of contacts) {
-            if (contact.id && !contact.id.includes("@g.us")) {
-              await this.syncContact(userId, contact);
-            }
-          }
-        }
-
-        if (messages) {
-          for (const msg of messages) {
-            await this.syncMessage(userId, msg);
-          }
-        }
-      } catch (err) {
-        console.error(`[WhatsApp] Error in messaging-history.set for user ${userId}:`, err);
-      }
-    });
-
-    // Handle Group Participants Update (Welcome/Goodbye)
-    socket.ev.on("group-participants.update", async ({ id, participants, action }) => {
-      try {
-        const participantJids = participants.map(p => typeof p === 'string' ? p : (p as any).id);
-        console.log(`[WhatsApp] Group participants update for ${id}: ${action} - ${participantJids.join(", ")}`);
-        
-        const { data: rules } = await supabaseAdmin
-          .from("group_rules")
-          .select("*")
-          .eq("user_id", userId)
-          .eq("group_jid", id)
-          .eq("active", true)
-          .maybeSingle();
-
-        if (rules && rules.welcome_msg && action === "add") {
-          for (const participant of participantJids) {
-            const welcome = rules.welcome_msg.replace("@user", `@${participant.split("@")[0]}`);
-            await socket.sendMessage(id, { 
-              text: welcome,
-              mentions: [participant]
-            });
-          }
-        }
-      } catch (err) {
-        console.error(`[WhatsApp] Error in group-participants.update for user ${userId}:`, err);
-      }
-    });
 
     // Handle Message Deletion (Anti-Delete)
     socket.ev.on("messages.update", async (updates) => {

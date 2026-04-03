@@ -9,11 +9,6 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
 
   let apiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
   
-  // Ensure HTTPS if the app is running on HTTPS
-  if (apiUrl && typeof window !== "undefined" && window.location.protocol === "https:" && apiUrl.startsWith("http:")) {
-    apiUrl = apiUrl.replace("http:", "https:");
-  }
-
   // If we are in AI Studio (hostname ends with .run.app), force relative URLs
   // so we test the code we just wrote, not the deployed Render backend.
   if (typeof window !== "undefined" && window.location.hostname.endsWith(".run.app")) {
@@ -86,7 +81,9 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
           if (!(window as any)._isSigningOut) {
             (window as any)._isSigningOut = true;
             console.warn("[apiFetch] 401 detected, signing out to clear session...");
-            supabase.auth.signOut().finally(() => {
+            supabase.auth.signOut().then(() => {
+              window.location.href = '/login';
+            }).finally(() => {
               setTimeout(() => { (window as any)._isSigningOut = false; }, 5000);
             });
           }

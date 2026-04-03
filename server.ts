@@ -51,6 +51,17 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID NOT NULL,
+        category TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, category, key_id)
+      );
+
       ALTER TABLE automations ADD COLUMN IF NOT EXISTS smart_menu_id UUID REFERENCES smart_menus(id) ON DELETE SET NULL;
     `;
 
