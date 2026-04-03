@@ -1,5 +1,4 @@
 import makeWASocket, {
-  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
@@ -17,7 +16,7 @@ import { handleIncomingMessage } from "./automationManager.ts";
 import { handleAgentMessage } from "./agentManager.ts";
 import { useSupabaseAuthState } from "./lib/supabaseAuthState.ts";
 
-const logger = pino({ level: "silent" });
+const logger = pino({ level: "warn" });
 
 export class WhatsAppManager {
   private sessions: Map<string, { socket: any; status: string; qr?: string; pairingCode?: string }> = new Map();
@@ -51,13 +50,22 @@ export class WhatsAppManager {
       const existingSession = this.sessions.get(userId);
       if (existingSession) {
         if (existingSession.status === "connected" || existingSession.status === "connecting" || existingSession.status === "qr" || existingSession.status === "pairing") {
-          console.log(`Session already exists for ${userId} with status: ${existingSession.status}`);
+          console.log(`[WhatsApp] Session already exists for ${userId} with status: ${existingSession.status}`);
           return existingSession.socket;
         }
       }
 
-      console.log(`Creating new WhatsApp session for ${userId}`);
-      await this.log(userId, "info", "Iniciando nova sessão WhatsApp...");
+      const attempts = this.reconnectAttempts.get(userId) || 0;
+      if (attempts >= this.maxReconnectAttempts) {
+        console.warn(`[WhatsApp] Max reconnection attempts reached for ${userId}. Resetting...`);
+        this.reconnectAttempts.delete(userId);
+        await this.log(userId, "error", "Máximo de tentativas de reconexão atingido. Por favor, tente novamente.");
+        onUpdate?.("disconnected");
+        return;
+      }
+
+      console.log(`[WhatsApp] Creating new session for ${userId} (Attempt ${attempts + 1})`);
+      await this.log(userId, "info", `Iniciando conexão WhatsApp (Tentativa ${attempts + 1})...`);
       
       const { state, saveCreds } = await useSupabaseAuthState(userId);
       
@@ -78,9 +86,9 @@ export class WhatsAppManager {
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        connectTimeoutMs: 60000,
+        connectTimeoutMs: 90000, // Increased for Render
         defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 30000,
+        keepAliveIntervalMs: 15000,
         retryRequestDelayMs: 5000,
         shouldSyncHistoryMessage: () => false,
       });
@@ -98,7 +106,7 @@ export class WhatsAppManager {
           session.qr = qr;
           session.status = "qr";
           onUpdate?.("qr", qr);
-          await this.log(userId, "info", "QR Code gerado.");
+          await this.log(userId, "info", "QR Code gerado. Aguardando leitura...");
         }
 
         if (connection === "open") {
@@ -106,24 +114,33 @@ export class WhatsAppManager {
           session.qr = undefined;
           session.pairingCode = undefined;
           this.reconnectAttempts.delete(userId);
-          await this.log(userId, "success", "WhatsApp conectado!");
+          await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           onUpdate?.("connected");
         }
 
         if (connection === "close") {
           const boomErr = lastDisconnect?.error as Boom | undefined;
           const statusCode = boomErr?.output?.statusCode;
+          const reason = boomErr?.message || "Unknown reason";
           
-          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}`);
+          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}, Reason: ${reason}`);
           
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+          const shouldReconnect = statusCode !== DisconnectReason.loggedOut && attempts < this.maxReconnectAttempts;
           
           if (shouldReconnect) {
-            console.log(`[WhatsApp] Reconnecting session for ${userId}...`);
-            setTimeout(() => this.createSession(userId, phoneNumber, onUpdate), 5000);
+            this.reconnectAttempts.set(userId, attempts + 1);
+            const delayTime = Math.min(5000 * (attempts + 1), 30000);
+            console.log(`[WhatsApp] Reconnecting session for ${userId} in ${delayTime/1000}s...`);
+            setTimeout(() => this.createSession(userId, phoneNumber, onUpdate), delayTime);
           } else {
-            console.log(`[WhatsApp] Logged out. Clearing session.`);
-            await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+            if (statusCode === DisconnectReason.loggedOut) {
+              console.log(`[WhatsApp] Logged out for ${userId}. Clearing session.`);
+              await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+              await this.log(userId, "warn", "Sessão encerrada pelo usuário.");
+            } else {
+              console.log(`[WhatsApp] Max attempts reached or fatal error for ${userId}.`);
+              await this.log(userId, "error", "Falha na conexão. Por favor, tente reconectar manualmente.");
+            }
             this.sessions.delete(userId);
             onUpdate?.("disconnected");
           }
@@ -442,6 +459,7 @@ export class WhatsAppManager {
         this.createSession(s.user_id).catch(err => {
           console.error(`Failed to reconnect session for ${s.user_id}:`, err);
         });
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2s delay between sessions
       }
     }
   }

@@ -3,7 +3,8 @@ import {
   AuthenticationCreds, 
   SignalDataTypeMap, 
   initAuthCreds, 
-  BufferJSON 
+  BufferJSON,
+  proto
 } from "@whiskeysockets/baileys";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 
@@ -24,21 +25,33 @@ export const useSupabaseAuthState = async (userId: string) => {
     ? JSON.parse(JSON.stringify(row.session_data), BufferJSON.reviver)
     : { creds: initAuthCreds(), keys: {} };
 
+  let saveTimeout: NodeJS.Timeout | null = null;
+
   // Helper to save state to Supabase
-  const saveState = async () => {
-    try {
-      // Stringify with replacer to handle buffers
-      const payload = JSON.parse(JSON.stringify(sessionData), BufferJSON.replacer);
-      
-      await supabaseAdmin
-        .from("whatsapp_sessions")
-        .upsert({
-          user_id: userId,
-          session_data: payload,
-          updated_at: new Date().toISOString()
-        }, { onConflict: "user_id" });
-    } catch (err) {
-      console.error(`[WhatsApp] Error saving auth state for ${userId}:`, err);
+  const saveState = async (immediate = false) => {
+    const performSave = async () => {
+      try {
+        // Stringify with replacer to handle buffers, then parse back to object for JSONB storage
+        const payload = JSON.parse(JSON.stringify(sessionData, BufferJSON.replacer));
+        
+        await supabaseAdmin
+          .from("whatsapp_sessions")
+          .upsert({
+            user_id: userId,
+            session_data: payload,
+            updated_at: new Date().toISOString()
+          }, { onConflict: "user_id" });
+      } catch (err) {
+        console.error(`[WhatsApp] Error saving auth state for ${userId}:`, err);
+      }
+    };
+
+    if (immediate) {
+      if (saveTimeout) clearTimeout(saveTimeout);
+      await performSave();
+    } else {
+      if (saveTimeout) clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(performSave, 2000); // Debounce key saves
     }
   };
 
@@ -50,6 +63,9 @@ export const useSupabaseAuthState = async (userId: string) => {
         for (const id of ids) {
           let value = sessionData.keys[type]?.[id];
           if (value) {
+            if (type === 'app-state-sync-key' && value) {
+              value = proto.Message.AppStateSyncKeyData.fromObject(value);
+            }
             data[id] = value;
           }
         }
@@ -60,13 +76,13 @@ export const useSupabaseAuthState = async (userId: string) => {
           if (!sessionData.keys[type]) sessionData.keys[type] = {};
           Object.assign(sessionData.keys[type], data[type]);
         }
-        return saveState();
+        return saveState(false);
       }
     }
   };
 
   return {
     state,
-    saveCreds: saveState
+    saveCreds: () => saveState(true)
   };
 };
