@@ -118,7 +118,6 @@ export default function Messages() {
           .from("contacts")
           .select("*")
           .eq("user_id", uId)
-          .contains("tags", ["WhatsApp"])
           .order("last_message_at", { ascending: false, nullsFirst: false });
         
         if (isMounted && initialContacts) {
@@ -148,7 +147,6 @@ export default function Messages() {
               .from("contacts")
               .select("*")
               .eq("user_id", uId)
-              .contains("tags", ["WhatsApp"])
               .order("last_message_at", { ascending: false, nullsFirst: false });
             if (isMounted && updatedContacts) setContacts(updatedContacts);
           })

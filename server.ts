@@ -246,6 +246,24 @@ async function startServer() {
     next();
   });
 
+  // Update RLS policy for logs
+  try {
+    const sql = `
+      DROP POLICY IF EXISTS "Admins can view all logs" ON public.logs;
+      CREATE POLICY "Users can view their own logs" ON public.logs
+        FOR SELECT
+        USING (auth.uid() = user_id OR EXISTS (
+            SELECT 1 FROM public.users
+            WHERE users.id = auth.uid()
+            AND users.role = 'admin'
+          ));
+    `;
+    await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
+    console.log("[Database] RLS policy for logs updated successfully.");
+  } catch (err) {
+    console.error("[Database] Error updating RLS policy for logs:", err);
+  }
+
   app.get("/api/debug/auth", (req, res) => {
     const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "NOT_SET";
     const serviceRoleKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "NOT_SET";
