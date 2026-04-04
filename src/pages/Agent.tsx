@@ -205,7 +205,7 @@ export default function Agent() {
                 <label className="text-sm font-medium text-slate-700">Provedor de IA</label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <button
-                    onClick={() => setConfig({ ...config, provider: "gemini", model: "gemini-3-flash-preview" })}
+                    onClick={() => setConfig({ ...config, provider: "gemini", model: "gemini-3-flash-preview", api_key: "" })}
                     className={cn(
                       "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
                       config.provider === "gemini" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white"
@@ -216,7 +216,7 @@ export default function Agent() {
                     <p className="text-[10px] text-slate-500">Google AI Studio (Recomendado)</p>
                   </button>
                   <button
-                    onClick={() => setConfig({ ...config, provider: "openai", model: "gpt-3.5-turbo" })}
+                    onClick={() => setConfig({ ...config, provider: "openai", model: "gpt-3.5-turbo", api_key: "" })}
                     className={cn(
                       "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
                       config.provider === "openai" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white"
@@ -227,7 +227,7 @@ export default function Agent() {
                     <p className="text-[10px] text-slate-500">ChatGPT (Requer API Key)</p>
                   </button>
                   <button
-                    onClick={() => setConfig({ ...config, provider: "deepseek", model: "deepseek-chat" })}
+                    onClick={() => setConfig({ ...config, provider: "deepseek", model: "deepseek-chat", api_key: "" })}
                     className={cn(
                       "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
                       config.provider === "deepseek" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white"
@@ -238,7 +238,7 @@ export default function Agent() {
                     <p className="text-[10px] text-slate-500">DeepSeek API</p>
                   </button>
                   <button
-                    onClick={() => setConfig({ ...config, provider: "huggingface", model: "mistralai/Mistral-7B-Instruct-v0.2" })}
+                    onClick={() => setConfig({ ...config, provider: "huggingface", model: "mistralai/Mistral-7B-Instruct-v0.2", api_key: "" })}
                     className={cn(
                       "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
                       config.provider === "huggingface" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white"
@@ -249,7 +249,7 @@ export default function Agent() {
                     <p className="text-[10px] text-slate-500">Modelos Open Source</p>
                   </button>
                   <button
-                    onClick={() => setConfig({ ...config, provider: "custom", model: "" })}
+                    onClick={() => setConfig({ ...config, provider: "custom", model: "", api_key: "" })}
                     className={cn(
                       "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
                       config.provider === "custom" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white"
@@ -264,21 +264,33 @@ export default function Agent() {
 
               {config.provider === "gemini" && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
-                  <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
-                    <Info className="text-blue-600 shrink-0" size={20} />
-                    <p className="text-xs text-blue-800 leading-relaxed">
-                      <strong>Dica:</strong> Por padrão, o sistema usa uma chave compartilhada. Se você estiver enfrentando erros de limite, insira sua própria <strong>Gemini API Key</strong> abaixo.
-                    </p>
-                  </div>
+                  {!process.env.GEMINI_API_KEY && (
+                    <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 flex gap-3">
+                      <Info className="text-amber-600 shrink-0" size={20} />
+                      <p className="text-xs text-amber-800 leading-relaxed">
+                        <strong>Atenção:</strong> O sistema não possui uma chave compartilhada configurada. Você <strong>precisa</strong> inserir sua própria Gemini API Key para usar a IA.
+                      </p>
+                    </div>
+                  )}
+                  {process.env.GEMINI_API_KEY && (
+                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
+                      <Info className="text-blue-600 shrink-0" size={20} />
+                      <p className="text-xs text-blue-800 leading-relaxed">
+                        <strong>Dica:</strong> Por padrão, o sistema usa uma chave compartilhada. Se você estiver enfrentando erros de limite, insira sua própria <strong>Gemini API Key</strong> abaixo.
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">Gemini API Key (Opcional)</label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Gemini API Key {process.env.GEMINI_API_KEY ? "(Opcional)" : "(Obrigatório)"}
+                    </label>
                     <div className="relative">
                       <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                       <Input 
                         type="password"
-                        placeholder="Sua chave do Google AI Studio" 
+                        placeholder={config.api_key === "********" ? "Chave salva (digite para alterar)" : "Sua chave do Google AI Studio"} 
                         className="pl-10"
-                        value={config.api_key}
+                        value={config.api_key === "********" ? "" : config.api_key}
                         onChange={e => setConfig({ ...config, api_key: e.target.value })}
                       />
                     </div>
@@ -311,9 +323,9 @@ export default function Agent() {
                       <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                       <Input 
                         type="password"
-                        placeholder={config.provider === "huggingface" ? "hf_..." : "sk-..."}
+                        placeholder={config.api_key === "********" ? "Chave salva (digite para alterar)" : (config.provider === "huggingface" ? "hf_..." : "sk-...")}
                         className="pl-10"
-                        value={config.api_key}
+                        value={config.api_key === "********" ? "" : config.api_key}
                         onChange={e => setConfig({ ...config, api_key: e.target.value })}
                       />
                     </div>
@@ -354,9 +366,9 @@ export default function Agent() {
                       <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                       <Input 
                         type="password"
-                        placeholder="Sua chave de acesso" 
+                        placeholder={config.api_key === "********" ? "Chave salva (digite para alterar)" : "Sua chave de acesso"} 
                         className="pl-10"
-                        value={config.api_key}
+                        value={config.api_key === "********" ? "" : config.api_key}
                         onChange={e => setConfig({ ...config, api_key: e.target.value })}
                       />
                     </div>

@@ -91,6 +91,9 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
     } else if (api_key && api_key !== "********") {
       console.log(`[Agent API] Encrypting new API key...`);
       encryptedKey = encrypt(api_key);
+    } else if (existingAgent && provider !== existingAgent.provider) {
+      console.log(`[Agent API] Provider changed from ${existingAgent.provider} to ${provider}. Clearing old API key...`);
+      encryptedKey = null;
     } else {
       console.log(`[Agent API] Keeping existing key (or null)...`);
     }
