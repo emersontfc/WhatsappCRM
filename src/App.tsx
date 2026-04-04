@@ -14,6 +14,7 @@ import Automations from "./pages/Automations";
 import Schedule from "./pages/Schedule";
 import Agent from "./pages/Agent";
 import AdminPacks from "./pages/AdminPacks";
+import AdminExtractor from "./pages/AdminExtractor";
 import UserModels from "./pages/UserModels";
 import QuickReplies from "./pages/QuickReplies";
 import Groups from "./pages/Groups";
@@ -110,6 +111,10 @@ export default function App() {
         <Route
           path="/admin/packs"
           element={user ? <Layout><AdminPacks key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/admin/extractor"
+          element={user ? <Layout><AdminExtractor key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/schedule"

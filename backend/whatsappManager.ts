@@ -434,7 +434,7 @@ export class WhatsAppManager {
     return this.sessions.get(userId);
   }
 
-  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number) {
+  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number, mimetype?: string, fileName?: string) {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") {
       throw new Error("WhatsApp session not connected.");
@@ -446,9 +446,9 @@ export class WhatsAppManager {
       } else if (mediaType === 'video') {
         return await session.socket.sendMessage(jid, { video: { url: mediaUrl }, caption: text });
       } else if (mediaType === 'audio') {
-        return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: 'audio/mp4', ptt: true, seconds: duration });
+        return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: mimetype || 'audio/mp4', ptt: true, seconds: duration });
       } else if (mediaType === 'document') {
-        return await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: 'application/pdf', fileName: 'documento.pdf', caption: text });
+        return await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: mimetype || 'application/pdf', fileName: fileName || 'documento', caption: text });
       }
     }
 

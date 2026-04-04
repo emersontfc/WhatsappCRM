@@ -120,6 +120,7 @@ export default function Layout({ children }: LayoutProps) {
 
   if (isAdmin) {
     navItems.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
+    navItems.push({ name: "Web Extractor", path: "/admin/extractor", icon: Terminal });
   }
 
   if (userPlan === "Free") {

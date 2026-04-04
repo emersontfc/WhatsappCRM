@@ -1,5 +1,9 @@
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 
+// In-memory state for smart menus
+// Key: userId:jid, Value: { menuId: string, options: any[], timestamp: number }
+const menuStateCache = new Map<string, { menuId: string, options: any[], timestamp: number }>();
+
 export async function handleIncomingMessage(whatsappManager: any, userId: string, jid: string, text: string, isButton: boolean = false) {
   try {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -9,6 +13,56 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     let triggered = false;
     
     console.log(`[Automation] Checking automations for ${userId}, text: "${normalizedText}"`);
+
+    // 0. Check if user is responding to a menu
+    const stateKey = `${userId}:${jid}`;
+    const activeMenuState = menuStateCache.get(stateKey);
+    
+    if (activeMenuState && (Date.now() - activeMenuState.timestamp < 3600000)) { // 1 hour expiration
+      console.log(`[Automation] User is in an active menu state. Checking options...`);
+      const selectedOption = activeMenuState.options.find((opt: any) => opt.key.toLowerCase() === normalizedText);
+      
+      if (selectedOption) {
+        console.log(`[Automation] Matched menu option: ${selectedOption.key}`);
+        triggered = true;
+        
+        // Simulate typing
+        const presenceType = (selectedOption.response_type === "audio" && selectedOption.media_url) ? "recording" : "composing";
+        await whatsappManager.sendPresenceUpdate(userId, jid, presenceType);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
+
+        // Send response
+        await whatsappManager.sendMessage(userId, jid, selectedOption.response, selectedOption.media_url, selectedOption.response_type);
+        await whatsappManager.log(userId, "success", `Opção de menu "${selectedOption.label}" disparada para ${jid}`);
+        
+        // Log to messages table
+        try {
+          const { data: contact } = await supabaseAdmin
+            .from("contacts")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("phone", jid.split("@")[0])
+            .maybeSingle();
+
+          await supabaseAdmin.from("messages").insert({
+            user_id: userId,
+            contact_id: contact?.id || "automated",
+            text: selectedOption.response,
+            type: "outbound",
+            timestamp: new Date().toISOString(),
+            is_automated: true
+          });
+        } catch (e) {
+          console.error("Error logging menu response to database:", e);
+        }
+        
+        // We don't clear the state so they can choose another option if they want,
+        // or we could clear it. Let's clear it to avoid getting stuck.
+        menuStateCache.delete(stateKey);
+        return true; // Stop processing other automations
+      }
+    }
 
     // 1. Check automations
     const { data: automations, error } = await supabaseAdmin
@@ -58,12 +112,22 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             if (menu && !menuError) {
               await whatsappManager.sendMenu(userId, jid, menu);
               await whatsappManager.log(userId, "success", `Menu Inteligente "${menu.name}" disparado para ${jid}`, { trigger: normalizedText });
+              
+              // Save menu state so we can handle the user's reply
+              if (menu.options && Array.isArray(menu.options)) {
+                menuStateCache.set(stateKey, {
+                  menuId: menu.id,
+                  options: menu.options,
+                  timestamp: Date.now()
+                });
+                console.log(`[Automation] Saved menu state for ${stateKey}`);
+              }
             } else {
               console.error("Error fetching menu for automation:", menuError);
               await whatsappManager.sendMessage(userId, jid, "Desculpe, houve um erro ao carregar o menu.");
             }
           } else {
-            await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type);
+            await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type, undefined, automation.media_mimetype, automation.media_filename);
             await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: automation.media_type });
           }
           
@@ -87,6 +151,8 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           } catch (e) {
             console.error("Error logging automated message to database:", e);
           }
+          
+          break; // Stop processing other automations if one triggered
         }
       }
     } else {

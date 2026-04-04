@@ -47,6 +47,8 @@ interface Automation {
   created_at: string;
   media_url?: string;
   media_type?: string;
+  media_mimetype?: string;
+  media_filename?: string;
   response_type?: "text" | "audio" | "menu";
   smart_menu_id?: string;
 }
@@ -280,7 +282,9 @@ export default function Automations() {
       setNewAutomation(prev => ({
         ...prev,
         media_url: publicUrl,
-        media_type: mediaType
+        media_type: mediaType,
+        media_mimetype: file.type,
+        media_filename: file.name
       }));
 
       toast.success("Mídia anexada com sucesso!");
@@ -654,7 +658,7 @@ export default function Automations() {
                   type="file" 
                   ref={fileInputRef}
                   className="hidden" 
-                  accept="image/*,audio/*,application/pdf"
+                  accept="image/*,audio/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip"
                   onChange={handleFileUpload}
                 />
                 <Button 
@@ -687,7 +691,7 @@ export default function Automations() {
                   <div className="w-full mt-4">
                     <VoiceRecorder 
                       onSend={(url) => {
-                        setNewAutomation(prev => ({ ...prev, media_url: url, media_type: "audio" }));
+                        setNewAutomation(prev => ({ ...prev, media_url: url, media_type: "audio", media_mimetype: "audio/ogg", media_filename: "audio.ogg" }));
                         setIsRecording(false);
                       }} 
                       onCancel={() => setIsRecording(false)} 

@@ -14,6 +14,7 @@ import templateRoutes from "./backend/routes/templates.ts";
 import packRoutes from "./backend/routes/packs.ts";
 import mediaRoutes from "./backend/routes/media.ts";
 import menuRoutes from "./backend/routes/menus.ts";
+import extractorRoutes from "./backend/routes/extractor.ts";
 import { startScheduler } from "./backend/scheduler.ts";
 import { authenticate } from "./backend/middleware/auth.ts";
 import fs from "fs";
@@ -272,6 +273,7 @@ async function startServer() {
   app.use("/api/packs", authenticate, packRoutes);
   app.use("/api/media", authenticate, mediaRoutes);
   app.use("/api/menus", authenticate, menuRoutes);
+  app.use("/api/extractor", authenticate, extractorRoutes);
 
   // Serve uploads directory
   const uploadsDir = path.join(process.cwd(), "uploads");

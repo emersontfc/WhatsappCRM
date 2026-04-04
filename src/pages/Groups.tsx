@@ -201,8 +201,8 @@ export default function Groups() {
     setGroupRules({ ...groupRules, welcome_msg: e.target.value });
   };
 
-  const filteredGroups = groups.filter(g => 
-    g.subject.toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredGroups = (groups || []).filter(g => 
+    g.subject && g.subject.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
