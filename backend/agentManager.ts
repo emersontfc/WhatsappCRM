@@ -268,6 +268,7 @@ const contextCache: Map<string, string[]> = new Map();
 
 export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string) {
   try {
+    console.log(`[AI Engine] Checking agents for ${userId}, text: "${text}"`);
     const { data: agents, error } = await supabaseAdmin
       .from("agents")
       .select("*")

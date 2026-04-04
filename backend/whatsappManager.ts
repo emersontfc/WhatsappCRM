@@ -9,13 +9,14 @@ import pino from "pino";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { handleIncomingMessage } from "./automationManager.ts";
 import { handleAgentMessage } from "./agentManager.ts";
-import { useSupabaseAuthState } from "./lib/supabaseAuthState.ts";
+import { useSupabaseAuthState, clearSupabaseAuthCache } from "./lib/supabaseAuthState.ts";
 
 const logger = pino({ level: "warn" });
 
 export class WhatsAppManager {
   private sessions: Map<string, { socket: any; status: string; qr?: string }> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
+  private restartRequiredAttempts: Map<string, number> = new Map();
   private maxReconnectAttempts = 5;
 
   private async log(userId: string, type: "info" | "success" | "error" | "warn", message: string, metadata?: any) {
@@ -42,15 +43,25 @@ export class WhatsAppManager {
 
   async createSession(userId: string, onUpdate?: (status: string, data?: string) => void) {
     try {
+      console.log(`[WhatsApp] createSession called for ${userId}`);
       const existingSession = this.sessions.get(userId);
       if (existingSession) {
-        if (existingSession.status === "connected" || existingSession.status === "connecting" || existingSession.status === "qr") {
+        // If it's already connected, just return
+        if (existingSession.status === "connected") {
+          console.log(`[WhatsApp] Session already connected for ${userId}`);
+          return existingSession.socket;
+        }
+        
+        // If it's stuck in connecting/qr for more than 2 minutes, force a new one
+        const sessionAge = Date.now() - (existingSession as any).createdAt;
+        if (sessionAge > 120000) {
+          console.log(`[WhatsApp] Forcing new session for ${userId} (stuck for ${Math.round(sessionAge/1000)}s)`);
+          try { existingSession.socket.end(undefined); } catch (e) {}
+          this.sessions.delete(userId);
+        } else {
           console.log(`[WhatsApp] Session already exists for ${userId} with status: ${existingSession.status}`);
           return existingSession.socket;
         }
-        // If it's in a weird state, end it
-        try { existingSession.socket.end(undefined); } catch (e) {}
-        this.sessions.delete(userId);
       }
 
       const attempts = this.reconnectAttempts.get(userId) || 0;
@@ -71,7 +82,9 @@ export class WhatsAppManager {
       let version;
       try {
         console.log(`[WhatsApp] Fetching latest Baileys version...`);
-        const v = await fetchLatestBaileysVersion();
+        const versionPromise = fetchLatestBaileysVersion();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout fetching version")), 5000));
+        const v = await Promise.race([versionPromise, timeoutPromise]) as any;
         version = v.version;
         console.log(`[WhatsApp] Using Baileys version: ${version.join('.')}`);
       } catch (err) {
@@ -82,30 +95,51 @@ export class WhatsAppManager {
       const socket = makeWASocket({
         version,
         printQRInTerminal: false,
-        browser: Browsers.macOS("Desktop"),
+        browser: ["Whatscrm", "Chrome", "20.0.04"],
         auth: state,
         logger,
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
+        markOnlineOnConnect: false,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
+        defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 15000,
         retryRequestDelayMs: 5000,
         shouldSyncHistoryMessage: () => false,
       });
 
-      this.sessions.set(userId, { socket, status: "connecting" });
+      this.sessions.set(userId, { 
+        socket, 
+        status: "connecting",
+        createdAt: Date.now() 
+      } as any);
 
-      socket.ev.on("creds.update", saveCreds);
+      // Watchdog for stuck connecting state
+      const watchdog = setTimeout(async () => {
+        const session = this.sessions.get(userId);
+        if (session && session.status === "connecting") {
+          console.warn(`[WhatsApp] Session for ${userId} stuck in connecting for 45s. Resetting...`);
+          await this.log(userId, "warn", "A conexão está demorando mais que o esperado. Reiniciando...");
+          try { socket.end(undefined); } catch (e) {}
+          this.sessions.delete(userId);
+          onUpdate?.("disconnected");
+        }
+      }, 45000);
+
+      socket.ev.on("creds.update", async () => {
+        console.log(`[WhatsApp] Creds updated for ${userId}`);
+        await saveCreds();
+      });
 
       socket.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
         const session = this.sessions.get(userId);
         if (!session) return;
 
+        console.log(`[WhatsApp] Connection update for ${userId}: ${connection || "no-connection-change"}, hasQR: ${!!qr}`);
+
         if (qr) {
-          console.log(`[WhatsApp] QR Code received for ${userId}`);
+          clearTimeout(watchdog);
           session.qr = qr;
           session.status = "qr";
           onUpdate?.("qr", qr);
@@ -113,9 +147,11 @@ export class WhatsAppManager {
         }
 
         if (connection === "open") {
+          clearTimeout(watchdog);
           session.status = "connected";
           session.qr = undefined;
           this.reconnectAttempts.delete(userId);
+          this.restartRequiredAttempts.delete(userId);
           await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           onUpdate?.("connected");
         }
@@ -127,11 +163,31 @@ export class WhatsAppManager {
           
           console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}, Reason: ${reason}`);
           
+          // Clean up current socket
+          try { socket.end(undefined); } catch (e) {}
+          this.sessions.delete(userId);
+          
           // Reconnect if not logged out
           const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
-          const shouldReconnect = !isLoggedOut && attempts < this.maxReconnectAttempts;
+          const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515;
           
-          if (shouldReconnect) {
+          if (isRestartRequired) {
+            const restartAttempts = (this.restartRequiredAttempts.get(userId) || 0) + 1;
+            this.restartRequiredAttempts.set(userId, restartAttempts);
+            
+            console.log(`[WhatsApp] Restart required for ${userId} (Attempt ${restartAttempts}). Reconnecting in 3s...`);
+            
+            if (restartAttempts > 5) {
+                console.log(`[WhatsApp] Too many 515 errors for ${userId}. Clearing session.`);
+                await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+                clearSupabaseAuthCache(userId);
+                this.restartRequiredAttempts.delete(userId);
+                await this.log(userId, "error", "Sessão corrompida. Por favor, leia o QR Code novamente.");
+                onUpdate?.("disconnected");
+            } else {
+                setTimeout(() => this.createSession(userId, onUpdate), 3000);
+            }
+          } else if (!isLoggedOut && attempts < this.maxReconnectAttempts) {
             this.reconnectAttempts.set(userId, attempts + 1);
             const delayTime = Math.min(5000 * (attempts + 1), 30000);
             console.log(`[WhatsApp] Reconnecting session for ${userId} in ${delayTime/1000}s...`);
@@ -140,12 +196,12 @@ export class WhatsAppManager {
             if (isLoggedOut) {
               console.log(`[WhatsApp] Logged out for ${userId}. Clearing session.`);
               await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+              clearSupabaseAuthCache(userId);
               await this.log(userId, "warn", "Sessão encerrada ou expirada.");
             } else {
               console.log(`[WhatsApp] Max attempts reached or fatal error for ${userId}.`);
               await this.log(userId, "error", "Falha na conexão. Por favor, tente reconectar manualmente.");
             }
-            this.sessions.delete(userId);
             onUpdate?.("disconnected");
           }
         }
@@ -161,6 +217,7 @@ export class WhatsAppManager {
       });
 
       socket.ev.on("messages.upsert", async ({ messages, type }) => {
+        console.log(`[WhatsApp] messages.upsert triggered for ${userId}, type: ${type}, count: ${messages.length}`);
         if (type !== "notify" && type !== "append") return;
         for (const msg of messages) {
           try {
@@ -180,12 +237,17 @@ export class WhatsAppManager {
 
             const jid = msg.key.remoteJid!;
             const isMe = msg.key.fromMe;
+            
+            console.log(`[WhatsApp] Message from ${jid} (isMe: ${isMe}): "${text}"`);
 
             await this.syncMessage(userId, msg);
 
             if (!isMe && text) {
-              await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
-              await handleAgentMessage(this, userId, jid, text);
+              console.log(`[WhatsApp] Passing message to handlers for ${userId}`);
+              const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
+              if (!handledByAutomation) {
+                await handleAgentMessage(this, userId, jid, text);
+              }
             }
           } catch (err) {
             console.error("Error processing message:", err);
@@ -393,6 +455,16 @@ export class WhatsAppManager {
     return await session.socket.sendMessage(jid, { text });
   }
 
+  async sendPresenceUpdate(userId: string, jid: string, presence: "composing" | "recording" | "paused") {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") return;
+    try {
+      await session.socket.sendPresenceUpdate(presence, jid);
+    } catch (e) {
+      console.error(`Failed to send presence update to ${jid}:`, e);
+    }
+  }
+
   async getGroups(userId: string) {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
@@ -477,6 +549,7 @@ export class WhatsAppManager {
       this.sessions.delete(userId);
     }
     await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+    clearSupabaseAuthCache(userId);
   }
 
   getSessionStatus(userId: string) {

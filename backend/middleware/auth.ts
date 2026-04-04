@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from "express";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
-import jwt from "jsonwebtoken";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -8,6 +7,9 @@ export interface AuthRequest extends Request {
     email?: string;
   };
 }
+
+// Simple token cache to prevent hitting Supabase Auth API on every request
+const tokenCache = new Map<string, { user: { id: string; email?: string }; expiresAt: number }>();
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -17,6 +19,13 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
   }
 
   const token = authHeader.split(" ")[1];
+
+  // Check cache first (valid for 60 seconds)
+  const cached = tokenCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) {
+    req.user = cached.user;
+    return next();
+  }
 
   try {
     const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
@@ -29,6 +38,22 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       id: user.id,
       email: user.email,
     };
+
+    // Cache the result for 60 seconds
+    tokenCache.set(token, {
+      user: req.user,
+      expiresAt: Date.now() + 60000
+    });
+
+    // Clean up old cache entries periodically
+    if (tokenCache.size > 1000) {
+      const now = Date.now();
+      for (const [key, value] of tokenCache.entries()) {
+        if (value.expiresAt < now) {
+          tokenCache.delete(key);
+        }
+      }
+    }
 
     next();
   } catch (err: any) {

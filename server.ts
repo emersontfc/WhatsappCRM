@@ -2,6 +2,9 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
+import dotenv from "dotenv";
+
+dotenv.config();
 import whatsappRoutes from "./backend/routes/whatsapp.ts";
 import aiRoutes from "./backend/routes/ai.ts";
 import adminRoutes from "./backend/routes/admin.ts";
@@ -24,6 +27,104 @@ async function initDatabase() {
     const sql = `
       CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+      -- Plans table
+      CREATE TABLE IF NOT EXISTS plans (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        name TEXT NOT NULL,
+        price NUMERIC NOT NULL,
+        duration_days INTEGER NOT NULL,
+        max_messages_per_day INTEGER NOT NULL,
+        ai_enabled BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Insert default plans if none exist
+      INSERT INTO plans (name, price, duration_days, max_messages_per_day, ai_enabled)
+      SELECT 'Free', 0, 30, 50, false
+      WHERE NOT EXISTS (SELECT 1 FROM plans WHERE name = 'Free');
+
+      INSERT INTO plans (name, price, duration_days, max_messages_per_day, ai_enabled)
+      SELECT 'Premium', 99, 30, 5000, true
+      WHERE NOT EXISTS (SELECT 1 FROM plans WHERE name = 'Premium');
+
+      -- Users table (profiles)
+      CREATE TABLE IF NOT EXISTS users (
+        id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+        email TEXT UNIQUE NOT NULL,
+        name TEXT,
+        role TEXT DEFAULT 'user',
+        plan TEXT DEFAULT 'Free',
+        expires_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Subscriptions table
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+        plan TEXT NOT NULL,
+        plan_id UUID REFERENCES plans(id),
+        status TEXT DEFAULT 'active',
+        messages_used INTEGER DEFAULT 0,
+        start_date TIMESTAMPTZ DEFAULT NOW(),
+        end_date TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Contacts table
+      CREATE TABLE IF NOT EXISTS contacts (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        phone TEXT NOT NULL,
+        name TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, phone)
+      );
+
+      -- Messages table
+      CREATE TABLE IF NOT EXISTS messages (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
+        text TEXT NOT NULL,
+        type TEXT NOT NULL, -- 'inbound' or 'outbound'
+        msg_id TEXT,
+        is_automated BOOLEAN DEFAULT FALSE,
+        automation_id UUID,
+        timestamp TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Automations table
+      CREATE TABLE IF NOT EXISTS automations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        trigger TEXT NOT NULL, -- 'keyword'
+        keyword TEXT,
+        response TEXT NOT NULL,
+        response_type TEXT DEFAULT 'text', -- 'text', 'menu', 'audio'
+        media_url TEXT,
+        media_type TEXT,
+        delay INTEGER DEFAULT 0,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Scheduled messages table
+      CREATE TABLE IF NOT EXISTS scheduled_messages (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        contact_id UUID REFERENCES contacts(id) ON DELETE CASCADE,
+        message TEXT NOT NULL,
+        media_url TEXT,
+        media_type TEXT,
+        scheduled_at TIMESTAMPTZ NOT NULL,
+        status TEXT DEFAULT 'pending', -- 'pending', 'sent', 'failed'
+        error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Group rules table
       CREATE TABLE IF NOT EXISTS group_rules (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -39,6 +140,7 @@ async function initDatabase() {
         UNIQUE(user_id, group_jid)
       );
 
+      -- Smart menus table
       CREATE TABLE IF NOT EXISTS smart_menus (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -51,6 +153,7 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- WhatsApp sessions table
       CREATE TABLE IF NOT EXISTS whatsapp_sessions (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
         user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -58,18 +161,22 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
-      ALTER TABLE automations ADD COLUMN IF NOT EXISTS smart_menu_id UUID REFERENCES smart_menus(id) ON DELETE SET NULL;
+      -- Add smart_menu_id to automations if it doesn't exist
+      DO $$ 
+      BEGIN 
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='automations' AND column_name='smart_menu_id') THEN
+          ALTER TABLE automations ADD COLUMN smart_menu_id UUID REFERENCES smart_menus(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
     `;
 
     // Try to check if table exists first
-    const { error: checkError } = await supabaseAdmin.from('group_rules').select('id').limit(1);
-    const { error: checkMenuError } = await supabaseAdmin.from('smart_menus').select('id').limit(1);
+    const { error: checkError } = await supabaseAdmin.from('plans').select('id').limit(1);
     
-    const groupRulesMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
-    const smartMenusMissing = checkMenuError && (checkMenuError.code === 'PGRST116' || checkMenuError.message.includes('does not exist'));
+    const plansMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
 
-    if (groupRulesMissing || smartMenusMissing) {
-      console.log(`[Database] Missing tables: ${groupRulesMissing ? 'group_rules ' : ''}${smartMenusMissing ? 'smart_menus' : ''}. Attempting to create...`);
+    if (plansMissing) {
+      console.log(`[Database] Missing required tables. Attempting to create...`);
       const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
       
       if (createError) {

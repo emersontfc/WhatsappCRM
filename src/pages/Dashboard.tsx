@@ -457,11 +457,17 @@ export default function Dashboard() {
 
     const cleanupPromise = init();
 
+    let ticks = 0;
     const interval = setInterval(async () => {
       const uId = await getUserId();
       if (uId && uId !== "guest-user") {
         await checkStatus(uId);
-        await fetchStats(uId);
+        
+        // Only fetch stats every 6th tick (30 seconds) to reduce database load
+        ticks++;
+        if (ticks % 6 === 0) {
+          await fetchStats(uId);
+        }
       }
     }, 5000);
 
@@ -584,9 +590,21 @@ export default function Dashboard() {
                           {/* Content Area */}
                           <div className="relative min-h-[200px] flex flex-col items-center justify-center">
                             {loading || status === "connecting" ? (
-                              <div className="flex flex-col items-center gap-3">
+                              <div className="flex flex-col items-center gap-4">
                                 <div className="h-12 w-12 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent" />
-                                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Iniciando...</p>
+                                <div className="text-center space-y-1">
+                                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Iniciando...</p>
+                                  {connectingSince.current && (Date.now() - connectingSince.current > 15000) && (
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-[10px] text-red-500 hover:text-red-600 font-bold uppercase tracking-widest mt-2"
+                                      onClick={resetSession}
+                                    >
+                                      Demorando muito? Resetar
+                                    </Button>
+                                  )}
+                                </div>
                               </div>
                             ) : qr ? (
                               <motion.div 

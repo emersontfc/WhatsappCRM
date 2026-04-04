@@ -58,11 +58,15 @@ router.get("/qr", (req: AuthRequest, res) => {
 
 router.get("/status", (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  console.log(`[WhatsApp Status] Checking status for user: ${userId}`);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const session = whatsappManager.getSession(userId);
-  const status = session?.status || "disconnected";
+  let status = session?.status || "disconnected";
+  
+  // If status is QR but we don't have the code yet, report as connecting
+  if (status === "qr" && !session?.qr) {
+    status = "connecting";
+  }
 
   res.json({
     success: true,

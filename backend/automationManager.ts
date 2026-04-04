@@ -3,10 +3,12 @@ import { supabaseAdmin } from "./supabaseAdmin.ts";
 export async function handleIncomingMessage(whatsappManager: any, userId: string, jid: string, text: string, isButton: boolean = false) {
   try {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(userId)) return;
+    if (!uuidRegex.test(userId)) return false;
 
     const normalizedText = text.trim().toLowerCase();
     let triggered = false;
+    
+    console.log(`[Automation] Checking automations for ${userId}, text: "${normalizedText}"`);
 
     // 1. Check automations
     const { data: automations, error } = await supabaseAdmin
@@ -15,9 +17,13 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
       .eq("user_id", userId)
       .eq("active", true);
 
-    if (error) throw error;
+    if (error) {
+      console.error("[Automation] Error fetching automations:", error);
+      throw error;
+    }
 
-    if (automations) {
+    if (automations && automations.length > 0) {
+      console.log(`[Automation] Found ${automations.length} active automations`);
       for (const automation of automations) {
         let shouldTrigger = false;
 
@@ -26,6 +32,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           const keywords = keywordStr.toLowerCase().split(",").map((k: string) => k.trim()).filter(Boolean);
           if (keywords.some((k: string) => normalizedText.includes(k))) {
             shouldTrigger = true;
+            console.log(`[Automation] Matched keyword in automation: ${automation.name}`);
           }
         }
 
@@ -82,10 +89,13 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           }
         }
       }
+    } else {
+      console.log(`[Automation] No active automations found for ${userId}`);
     }
 
     // 2. Check quick_replies if not already triggered by automation
     if (!triggered) {
+      console.log(`[Automation] Checking quick replies for ${userId}`);
       const { data: quickReplies, error: qrError } = await supabaseAdmin
         .from("quick_reply")
         .select("*")
@@ -93,7 +103,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
         
       if (qrError) console.error("Error fetching quick replies:", qrError);
       
-      if (quickReplies) {
+      if (quickReplies && quickReplies.length > 0) {
         for (const qr of quickReplies) {
           let match = false;
           const trigger = qr.trigger.toLowerCase();
@@ -105,6 +115,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           }
           
           if (match) {
+            console.log(`[Automation] Matched quick reply: ${qr.trigger}`);
             triggered = true;
             await whatsappManager.sendMessage(userId, jid, qr.response_text);
             await whatsappManager.log(userId, "success", `Quick reply "${qr.trigger}" disparado para ${jid}`);
@@ -136,6 +147,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     }
 
     if (!triggered && isButton) {
+      console.log(`[Automation] Button clicked but no match found`);
       await whatsappManager.sendMessage(userId, jid, "Opção ainda não configurada");
     }
 
