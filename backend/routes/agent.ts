@@ -254,4 +254,56 @@ router.post("/toggle", async (req: AuthRequest, res) => {
   }
 });
 
+router.post("/test", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ success: false, error: "Message is required" });
+
+  try {
+    // Get agent config
+    const { data: agent } = await supabaseAdmin
+      .from("agents")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!agent) {
+      return res.status(404).json({ success: false, error: "Agente não configurado." });
+    }
+
+    // Call agentManager directly for testing (bypassing subscription checks for the test route)
+    const { runGemini, runOpenAI, runDeepSeek, runHuggingFace, runCustom } = await import("../agentManager.ts");
+    
+    let responseText = "";
+    const systemPrompt = agent.instructions || "Você é um assistente útil.";
+    
+    switch (agent.provider) {
+      case "gemini":
+        responseText = await runGemini(agent, message, systemPrompt);
+        break;
+      case "openai":
+        responseText = await runOpenAI(agent, message, systemPrompt);
+        break;
+      case "deepseek":
+        responseText = await runDeepSeek(agent, message, systemPrompt);
+        break;
+      case "huggingface":
+        responseText = await runHuggingFace(agent, message, systemPrompt);
+        break;
+      case "custom":
+        responseText = await runCustom(agent, message, systemPrompt);
+        break;
+      default:
+        return res.status(400).json({ success: false, error: "Provedor não suportado." });
+    }
+
+    res.json({ success: true, data: { response: responseText } });
+  } catch (error: any) {
+    console.error("[Agent Test Error]:", error);
+    res.status(500).json({ success: false, error: error.message || "Erro interno ao testar agente." });
+  }
+});
+
 export default router;

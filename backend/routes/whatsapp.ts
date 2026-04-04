@@ -60,19 +60,24 @@ router.get("/status", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  const session = whatsappManager.getSession(userId);
-  let status = session?.status || "disconnected";
-  
-  // If status is QR but we don't have the code yet, report as connecting
-  if (status === "qr" && !session?.qr) {
-    status = "connecting";
-  }
+  try {
+    const session = whatsappManager.getSession(userId);
+    let status = session?.status || "disconnected";
+    
+    // If status is QR but we don't have the code yet, report as connecting
+    if (status === "qr" && !session?.qr) {
+      status = "connecting";
+    }
 
-  res.json({
-    success: true,
-    status,
-    connected: status === "connected"
-  });
+    res.json({
+      success: true,
+      status,
+      connected: status === "connected"
+    });
+  } catch (error) {
+    console.error(`[WhatsApp Status] Error for user ${userId}:`, error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
 });
 
 router.post("/reset", async (req: AuthRequest, res) => {
@@ -193,7 +198,8 @@ router.get("/groups", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
-    const groups = await whatsappManager.getGroups(userId);
+    const groupsObj = await whatsappManager.getGroups(userId);
+    const groups = Object.values(groupsObj || {});
     res.json({ success: true, groups });
   } catch (err: any) {
     if (err.message === "WhatsApp não conectado") {

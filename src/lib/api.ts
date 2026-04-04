@@ -9,9 +9,13 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
 
   let apiUrl = (import.meta.env.VITE_API_URL || "").trim().replace(/\/$/, "");
   
-  // If we are in AI Studio (hostname ends with .run.app), force relative URLs
+  // If we are in AI Studio (hostname ends with .run.app) or local dev, force relative URLs
   // so we test the code we just wrote, not the deployed Render backend.
-  if (typeof window !== "undefined" && window.location.hostname.endsWith(".run.app")) {
+  if (typeof window !== "undefined" && (
+    window.location.hostname.endsWith(".run.app") || 
+    window.location.hostname === "localhost" || 
+    window.location.hostname === "127.0.0.1"
+  )) {
     apiUrl = "";
   }
 

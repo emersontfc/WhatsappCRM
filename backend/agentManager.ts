@@ -59,7 +59,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeout = 100
   }
 }
 
-async function runGemini(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
+export async function runGemini(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
   const apiKey = agent.api_key ? decrypt(agent.api_key) : process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Gemini API Key missing. Please set GEMINI_API_KEY in Settings.");
   
@@ -79,7 +79,7 @@ async function runGemini(agent: any, prompt: string, systemInstruction?: string)
     console.error(`[AI Engine] Gemini Error (${modelName}):`, err.message);
     if (err.message.includes("404") || err.message.includes("not found")) {
       // Try fallback model name
-      const fallbackModel = "gemini-1.5-flash";
+      const fallbackModel = "gemini-3-flash-preview";
       console.log(`[AI Engine] Retrying with fallback model: ${fallbackModel}`);
       const fallbackRes = await ai.models.generateContent({
         model: fallbackModel,
@@ -92,7 +92,7 @@ async function runGemini(agent: any, prompt: string, systemInstruction?: string)
   }
 }
 
-async function runOpenAI(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
+export async function runOpenAI(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
   const apiKey = decrypt(agent.api_key);
   if (!apiKey) throw new Error("OpenAI API Key missing");
 
@@ -121,7 +121,7 @@ async function runOpenAI(agent: any, prompt: string, systemInstruction?: string)
   return normalizeResponse(data);
 }
 
-async function runDeepSeek(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
+export async function runDeepSeek(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
   const apiKey = decrypt(agent.api_key);
   if (!apiKey) throw new Error("DeepSeek API Key missing");
 
@@ -153,7 +153,7 @@ async function runDeepSeek(agent: any, prompt: string, systemInstruction?: strin
   return normalizeResponse(data);
 }
 
-async function runHuggingFace(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
+export async function runHuggingFace(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
   const apiKey = decrypt(agent.api_key);
   if (!apiKey) throw new Error("Hugging Face API Key missing");
   
@@ -184,7 +184,7 @@ async function runHuggingFace(agent: any, prompt: string, systemInstruction?: st
   return normalizeResponse(data);
 }
 
-async function runCustom(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
+export async function runCustom(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
   if (!agent.api_url) throw new Error("Custom API URL missing");
   
   const apiKey = agent.api_key ? decrypt(agent.api_key) : "";
@@ -298,49 +298,61 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       return;
     }
 
-    // Check subscription
-    const { data: sub } = await supabaseAdmin
-      .from("subscriptions")
-      .select("*")
-      .eq("user_id", userId)
+    // Check if user is admin
+    const { data: userData } = await supabaseAdmin
+      .from("users")
+      .select("role")
+      .eq("id", userId)
       .maybeSingle();
+      
+    const isAdmin = userData?.role === 'admin';
 
-    if (!sub) {
-      console.log(`[AI Engine] No subscription found for user ${userId}`);
-      return;
-    }
+    // Check subscription if not admin
+    let currentUsed = 0;
+    if (!isAdmin) {
+      const { data: sub } = await supabaseAdmin
+        .from("subscriptions")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
 
-    // Check if subscription is expired (unless it's a Free plan)
-    if (sub.plan !== 'Free' && sub.end_date) {
-      const endDate = new Date(sub.end_date);
-      if (endDate < new Date()) {
-        console.log(`[AI Engine] User ${userId} subscription expired.`);
+      if (!sub) {
+        console.log(`[AI Engine] No subscription found for user ${userId}`);
         return;
       }
-    }
 
-    // Fetch dynamic plan limits
-    const { data: planData, error: planError } = await supabaseAdmin
-      .from("plans")
-      .select("max_messages_per_day, ai_enabled")
-      .eq("id", sub.plan_id)
-      .maybeSingle();
+      // Check if subscription is expired (unless it's a Free plan)
+      if (sub.plan !== 'Free' && sub.end_date) {
+        const endDate = new Date(sub.end_date);
+        if (endDate < new Date()) {
+          console.log(`[AI Engine] User ${userId} subscription expired.`);
+          return;
+        }
+      }
 
-    if (planError || !planData) {
-      console.log(`[AI Engine] Plan not found for user ${userId}.`);
-      return;
-    }
+      // Fetch dynamic plan limits
+      const { data: planData, error: planError } = await supabaseAdmin
+        .from("plans")
+        .select("max_messages_per_day, ai_enabled")
+        .eq("id", sub.plan_id)
+        .maybeSingle();
 
-    if (!planData.ai_enabled) {
-      console.log(`[AI Engine] AI is disabled for user ${userId}'s plan.`);
-      return;
-    }
+      if (planError || !planData) {
+        console.log(`[AI Engine] Plan not found for user ${userId}.`);
+        return;
+      }
 
-    const limit = planData.max_messages_per_day;
-    const currentUsed = sub.messages_used || 0;
-    if (currentUsed >= limit) {
-      console.log(`[AI Engine] User ${userId} reached message limit (${currentUsed}/${limit}).`);
-      return;
+      if (!planData.ai_enabled) {
+        console.log(`[AI Engine] AI is disabled for user ${userId}'s plan.`);
+        return;
+      }
+
+      const limit = planData.max_messages_per_day;
+      currentUsed = sub.messages_used || 0;
+      if (currentUsed >= limit) {
+        console.log(`[AI Engine] User ${userId} reached message limit (${currentUsed}/${limit}).`);
+        return;
+      }
     }
 
     const contextKey = `${userId}:${jid}`;
@@ -359,11 +371,13 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     if (responseText) {
       await whatsappManager.sendMessage(userId, jid, responseText);
       
-      // Increment usage
-      await supabaseAdmin
-        .from("subscriptions")
-        .update({ messages_used: currentUsed + 1 })
-        .eq("user_id", userId);
+      // Increment usage if not admin
+      if (!isAdmin) {
+        await supabaseAdmin
+          .from("subscriptions")
+          .update({ messages_used: currentUsed + 1 })
+          .eq("user_id", userId);
+      }
 
       context.push(`User: ${text}`);
       context.push(`Agent: ${responseText}`);

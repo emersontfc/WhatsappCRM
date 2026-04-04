@@ -161,6 +161,20 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- Agents table
+      CREATE TABLE IF NOT EXISTS agents (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID UNIQUE NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL DEFAULT 'gemini',
+        model TEXT,
+        api_key TEXT,
+        api_url TEXT,
+        instructions TEXT,
+        is_active BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
       -- Add smart_menu_id to automations if it doesn't exist
       DO $$ 
       BEGIN 
@@ -172,10 +186,12 @@ async function initDatabase() {
 
     // Try to check if table exists first
     const { error: checkError } = await supabaseAdmin.from('plans').select('id').limit(1);
+    const { error: agentsCheckError } = await supabaseAdmin.from('agents').select('id').limit(1);
     
     const plansMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
+    const agentsMissing = agentsCheckError && (agentsCheckError.code === 'PGRST116' || agentsCheckError.message.includes('does not exist'));
 
-    if (plansMissing) {
+    if (plansMissing || agentsMissing) {
       console.log(`[Database] Missing required tables. Attempting to create...`);
       const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
       
@@ -241,6 +257,15 @@ async function startServer() {
       nodeEnv: process.env.NODE_ENV,
       timestamp: new Date().toISOString()
     });
+  });
+
+  app.get("/api/debug/db", async (req, res) => {
+    try {
+      const { data, error } = await supabaseAdmin.from('agents').select('id').limit(1);
+      res.json({ success: true, data, error });
+    } catch (err: any) {
+      res.json({ success: false, error: err.message });
+    }
   });
 
   // API Routes
