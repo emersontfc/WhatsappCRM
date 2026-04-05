@@ -317,14 +317,22 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
 const contextCache: Map<string, string[]> = new Map();
 
 function safeParseJSON(text: string) {
+  if (!text) return null;
   try {
-    // Try to find JSON block if it's wrapped in markdown
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    const jsonStr = jsonMatch ? jsonMatch[0] : text;
-    return JSON.parse(jsonStr);
+    // 1. Try direct parse
+    return JSON.parse(text);
   } catch (e) {
-    return null;
+    try {
+      // 2. Try to find JSON block if it's wrapped in markdown or other text
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      }
+    } catch (e2) {
+      return null;
+    }
   }
+  return null;
 }
 
 export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string) {
@@ -434,8 +442,9 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       let finalReply = responseText;
       let actionResult = null;
 
-      if (parsed && parsed.reply) {
-        finalReply = parsed.reply;
+      // If it's a valid JSON with a 'reply' field, extract it
+      if (parsed && typeof parsed === 'object') {
+        finalReply = parsed.reply || "";
         
         if (parsed.action) {
           console.log(`[AI Engine] AI suggested action: ${parsed.action} with intent: ${parsed.intent}`);
@@ -449,7 +458,9 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         }
       }
 
-      await whatsappManager.sendMessage(userId, jid, finalReply);
+      if (finalReply) {
+        await whatsappManager.sendMessage(userId, jid, finalReply);
+      }
       
       // Increment usage if not admin
       if (!isAdmin) {

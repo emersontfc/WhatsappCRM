@@ -285,7 +285,7 @@ async function initDatabase() {
       } else {
         console.log("[Database] Database tables created/updated successfully.");
         // Force another reload notification
-        await supabaseAdmin.rpc('exec_sql', { sql_query: "NOTIFY pgrst, 'reload schema';" }).catch(() => {});
+        await supabaseAdmin.rpc('exec_sql', { sql_query: "NOTIFY pgrst, 'reload schema';" });
       }
     } else {
       console.log("[Database] All required database tables and columns already exist.");

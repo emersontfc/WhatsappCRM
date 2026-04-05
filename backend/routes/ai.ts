@@ -47,7 +47,22 @@ router.post("/chat", async (req: AuthRequest, res) => {
     console.log("Using AI model:", agent.model || agent.provider);
     console.log("Prompt:", agent.instructions);
 
-    const reply = await runAI(agent, message, []);
+    const responseText = await runAI(agent, message, []);
+    
+    // Handle JSON response if AI returns it
+    let reply = responseText;
+    try {
+      // Try to find JSON block if it's wrapped in markdown or other text
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      const jsonStr = jsonMatch ? jsonMatch[0] : responseText;
+      const parsed = JSON.parse(jsonStr);
+      if (parsed && typeof parsed === 'object') {
+        reply = parsed.reply || "";
+      }
+    } catch (e) {
+      // Not JSON or parsing failed, use original text
+    }
+
     res.json({ reply });
   } catch (err: any) {
     console.error("AI chat error:", err);
