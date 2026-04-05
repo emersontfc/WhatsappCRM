@@ -89,6 +89,10 @@ async function initDatabase() {
         text TEXT NOT NULL,
         type TEXT NOT NULL, -- 'inbound' or 'outbound'
         msg_id TEXT,
+        media_url TEXT,
+        media_type TEXT,
+        media_mimetype TEXT,
+        media_filename TEXT,
         is_automated BOOLEAN DEFAULT FALSE,
         automation_id UUID,
         timestamp TIMESTAMPTZ DEFAULT NOW()
@@ -105,6 +109,8 @@ async function initDatabase() {
         response_type TEXT DEFAULT 'text', -- 'text', 'menu', 'audio'
         media_url TEXT,
         media_type TEXT,
+        media_mimetype TEXT,
+        media_filename TEXT,
         delay INTEGER DEFAULT 0,
         active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT NOW()
@@ -118,6 +124,8 @@ async function initDatabase() {
         message TEXT NOT NULL,
         media_url TEXT,
         media_type TEXT,
+        media_mimetype TEXT,
+        media_filename TEXT,
         scheduled_at TIMESTAMPTZ NOT NULL,
         status TEXT DEFAULT 'pending', -- 'pending', 'sent', 'failed'
         error TEXT,
@@ -213,11 +221,39 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
-      -- Add smart_menu_id to automations if it doesn't exist
+      -- Add missing columns to automations if they don't exist
       DO $$ 
       BEGIN 
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='automations' AND column_name='smart_menu_id') THEN
           ALTER TABLE automations ADD COLUMN smart_menu_id UUID REFERENCES smart_menus(id) ON DELETE SET NULL;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='automations' AND column_name='media_mimetype') THEN
+          ALTER TABLE automations ADD COLUMN media_mimetype TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='automations' AND column_name='media_filename') THEN
+          ALTER TABLE automations ADD COLUMN media_filename TEXT;
+        END IF;
+        
+        -- Add missing columns to scheduled_messages if they don't exist
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_messages' AND column_name='media_mimetype') THEN
+          ALTER TABLE scheduled_messages ADD COLUMN media_mimetype TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_messages' AND column_name='media_filename') THEN
+          ALTER TABLE scheduled_messages ADD COLUMN media_filename TEXT;
+        END IF;
+
+        -- Add missing columns to messages if they don't exist
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='media_url') THEN
+          ALTER TABLE messages ADD COLUMN media_url TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='media_type') THEN
+          ALTER TABLE messages ADD COLUMN media_type TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='media_mimetype') THEN
+          ALTER TABLE messages ADD COLUMN media_mimetype TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='media_filename') THEN
+          ALTER TABLE messages ADD COLUMN media_filename TEXT;
         END IF;
       END $$;
 
@@ -230,14 +266,16 @@ async function initDatabase() {
     const { error: agentsCheckError } = await supabaseAdmin.from('agents').select('id').limit(1);
     const { error: leadsCheckError } = await supabaseAdmin.from('leads').select('id').limit(1);
     const { error: remindersCheckError } = await supabaseAdmin.from('reminders').select('id').limit(1);
+    const { error: automationsColumnError } = await supabaseAdmin.from('automations').select('media_filename').limit(1);
     
     const plansMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
     const agentsMissing = agentsCheckError && (agentsCheckError.code === 'PGRST116' || agentsCheckError.message.includes('does not exist'));
     const leadsMissing = leadsCheckError && (leadsCheckError.code === 'PGRST116' || leadsCheckError.message.includes('does not exist'));
     const remindersMissing = remindersCheckError && (remindersCheckError.code === 'PGRST116' || remindersCheckError.message.includes('does not exist'));
+    const columnsMissing = automationsColumnError && (automationsColumnError.code === 'PGRST204' || automationsColumnError.message.includes('column "media_filename" does not exist'));
 
-    if (plansMissing || agentsMissing || leadsMissing || remindersMissing) {
-      console.log(`[Database] Missing required tables. Attempting to create...`);
+    if (plansMissing || agentsMissing || leadsMissing || remindersMissing || columnsMissing) {
+      console.log(`[Database] Missing required tables or columns. Attempting to create/update...`);
       const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
       
       if (createError) {
@@ -246,9 +284,11 @@ async function initDatabase() {
         console.warn(sql);
       } else {
         console.log("[Database] Database tables created/updated successfully.");
+        // Force another reload notification
+        await supabaseAdmin.rpc('exec_sql', { sql_query: "NOTIFY pgrst, 'reload schema';" }).catch(() => {});
       }
     } else {
-      console.log("[Database] All required database tables already exist.");
+      console.log("[Database] All required database tables and columns already exist.");
     }
   } catch (err) {
     console.error("[Database] Initialization error:", err);

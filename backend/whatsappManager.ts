@@ -306,6 +306,29 @@ export class WhatsAppManager {
         .maybeSingle();
 
       if (!existingMsg) {
+        let mediaUrl = "";
+        let mediaType = "";
+        let mediaMimetype = "";
+        let mediaFilename = "";
+
+        if (msg.message.imageMessage) {
+          mediaType = "image";
+          mediaMimetype = msg.message.imageMessage.mimetype || "image/jpeg";
+          mediaFilename = "image.jpg";
+        } else if (msg.message.videoMessage) {
+          mediaType = "video";
+          mediaMimetype = msg.message.videoMessage.mimetype || "video/mp4";
+          mediaFilename = "video.mp4";
+        } else if (msg.message.audioMessage) {
+          mediaType = "audio";
+          mediaMimetype = msg.message.audioMessage.mimetype || "audio/ogg";
+          mediaFilename = "audio.ogg";
+        } else if (msg.message.documentMessage) {
+          mediaType = "document";
+          mediaMimetype = msg.message.documentMessage.mimetype || "application/pdf";
+          mediaFilename = msg.message.documentMessage.fileName || "document";
+        }
+
         await supabaseAdmin.from("messages").insert({
           user_id: userId,
           contact_id: contactId,
@@ -313,6 +336,10 @@ export class WhatsAppManager {
           type: msg.key.fromMe ? "outbound" : "inbound",
           timestamp: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
           msg_id: msg.key.id,
+          media_url: mediaUrl,
+          media_type: mediaType,
+          media_mimetype: mediaMimetype,
+          media_filename: mediaFilename
         });
       }
 

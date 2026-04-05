@@ -78,7 +78,10 @@ export function startScheduler() {
             `${phone}@s.whatsapp.net`, 
             msg.message,
             msg.media_url,
-            msg.media_type
+            msg.media_type,
+            undefined,
+            msg.media_mimetype,
+            msg.media_filename
           );
 
           const { error: updateError } = await supabaseAdmin
