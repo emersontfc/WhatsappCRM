@@ -5,7 +5,7 @@ import { AuthRequest } from "../middleware/auth.ts";
 
 const router = express.Router();
 
-const ALLOWED_PROVIDERS = ["gemini", "openai", "deepseek", "huggingface", "custom"];
+const ALLOWED_PROVIDERS = ["gemini", "openai", "openrouter", "deepseek", "huggingface", "custom"];
 
 router.get("/providers/models", async (req: AuthRequest, res) => {
   console.log("[Agent API] Fetching providers/models...");
@@ -14,6 +14,7 @@ router.get("/providers/models", async (req: AuthRequest, res) => {
     data: {
       gemini: ["gemini-3-flash-preview", "gemini-3.1-flash-preview", "gemini-3.1-pro-preview"],
       openai: ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4o"],
+      openrouter: ["google/gemini-2.0-flash-001", "meta-llama/llama-3.1-8b-instruct", "deepseek/deepseek-chat"],
       deepseek: ["deepseek-chat"],
       huggingface: ["mistralai/Mistral-7B-Instruct-v0.2"],
       custom: []
@@ -113,7 +114,7 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
       user_id: userId,
       provider: validatedProvider,
       api_key: encryptedKey,
-      api_url: api_url || (validatedProvider === 'deepseek' ? 'https://api.deepseek.com/v1/chat/completions' : ''),
+      api_url: (api_url || (validatedProvider === 'deepseek' ? 'https://api.deepseek.com/v1/chat/completions' : '')).trim(),
       model: model || (validatedProvider === 'gemini' ? 'gemini-3-flash-preview' : ''),
       instructions,
       is_active: is_active ?? existingAgent?.is_active ?? false,
@@ -277,7 +278,7 @@ router.post("/test", async (req: AuthRequest, res) => {
     }
 
     // Call agentManager directly for testing (bypassing subscription checks for the test route)
-    const { runGemini, runOpenAI, runDeepSeek, runHuggingFace, runCustom } = await import("../agentManager.ts");
+    const { runGemini, runOpenAI, runOpenRouter, runDeepSeek, runHuggingFace, runCustom } = await import("../agentManager.ts");
     
     let responseText = "";
     const systemPrompt = agent.instructions || "Você é um assistente útil.";
@@ -288,6 +289,9 @@ router.post("/test", async (req: AuthRequest, res) => {
         break;
       case "openai":
         responseText = await runOpenAI(agent, message, systemPrompt);
+        break;
+      case "openrouter":
+        responseText = await runOpenRouter(agent, message, systemPrompt);
         break;
       case "deepseek":
         responseText = await runDeepSeek(agent, message, systemPrompt);

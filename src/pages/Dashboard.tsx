@@ -19,7 +19,11 @@ import {
   Activity,
   Copy,
   ExternalLink,
-  Pause
+  Pause,
+  UserPlus,
+  Bot,
+  Settings as SettingsIcon,
+  Search
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId, getUser } from "../supabase";
@@ -71,11 +75,15 @@ export default function Dashboard() {
     contacts: 0,
     messages: 0,
     scheduled: 0,
-    automations: 0
+    automations: 0,
+    leads: 0,
+    actions: 0
   });
+  const [agent, setAgent] = useState<any>(null);
   const [recentMessages, setRecentMessages] = useState<any[]>([]);
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<"messages" | "logs">("messages");
+  const [activeTab, setActiveTab] = useState<"messages" | "logs" | "leads">("messages");
+  const [leads, setLeads] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState("Usuário");
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -89,10 +97,51 @@ export default function Dashboard() {
         if (user.template_applied === false) {
           setShowTemplateModal(true);
         }
+
+        // Check if agent exists, if not redirect to onboarding
+        const { data: agentData } = await supabase
+          .from("agents")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        
+        if (!agentData) {
+          navigate("/onboarding");
+        } else {
+          setAgent(agentData);
+        }
       }
     };
     fetchUserData();
   }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    const fetchLeads = async () => {
+      const { data } = await supabase
+        .from("leads")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(10);
+      setLeads(data || []);
+    };
+
+    fetchStats(userId);
+    fetchRecentMessages(userId);
+    fetchSystemLogs(userId);
+    fetchLeads();
+
+    const interval = setInterval(() => {
+      fetchStats(userId);
+      fetchRecentMessages(userId);
+      fetchSystemLogs(userId);
+      fetchLeads();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [userId]);
 
   const debugAuth = async () => {
     try {
@@ -118,6 +167,44 @@ export default function Dashboard() {
       console.error("Debug auth failed:", err);
       toast.error("Falha ao verificar configuração de auth: " + err.message);
     }
+  };
+
+  const fetchRecentMessages = async (uId: string) => {
+    if (!uId) return;
+    const { data: initialMessages } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("user_id", uId)
+      .order("timestamp", { ascending: false })
+      .limit(20);
+    
+    if (initialMessages && initialMessages.length > 0) {
+      const contactIds = [...new Set(initialMessages.map(m => m.contact_id))];
+      const { data: contactsData } = await supabase
+        .from("contacts")
+        .select("id, name, phone")
+        .in("id", contactIds);
+        
+      const contactsMap = new Map(contactsData?.map(c => [c.id, c]) || []);
+      
+      const mappedMessages = initialMessages.map(msg => ({
+        ...msg,
+        contacts: contactsMap.get(msg.contact_id)
+      }));
+      
+      setRecentMessages(mappedMessages);
+    }
+  };
+
+  const fetchSystemLogs = async (uId: string) => {
+    if (!uId) return;
+    const { data } = await supabase
+      .from("logs")
+      .select("*")
+      .eq("user_id", uId)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    setSystemLogs(data || []);
   };
 
   const fetchStats = async (userId: string) => {
@@ -158,20 +245,33 @@ export default function Dashboard() {
       else console.log("Fetched scheduled count:", scheduledCount);
 
       // Automations count
-      const { count: automationsCount, error: automationsError } = await supabase
+      const { count: automationsCount } = await supabase
         .from("automations")
         .select("id", { count: 'exact' })
         .eq("user_id", userId)
         .limit(1);
+
+      // Leads count
+      const { count: leadsCount } = await supabase
+        .from("leads")
+        .select("id", { count: 'exact' })
+        .eq("user_id", userId)
+        .limit(1);
+
+      // Actions count
+      const { count: actionsCount } = await supabase
+        .from("agent_logs")
+        .select("id", { count: 'exact' })
+        .eq("user_id", userId)
+        .limit(1);
         
-      if (automationsError) console.error("Error fetching automations count:", automationsError);
-      else console.log("Fetched automations count:", automationsCount);
-      
       setStats({
         contacts: contactsCount || 0,
         messages: messagesCount || 0,
         scheduled: scheduledCount || 0,
-        automations: automationsCount || 0
+        automations: automationsCount || 0,
+        leads: leadsCount || 0,
+        actions: actionsCount || 0
       });
     } catch (err) {
       console.error("Error fetching stats:", err);
@@ -477,11 +577,26 @@ export default function Dashboard() {
     };
   }, [activationLoading, isActivated]);
 
+  const toggleAgent = async () => {
+    if (!userId || !agent) return;
+    const newState = !agent.is_active;
+    try {
+      await apiFetch("/api/agent/config", {
+        method: "POST",
+        body: JSON.stringify({ is_active: newState })
+      });
+      setAgent({ ...agent, is_active: newState });
+      toast.success(newState ? "Smart Bot ativado!" : "Smart Bot desativado.");
+    } catch (err) {
+      toast.error("Erro ao alterar estado do bot.");
+    }
+  };
+
   const statsConfig = [
-    { name: "Total Contatos", value: stats.contacts.toString(), icon: Users, color: "text-blue-500", bg: "bg-blue-500/10" },
-    { name: "Mensagens Enviadas", value: stats.messages.toString(), icon: MessageSquare, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    { name: "Agendamentos", value: stats.scheduled.toString(), icon: Clock, color: "text-amber-500", bg: "bg-amber-500/10" },
-    { name: "Automações Ativas", value: stats.automations.toString(), icon: Zap, color: "text-purple-500", bg: "bg-purple-500/10" },
+    { name: "Leads Capturados", value: stats.leads.toString(), icon: UserPlus, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { name: "Mensagens Bot", value: stats.messages.toString(), icon: MessageSquare, color: "text-emerald-500", bg: "bg-emerald-500/10" },
+    { name: "Ações Inteligentes", value: stats.actions.toString(), icon: Zap, color: "text-amber-500", bg: "bg-amber-500/10" },
+    { name: "Automações", value: stats.automations.toString(), icon: Activity, color: "text-purple-500", bg: "bg-purple-500/10" },
   ];
 
   if (activationLoading) {
@@ -497,24 +612,54 @@ export default function Dashboard() {
   return (
     <div className="p-6 lg:p-10 space-y-8 max-w-7xl mx-auto">
       {/* Header Section */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-1">
           <h2 className="text-3xl font-bold text-slate-900 tracking-tight">
             Bem-vindo, <span className="text-emerald-600">{userName}</span>
           </h2>
           <p className="text-slate-500 font-medium">
-            Monitore suas conexões e mensagens em tempo real.
+            Seu assistente inteligente está pronto.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Smart Bot Toggle */}
+          <div 
+            onClick={toggleAgent}
+            className={cn(
+              "flex items-center gap-3 px-4 py-2 rounded-2xl cursor-pointer transition-all border-2",
+              agent?.is_active 
+                ? "bg-emerald-50 border-emerald-200 text-emerald-700 shadow-sm shadow-emerald-100" 
+                : "bg-slate-50 border-slate-200 text-slate-500"
+            )}
+          >
+            <div className={cn(
+              "h-8 w-8 rounded-xl flex items-center justify-center transition-all",
+              agent?.is_active ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400"
+            )}>
+              <Bot size={18} />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5">Smart Bot</span>
+              <span className="text-xs font-bold">{agent?.is_active ? "ATIVADO" : "DESATIVADO"}</span>
+            </div>
+            <div className={cn(
+              "w-10 h-5 rounded-full relative transition-all ml-2",
+              agent?.is_active ? "bg-emerald-500" : "bg-slate-300"
+            )}>
+              <div className={cn(
+                "absolute top-1 w-3 h-3 bg-white rounded-full transition-all",
+                agent?.is_active ? "left-6" : "left-1"
+              )} />
+            </div>
+          </div>
+
           <ConnectionStatusBadge status={status} />
           <Button 
             onClick={() => checkStatus(userId!, true)} 
             variant="outline"
-            className="rounded-xl border-slate-200 font-medium text-sm h-10"
+            className="rounded-xl border-slate-200 font-medium text-sm h-10 px-4"
           >
-            <RefreshCw size={16} className={cn("mr-2", loading && "animate-spin")} />
-            Atualizar
+            <RefreshCw size={16} className={cn(loading && "animate-spin")} />
           </Button>
         </div>
       </div>
@@ -522,13 +667,13 @@ export default function Dashboard() {
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {statsConfig.map((stat, i) => (
-          <Card key={i} className="border-slate-100 shadow-sm hover:shadow-md transition-all group">
+          <Card key={i} className="border-slate-100 shadow-sm hover:shadow-md transition-all group overflow-hidden">
             <div className="p-6 flex items-center gap-4">
-              <div className={cn("h-12 w-12 rounded-xl flex items-center justify-center shrink-0", stat.bg, stat.color)}>
+              <div className={cn("h-12 w-12 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110", stat.bg, stat.color)}>
                 <stat.icon size={24} />
               </div>
               <div>
-                <p className="text-xs font-medium text-slate-500">{stat.name}</p>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-0.5">{stat.name}</p>
                 <p className="text-2xl font-bold text-slate-900">{stat.value}</p>
               </div>
             </div>
@@ -537,9 +682,81 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Connection Status Card */}
-        <div className="lg:col-span-5 xl:col-span-4">
-          <Card className="border-slate-100 shadow-sm h-full flex flex-col">
+        {/* Recent Activity Section */}
+        <div className="lg:col-span-12">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-bold text-slate-900">Atividade Recente</h3>
+            <Button variant="ghost" size="sm" onClick={() => navigate("/activity")} className="text-emerald-600 font-bold">
+              Ver Tudo
+              <ChevronRight size={16} className="ml-1" />
+            </Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Last 3 Logs */}
+            {systemLogs.slice(0, 3).map((log) => (
+              <Card key={log.id} className="p-4 border-slate-100 shadow-sm flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Badge variant={log.level === 'error' ? 'error' : log.level === 'warn' ? 'warning' : log.level === 'success' ? 'success' : 'info'} className="text-[10px] uppercase font-black tracking-widest">
+                      {log.level}
+                    </Badge>
+                    <span className="text-[10px] text-slate-400 font-bold">
+                      {new Date(log.created_at).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-700 line-clamp-2 font-medium">
+                    {log.message}
+                  </p>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        {/* Left Column: Bot Control & Status */}
+        <div className="lg:col-span-4 space-y-6">
+          {/* Bot Status Card */}
+          <Card className="border-slate-100 shadow-sm overflow-hidden">
+            <div className={cn(
+              "p-6 flex flex-col items-center text-center space-y-4",
+              agent?.is_active ? "bg-emerald-50/50" : "bg-slate-50/50"
+            )}>
+              <div className={cn(
+                "h-20 w-20 rounded-3xl flex items-center justify-center shadow-lg transition-all",
+                agent?.is_active ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400"
+              )}>
+                <Bot size={40} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-slate-900 text-lg">Smart Bot</h3>
+                <p className="text-sm text-slate-500">
+                  {agent?.is_active 
+                    ? "Respondendo clientes e capturando leads." 
+                    : "O bot está pausado no momento."}
+                </p>
+              </div>
+              <Button 
+                onClick={toggleAgent}
+                className={cn(
+                  "w-full h-12 rounded-xl font-bold transition-all",
+                  agent?.is_active 
+                    ? "bg-white text-emerald-600 border-2 border-emerald-200 hover:bg-emerald-50" 
+                    : "bg-emerald-600 text-white hover:bg-emerald-500"
+                )}
+              >
+                {agent?.is_active ? "PAUSAR BOT" : "ATIVAR BOT"}
+              </Button>
+            </div>
+            <div className="p-4 bg-white border-t border-slate-50 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Configurações</span>
+              <Button variant="ghost" size="sm" onClick={() => navigate("/agent")} className="text-slate-400 hover:text-emerald-600">
+                <SettingsIcon size={16} />
+              </Button>
+            </div>
+          </Card>
+
+          {/* Connection Status Card */}
+          <Card className="border-slate-100 shadow-sm overflow-hidden">
             <CardHeader className="p-6 border-b border-slate-50">
               <CardTitle className="text-lg font-bold text-slate-900">Conexão WhatsApp</CardTitle>
               <CardDescription className="text-xs">Status da sua instância</CardDescription>
@@ -664,7 +881,7 @@ export default function Dashboard() {
         </div>
 
         {/* Real-time Monitor */}
-        <div className="lg:col-span-12">
+        <div className="lg:col-span-8">
           <Card className="border-slate-100 shadow-sm overflow-hidden flex flex-col">
             <div className="p-5 border-b border-slate-100 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div className="flex items-center gap-3">
@@ -693,7 +910,16 @@ export default function Dashboard() {
                     activeTab === "logs" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
                   )}
                 >
-                  Logs do Sistema
+                  Logs
+                </button>
+                <button 
+                  onClick={() => setActiveTab("leads")}
+                  className={cn(
+                    "flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all",
+                    activeTab === "leads" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  )}
+                >
+                  Leads
                 </button>
               </div>
             </div>
@@ -746,7 +972,7 @@ export default function Dashboard() {
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : activeTab === "logs" ? (
                   <div className="divide-y divide-slate-50 font-mono">
                     {systemLogs.length > 0 ? (
                       systemLogs.map((log) => (
@@ -791,6 +1017,39 @@ export default function Dashboard() {
                       </div>
                     )}
                   </div>
+                ) : (
+                  <div className="divide-y divide-slate-50">
+                    {leads.length > 0 ? (
+                      leads.map((lead) => (
+                        <div key={lead.id} className="p-4 hover:bg-slate-50/50 transition-colors flex items-start gap-4">
+                          <div className="h-10 w-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center shrink-0 shadow-sm">
+                            <UserPlus size={18} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex justify-between items-start mb-1">
+                              <p className="font-bold text-sm text-slate-900 truncate">
+                                {lead.name || lead.phone}
+                              </p>
+                              <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                                {new Date(lead.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mb-2">
+                              {lead.intent ? `Intenção: ${lead.intent}` : "Interação inicial"}
+                            </p>
+                            <p className="text-sm text-slate-600 line-clamp-1 italic">
+                              "{lead.last_message}"
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                        <UserPlus size={32} className="text-slate-200 mb-3" />
+                        <p className="text-sm font-bold text-slate-400">Nenhum lead capturado ainda.</p>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </CardContent>
@@ -798,9 +1057,9 @@ export default function Dashboard() {
               <Button 
                 variant="ghost" 
                 className="w-full h-9 rounded-lg text-xs font-bold text-slate-500 hover:text-slate-900"
-                onClick={() => navigate(activeTab === "messages" ? "/messages" : "/logs")}
+                onClick={() => navigate(activeTab === "messages" ? "/messages" : activeTab === "logs" ? "/activity" : "/leads")}
               >
-                {activeTab === "messages" ? "Ver Histórico Completo" : "Ver Todos os Logs"}
+                {activeTab === "messages" ? "Ver Histórico Completo" : activeTab === "logs" ? "Ver Todos os Logs" : "Ver Todos os Leads"}
                 <ChevronRight size={14} className="ml-1" />
               </Button>
             </div>

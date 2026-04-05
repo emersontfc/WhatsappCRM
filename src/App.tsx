@@ -18,6 +18,9 @@ import UserModels from "./pages/UserModels";
 import QuickReplies from "./pages/QuickReplies";
 import Groups from "./pages/Groups";
 import MenuBuilderPage from "./pages/MenuBuilderPage";
+import Onboarding from "./pages/Onboarding";
+import Leads from "./pages/Leads";
+import ActivityLog from "./pages/ActivityLog";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -64,6 +67,10 @@ export default function App() {
         <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <Landing />} />
         <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
         <Route
+          path="/onboarding"
+          element={user ? <Onboarding key={user.id} /> : <Navigate to="/login" replace />}
+        />
+        <Route
           path="/dashboard"
           element={user ? <Layout><Dashboard key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
@@ -80,8 +87,16 @@ export default function App() {
           element={user ? <Layout><Messages key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
+          path="/leads"
+          element={user ? <Layout><Leads key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
           path="/agent"
           element={user ? <Layout><Agent key={user.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/activity"
+          element={user ? <Layout><ActivityLog key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/settings"

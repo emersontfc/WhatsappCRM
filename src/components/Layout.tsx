@@ -17,11 +17,13 @@ import {
   Terminal,
   Rocket,
   Clock,
+  Activity,
   MessageCircle,
   MessageSquareText,
   FileText,
   Users2,
-  Hash
+  Hash,
+  UserPlus
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -104,29 +106,51 @@ export default function Layout({ children }: LayoutProps) {
     }
   };
 
-  // Navigation items for the sidebar
-  const navItems = [
-    { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
-    { name: "Contatos", path: "/contacts", icon: Users },
-    { name: "Mensagens", path: "/messages", icon: MessageCircle },
-    { name: "Automações", path: "/automations", icon: Zap },
-    { name: "Respostas Rápidas", path: "/quick-replies", icon: MessageSquareText },
-    { name: "Grupos", path: "/groups", icon: Users2 },
-    { name: "Menu Inteligente", path: "/menu-builder", icon: Hash },
-    { name: "Modelos", path: "/models", icon: FileText },
-    { name: "Agente IA", path: "/agent", icon: Bot },
-    { name: "Agendamentos", path: "/schedule", icon: CalendarIcon },
+  // Navigation items for the sidebar organized by sections
+  const sections = [
+    {
+      title: "Principal",
+      items: [
+        { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
+        { name: "Mensagens", path: "/messages", icon: MessageCircle },
+        { name: "Agendamentos", path: "/schedule", icon: CalendarIcon },
+      ]
+    },
+    {
+      title: "Audiência",
+      items: [
+        { name: "Leads", path: "/leads", icon: UserPlus },
+        { name: "Contatos", path: "/contacts", icon: Users },
+        { name: "Grupos", path: "/groups", icon: Users2 },
+      ]
+    },
+    {
+      title: "Automação & IA",
+      items: [
+        { name: "Agente IA", path: "/agent", icon: Bot },
+        { name: "Automações", path: "/automations", icon: Zap },
+        { name: "Menu Inteligente", path: "/menu-builder", icon: Hash },
+        { name: "Respostas Rápidas", path: "/quick-replies", icon: MessageSquareText },
+        { name: "Modelos", path: "/models", icon: FileText },
+      ]
+    },
+    {
+      title: "Sistema",
+      items: [
+        { name: "Atividade", path: "/activity", icon: Activity },
+        { name: "Configurações", path: "/settings", icon: Settings },
+      ]
+    }
   ];
 
+  // Add conditional items to the System section
   if (isAdmin) {
-    navItems.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
+    sections.find(s => s.title === "Sistema")?.items.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
   }
 
   if (userPlan === "Free") {
-    navItems.push({ name: "Upgrade", path: "/activate", icon: CreditCard });
+    sections.find(s => s.title === "Sistema")?.items.push({ name: "Upgrade", path: "/activate", icon: CreditCard });
   }
-
-  navItems.push({ name: "Configurações", path: "/settings", icon: Settings });
 
   if (loading) {
     return (
@@ -135,6 +159,8 @@ export default function Layout({ children }: LayoutProps) {
       </div>
     );
   }
+
+  const allNavItems = sections.flatMap(s => s.items);
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden relative font-sans text-slate-900 transition-colors duration-300">
@@ -177,26 +203,32 @@ export default function Layout({ children }: LayoutProps) {
           </Button>
         </div>
 
-        <nav className="flex-1 px-6 py-4 space-y-1 overflow-y-auto custom-scrollbar">
-          <div className="px-4 mb-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">Navegação</div>
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={cn(
-                  "flex items-center gap-3 px-6 py-3.5 rounded-xl text-sm font-medium transition-all duration-200 group relative",
-                  isActive
-                    ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"
-                    : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
-                )}
-              >
-                <item.icon size={18} className={cn("transition-all duration-200", isActive ? "text-white" : "text-slate-400 group-hover:text-emerald-600")} />
-                {item.name}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 px-6 py-4 space-y-8 overflow-y-auto custom-scrollbar">
+          {sections.map((section) => (
+            <div key={section.title} className="space-y-2">
+              <div className="px-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">{section.title}</div>
+              <div className="space-y-1">
+                {section.items.map((item) => {
+                  const isActive = location.pathname === item.path;
+                  return (
+                    <Link
+                      key={item.path}
+                      to={item.path}
+                      className={cn(
+                        "flex items-center gap-3 px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 group relative",
+                        isActive
+                          ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"
+                          : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                      )}
+                    >
+                      <item.icon size={18} className={cn("transition-all duration-200", isActive ? "text-white" : "text-slate-400 group-hover:text-emerald-600")} />
+                      {item.name}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
         <div className="p-6 border-t-2 border-slate-50 bg-slate-50/30">
@@ -225,7 +257,7 @@ export default function Layout({ children }: LayoutProps) {
             </Button>
             <div className="flex flex-col">
               <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-                {navItems.find(item => item.path === location.pathname)?.name || "Dashboard"}
+                {allNavItems.find(item => item.path === location.pathname)?.name || "Dashboard"}
               </h1>
               <div className="flex items-center gap-2 mt-0.5">
                 {isAdmin && (

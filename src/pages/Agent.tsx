@@ -12,7 +12,7 @@ import { useActivation } from "../lib/useActivation";
 interface AgentConfig {
   id?: string;
   is_active: boolean;
-  provider: "gemini" | "openai" | "deepseek" | "huggingface" | "custom";
+  provider: "gemini" | "openai" | "openrouter" | "deepseek" | "huggingface" | "custom";
   api_key: string;
   api_url: string;
   model: string;
@@ -24,6 +24,9 @@ export default function Agent() {
   const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testMessage, setTestMessage] = useState("");
+  const [testResponse, setTestResponse] = useState("");
   const [models, setModels] = useState<Record<string, string[]>>({});
   const [config, setConfig] = useState<AgentConfig>({
     is_active: false,
@@ -85,10 +88,14 @@ export default function Agent() {
 
     setSaving(true);
     try {
+      const configToSave = {
+        ...config,
+        api_url: config.api_url.trim()
+      };
       console.log("Saving agent config...", config.provider);
       const response = await apiFetch("/api/agent/create-or-update", {
         method: "POST",
-        body: JSON.stringify(config),
+        body: JSON.stringify(configToSave),
       });
 
       if (response.success && response.data && response.data.id) {
@@ -105,6 +112,33 @@ export default function Agent() {
       toast.error(err.message || "Erro ao salvar configurações.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    if (!testMessage.trim()) {
+      toast.error("Por favor, digite uma mensagem para testar.");
+      return;
+    }
+
+    setTesting(true);
+    setTestResponse("");
+    try {
+      const response = await apiFetch("/api/agent/test", {
+        method: "POST",
+        body: JSON.stringify({ message: testMessage }),
+      });
+
+      if (response.success && response.data) {
+        setTestResponse(response.data.response);
+      } else {
+        toast.error(response.error || "Erro ao testar agente.");
+      }
+    } catch (err: any) {
+      console.error("Error testing agent:", err);
+      toast.error(err.message || "Erro ao testar agente.");
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -227,6 +261,17 @@ export default function Agent() {
                     <p className="text-[10px] text-slate-500">ChatGPT (Requer API Key)</p>
                   </button>
                   <button
+                    onClick={() => setConfig({ ...config, provider: "openrouter", model: "google/gemini-2.0-flash-001", api_key: "" })}
+                    className={cn(
+                      "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
+                      config.provider === "openrouter" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white"
+                    )}
+                  >
+                    <Zap className={cn("mb-2", config.provider === "openrouter" ? "text-emerald-600" : "text-slate-400")} size={24} />
+                    <p className="font-bold text-sm">OpenRouter</p>
+                    <p className="text-[10px] text-slate-500">Acesso a múltiplos modelos</p>
+                  </button>
+                  <button
                     onClick={() => setConfig({ ...config, provider: "deepseek", model: "deepseek-chat", api_key: "" })}
                     className={cn(
                       "p-4 rounded-xl border-2 text-left transition-all hover:border-emerald-200",
@@ -311,11 +356,12 @@ export default function Agent() {
                 </div>
               )}
 
-              {["openai", "deepseek", "huggingface"].includes(config.provider) && (
+              {["openai", "openrouter", "deepseek", "huggingface"].includes(config.provider) && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-slate-700">
                       {config.provider === "openai" ? "OpenAI API Key" : 
+                       config.provider === "openrouter" ? "OpenRouter API Key" :
                        config.provider === "deepseek" ? "DeepSeek API Key" : 
                        "Hugging Face API Token"}
                     </label>
@@ -353,10 +399,22 @@ export default function Agent() {
                     <div className="relative">
                       <Globe className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                       <Input 
-                        placeholder="https://sua-api.com/v1/chat" 
+                        placeholder="https://sua-api.com/v1/chat/completions" 
                         className="pl-10"
                         value={config.api_url}
                         onChange={e => setConfig({ ...config, api_url: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">Modelo (Opcional para algumas APIs)</label>
+                    <div className="relative">
+                      <Bot className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <Input 
+                        placeholder="ex: mistral-tiny, gpt-4o, etc." 
+                        className="pl-10"
+                        value={config.model}
+                        onChange={e => setConfig({ ...config, model: e.target.value })}
                       />
                     </div>
                   </div>
@@ -407,6 +465,43 @@ export default function Agent() {
               {saving ? "Salvando..." : "Salvar Configurações"}
             </Button>
           </div>
+
+          <Card className="border-emerald-100 bg-emerald-50/30">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Zap className="text-emerald-600" size={20} />
+                Testar Agente
+              </CardTitle>
+              <CardDescription>Envie uma mensagem de teste para ver como o agente responde.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-2">
+                <Input 
+                  placeholder="Digite uma mensagem de teste..." 
+                  value={testMessage}
+                  onChange={e => setTestMessage(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleTest()}
+                />
+                <Button onClick={handleTest} disabled={testing || !config.id}>
+                  {testing ? "Testando..." : "Testar"}
+                </Button>
+              </div>
+              
+              {testResponse && (
+                <div className="p-4 rounded-xl bg-white border border-emerald-100 animate-in fade-in slide-in-from-top-2">
+                  <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Resposta do Agente:</p>
+                  <p className="text-sm text-slate-700 leading-relaxed">{testResponse}</p>
+                </div>
+              )}
+              
+              {!config.id && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  <AlertCircle size={14} />
+                  Salve as configurações antes de testar.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <div className="space-y-6">

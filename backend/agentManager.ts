@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
+import { executeAction } from "./actionEngine.ts";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "your-fallback-encryption-key-32-chars-long";
 const IV_LENGTH = 16;
@@ -96,7 +97,9 @@ export async function runOpenAI(agent: any, prompt: string, systemInstruction?: 
   const apiKey = decrypt(agent.api_key);
   if (!apiKey) throw new Error("OpenAI API Key missing");
 
-  const response = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+  const url = (agent.api_url || "https://api.openai.com/v1/chat/completions").trim();
+
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { 
       "Content-Type": "application/json", 
@@ -125,7 +128,7 @@ export async function runDeepSeek(agent: any, prompt: string, systemInstruction?
   const apiKey = decrypt(agent.api_key);
   if (!apiKey) throw new Error("DeepSeek API Key missing");
 
-  const url = agent.api_url || "https://api.deepseek.com/v1/chat/completions";
+  const url = (agent.api_url || "https://api.deepseek.com/v1/chat/completions").trim();
   console.log(`[AI Engine] DeepSeek request to: ${url}`);
 
   const response = await fetchWithTimeout(url, {
@@ -184,14 +187,59 @@ export async function runHuggingFace(agent: any, prompt: string, systemInstructi
   return normalizeResponse(data);
 }
 
+export async function runOpenRouter(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
+  const apiKey = decrypt(agent.api_key);
+  if (!apiKey) throw new Error("OpenRouter API Key missing");
+
+  const url = (agent.api_url || "https://openrouter.ai/api/v1/chat/completions").trim();
+
+  const response = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: { 
+      "Content-Type": "application/json", 
+      "Authorization": `Bearer ${apiKey}`,
+      "HTTP-Referer": "https://agentex.com.br", // Optional, for OpenRouter rankings
+      "X-Title": "Agentex" // Optional, for OpenRouter rankings
+    },
+    body: JSON.stringify({
+      model: agent.model || "google/gemini-2.0-flash-001",
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 500
+    })
+  });
+  
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenRouter Error: ${err}`);
+  }
+  
+  const data = await response.json();
+  return normalizeResponse(data);
+}
+
 export async function runCustom(agent: any, prompt: string, systemInstruction?: string): Promise<string> {
-  if (!agent.api_url) throw new Error("Custom API URL missing");
+  let url = (agent.api_url || "").trim();
+  if (!url) throw new Error("Custom API URL missing");
   
   const apiKey = agent.api_key ? decrypt(agent.api_key) : "";
-  const isChatCompletion = agent.api_url.includes("/chat/completions") || agent.model;
+  
+  // Auto-append /chat/completions if it looks like a base URL and a model is provided
+  if (agent.model && !url.includes("/chat/completions") && !url.includes("/completions")) {
+    // If it ends with /models, it's likely the wrong endpoint for chat
+    if (url.endsWith("/models")) {
+      url = url.replace(/\/models$/, "/chat/completions");
+    } else {
+      url = url.replace(/\/$/, "") + "/chat/completions";
+    }
+  }
+
+  const isChatCompletion = url.includes("/chat/completions") || agent.model;
 
   const body = isChatCompletion ? {
-    model: agent.model || "gpt-3.5-turbo",
+    ...(agent.model ? { model: agent.model } : {}),
     messages: [
       { role: "system", content: systemInstruction },
       { role: "user", content: prompt }
@@ -203,7 +251,7 @@ export async function runCustom(agent: any, prompt: string, systemInstruction?: 
     prompt: `SYSTEM:\n${systemInstruction}\n\nUSER:\n${prompt}`
   };
 
-  const response = await fetchWithTimeout(agent.api_url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { 
       "Content-Type": "application/json", 
@@ -222,13 +270,15 @@ export async function runCustom(agent: any, prompt: string, systemInstruction?: 
 }
 
 export async function runAI(agent: any, message: string, context: string[]): Promise<string> {
-  const systemInstruction = agent.instructions || "Você é um assistente útil.";
+  const jsonInstruction = "\n\nIMPORTANTE: Responda SEMPRE em formato JSON com os campos: 'reply' (sua resposta ao usuário), 'intent' (intenção detectada), 'action' (ação a ser executada, se houver) e 'data' (dados para a ação). Se não houver ação, deixe 'action' vazio. Exemplo: {\"reply\": \"Olá!\", \"intent\": \"saudação\", \"action\": \"\", \"data\": {}}";
+  const systemInstruction = (agent.instructions || "Você é um assistente útil.") + jsonInstruction;
   const contextStr = context.slice(-5).join("\n");
   const prompt = contextStr ? `CONTEXT:\n${contextStr}\n\nUSER:\n${message}` : message;
   
   const providers: Record<string, (agent: any, prompt: string, systemInstruction?: string) => Promise<string>> = {
     gemini: runGemini,
     openai: runOpenAI,
+    openrouter: runOpenRouter,
     deepseek: runDeepSeek,
     huggingface: runHuggingFace,
     custom: runCustom,
@@ -265,6 +315,17 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
 
 // In-memory context cache
 const contextCache: Map<string, string[]> = new Map();
+
+function safeParseJSON(text: string) {
+  try {
+    // Try to find JSON block if it's wrapped in markdown
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const jsonStr = jsonMatch ? jsonMatch[0] : text;
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    return null;
+  }
+}
 
 export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string) {
   try {
@@ -369,7 +430,26 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
 
     if (responseText) {
-      await whatsappManager.sendMessage(userId, jid, responseText);
+      const parsed = safeParseJSON(responseText);
+      let finalReply = responseText;
+      let actionResult = null;
+
+      if (parsed && parsed.reply) {
+        finalReply = parsed.reply;
+        
+        if (parsed.action) {
+          console.log(`[AI Engine] AI suggested action: ${parsed.action} with intent: ${parsed.intent}`);
+          actionResult = await executeAction({
+            action: parsed.action,
+            data: parsed.data || {},
+            userId,
+            phone: jid.split("@")[0],
+            intent: parsed.intent
+          });
+        }
+      }
+
+      await whatsappManager.sendMessage(userId, jid, finalReply);
       
       // Increment usage if not admin
       if (!isAdmin) {
@@ -380,11 +460,17 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       }
 
       context.push(`User: ${text}`);
-      context.push(`Agent: ${responseText}`);
+      context.push(`Agent: ${finalReply}`);
       if (context.length > 10) context = context.slice(-10);
       contextCache.set(contextKey, context);
 
-      await whatsappManager.log(userId, "info", `Agente IA respondeu para ${jid}`, { provider: agent.provider, response: responseText });
+      await whatsappManager.log(userId, "info", `Agente IA respondeu para ${jid}`, { 
+        provider: agent.provider, 
+        response: finalReply,
+        intent: parsed?.intent,
+        action: parsed?.action,
+        action_success: actionResult?.success
+      });
     }
   } catch (err) {
     console.error("Agent handler error:", err);

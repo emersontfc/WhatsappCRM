@@ -10,6 +10,11 @@ import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { handleIncomingMessage } from "./automationManager.ts";
 import { handleAgentMessage } from "./agentManager.ts";
 import { useSupabaseAuthState, clearSupabaseAuthCache } from "./lib/supabaseAuthState.ts";
+import axios from "axios";
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { convertToOpus } from "./utils/audioConverter.ts";
 
 const logger = pino({ level: "warn" });
 
@@ -446,7 +451,55 @@ export class WhatsAppManager {
       } else if (mediaType === 'video') {
         return await session.socket.sendMessage(jid, { video: { url: mediaUrl }, caption: text });
       } else if (mediaType === 'audio') {
-        return await session.socket.sendMessage(jid, { audio: { url: mediaUrl }, mimetype: mimetype || 'audio/mp4', ptt: true, seconds: duration });
+        let audioPath = mediaUrl;
+        let tempInputPath = "";
+        let tempOutputPath = "";
+
+        // If it's a URL or local path, convert to OGG/Opus for PTT
+        if (mediaUrl) {
+          try {
+            if (mediaUrl.startsWith("http")) {
+              tempInputPath = path.join(os.tmpdir(), `input_${Date.now()}`);
+              const response = await axios({
+                method: 'get',
+                url: mediaUrl,
+                responseType: 'stream'
+              });
+              const writer = fs.createWriteStream(tempInputPath);
+              response.data.pipe(writer);
+              await new Promise<void>((resolve, reject) => {
+                writer.on('finish', () => resolve());
+                writer.on('error', (err) => reject(err));
+              });
+              tempOutputPath = await convertToOpus(tempInputPath);
+            } else if (fs.existsSync(mediaUrl)) {
+              // It's a local path
+              tempOutputPath = await convertToOpus(mediaUrl);
+            }
+
+            if (tempOutputPath) {
+              audioPath = tempOutputPath;
+              console.log(`[WhatsAppManager] Audio converted for PTT: ${audioPath}`);
+            }
+          } catch (err) {
+            console.error("[WhatsAppManager] Error converting audio, sending original:", err);
+            // Fallback to original if conversion fails
+            audioPath = mediaUrl;
+          }
+        }
+
+        const result = await session.socket.sendMessage(jid, { 
+          audio: audioPath.startsWith("http") ? { url: audioPath } : fs.readFileSync(audioPath), 
+          mimetype: 'audio/ogg; codecs=opus', 
+          ptt: true, 
+          seconds: duration 
+        });
+
+        // Cleanup temp files
+        if (tempInputPath && fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+        if (tempOutputPath && fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+
+        return result;
       } else if (mediaType === 'document') {
         return await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: mimetype || 'application/pdf', fileName: fileName || 'documento', caption: text });
       }

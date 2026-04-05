@@ -9,6 +9,20 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(userId)) return false;
 
+    // 0. Capture Lead (runs before any automation)
+    try {
+      const phone = jid.split("@")[0];
+      await supabaseAdmin.from("leads").upsert({
+        user_id: userId,
+        phone,
+        last_message: text,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "user_id, phone" });
+      console.log(`[Automation] Lead captured for ${phone}`);
+    } catch (e) {
+      console.error("[Automation] Error capturing lead:", e);
+    }
+
     const normalizedText = text.trim().toLowerCase();
     let triggered = false;
     

@@ -16,7 +16,7 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     window.location.hostname === "localhost" || 
     window.location.hostname === "127.0.0.1"
   )) {
-    apiUrl = "";
+    apiUrl = window.location.origin;
   }
 
   let fullUrl = url.startsWith("http") ? url : `${apiUrl}${url}`;
@@ -104,7 +104,17 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
     if (error.name === "AbortError") {
       throw new Error(`Timeout na requisição (${url}).`);
     }
-    console.error(`[apiFetch] Error for ${fullUrl}:`, error);
+    
+    const errMsg = error.message?.toLowerCase() || "";
+    const isCommonNetworkError = 
+      errMsg.includes("load failed") || 
+      errMsg.includes("failed to fetch") || 
+      errMsg.includes("network error") ||
+      errMsg.includes("aborted");
+
+    if (!isCommonNetworkError) {
+      console.error(`[apiFetch] Error for ${fullUrl}:`, error);
+    }
     throw error;
   }
 }

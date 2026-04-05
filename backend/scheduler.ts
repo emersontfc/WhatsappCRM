@@ -28,6 +28,31 @@ export function startScheduler() {
         .limit(10);
       
       if (error) throw error;
+      
+      // Process Reminders
+      const { data: pendingReminders, error: reminderError } = await supabaseAdmin
+        .from("reminders")
+        .select("*")
+        .eq("sent", false)
+        .lte("scheduled_at", now)
+        .limit(10);
+
+      if (reminderError) throw reminderError;
+
+      if (pendingReminders && pendingReminders.length > 0) {
+        console.log(`Scheduler found ${pendingReminders.length} pending reminders.`);
+        for (const reminder of pendingReminders) {
+          try {
+            const jid = reminder.phone.includes("@") ? reminder.phone : `${reminder.phone}@s.whatsapp.net`;
+            await whatsappManager.sendMessage(reminder.user_id, jid, `🔔 LEMBRETE: ${reminder.message}`);
+            await supabaseAdmin.from("reminders").update({ sent: true }).eq("id", reminder.id);
+            console.log(`Reminder ${reminder.id} sent to ${reminder.phone}`);
+          } catch (err) {
+            console.error(`Failed to send reminder ${reminder.id}:`, err);
+          }
+        }
+      }
+
       if (!pendingMessages || pendingMessages.length === 0) return;
 
       console.log(`Scheduler found ${pendingMessages.length} pending messages.`);
@@ -86,8 +111,8 @@ export function startScheduler() {
         }
       }
     } catch (err: any) {
-      // Ignore "relation does not exist" error if the user hasn't created the table yet
-      if (err?.code === '42P01' || err?.message?.includes('does not exist')) {
+      // Ignore "relation does not exist" or PostgREST schema cache errors if the user hasn't created the table yet
+      if (err?.code === '42P01' || err?.code === 'PGRST204' || err?.message?.includes('does not exist') || err?.message?.includes('schema cache')) {
         // Silently ignore to avoid spamming the console before the user runs the SQL script
       } else {
         console.error("Scheduler error:", err?.message || err);

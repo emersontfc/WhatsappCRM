@@ -161,6 +161,44 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- Leads table
+      CREATE TABLE IF NOT EXISTS leads (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        phone TEXT NOT NULL,
+        name TEXT,
+        last_message TEXT,
+        intent TEXT,
+        last_action TEXT,
+        status TEXT DEFAULT 'new', -- 'new', 'contacted', 'qualified', 'lost'
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(user_id, phone)
+      );
+
+      -- Agent logs table
+      CREATE TABLE IF NOT EXISTS agent_logs (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        phone TEXT NOT NULL,
+        intent TEXT,
+        action TEXT NOT NULL,
+        data JSONB,
+        response TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Reminders table
+      CREATE TABLE IF NOT EXISTS reminders (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        phone TEXT NOT NULL,
+        message TEXT NOT NULL,
+        scheduled_at TIMESTAMPTZ NOT NULL,
+        sent BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
       -- Agents table
       CREATE TABLE IF NOT EXISTS agents (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -182,16 +220,23 @@ async function initDatabase() {
           ALTER TABLE automations ADD COLUMN smart_menu_id UUID REFERENCES smart_menus(id) ON DELETE SET NULL;
         END IF;
       END $$;
+
+      -- Refresh PostgREST schema cache
+      NOTIFY pgrst, 'reload schema';
     `;
 
-    // Try to check if table exists first
+    // Try to check if tables exist
     const { error: checkError } = await supabaseAdmin.from('plans').select('id').limit(1);
     const { error: agentsCheckError } = await supabaseAdmin.from('agents').select('id').limit(1);
+    const { error: leadsCheckError } = await supabaseAdmin.from('leads').select('id').limit(1);
+    const { error: remindersCheckError } = await supabaseAdmin.from('reminders').select('id').limit(1);
     
     const plansMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
     const agentsMissing = agentsCheckError && (agentsCheckError.code === 'PGRST116' || agentsCheckError.message.includes('does not exist'));
+    const leadsMissing = leadsCheckError && (leadsCheckError.code === 'PGRST116' || leadsCheckError.message.includes('does not exist'));
+    const remindersMissing = remindersCheckError && (remindersCheckError.code === 'PGRST116' || remindersCheckError.message.includes('does not exist'));
 
-    if (plansMissing || agentsMissing) {
+    if (plansMissing || agentsMissing || leadsMissing || remindersMissing) {
       console.log(`[Database] Missing required tables. Attempting to create...`);
       const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
       
@@ -222,9 +267,12 @@ async function startServer() {
   }
 
   const app = express();
-  const PORT = process.env.PORT || 10000;
+  const PORT = process.env.PORT || 3000;
 
-  app.use(cors());
+  app.use(cors({
+    origin: true,
+    credentials: true
+  }));
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
