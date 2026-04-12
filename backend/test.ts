@@ -1,7 +1,6 @@
+import "./loadEnv.ts";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
-import dotenv from "dotenv";
-dotenv.config();
 
 const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
 const supabaseAnonKey = (process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();

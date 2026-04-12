@@ -17,7 +17,6 @@ import {
   Trash2,
   Terminal,
   Activity,
-  Copy,
   ExternalLink,
   Pause,
   UserPlus,
@@ -28,7 +27,6 @@ import {
 import { toast } from "sonner";
 import { supabase, getUserId, getUser } from "../supabase";
 import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
@@ -45,7 +43,7 @@ const ConnectionStatusBadge = ({ status }: { status: string | null }) => {
   if (status === "connected") {
     label = "Conectado";
     variant = "success";
-  } else if (status === "connecting" || status === "qr" || status === "pairing") {
+  } else if (status === "connecting" || status === "qr") {
     label = "Conectando";
     variant = "warning";
     pulse = true;
@@ -395,7 +393,7 @@ export default function Dashboard() {
     setError(null);
     try {
       const data = await apiFetch(`/api/whatsapp/connect`, {
-        method: "POST"
+        method: "POST",
       });
       
       setStatus(data.status || "connecting");
@@ -592,12 +590,14 @@ export default function Dashboard() {
     }
   };
 
+  const isFree = plan === "Free";
+
   const statsConfig = [
-    { name: "Leads Capturados", value: stats.leads.toString(), icon: UserPlus, color: "text-blue-500", bg: "bg-blue-500/10" },
+    { name: "Leads Capturados", value: stats.leads.toString(), icon: UserPlus, color: "text-blue-500", bg: "bg-blue-500/10", hideIfFree: true },
     { name: "Mensagens Bot", value: stats.messages.toString(), icon: MessageSquare, color: "text-emerald-500", bg: "bg-emerald-500/10" },
-    { name: "Ações Inteligentes", value: stats.actions.toString(), icon: Zap, color: "text-amber-500", bg: "bg-amber-500/10" },
+    { name: "Ações Inteligentes", value: stats.actions.toString(), icon: Zap, color: "text-amber-500", bg: "bg-amber-500/10", hideIfFree: true },
     { name: "Automações", value: stats.automations.toString(), icon: Activity, color: "text-purple-500", bg: "bg-purple-500/10" },
-  ];
+  ].filter(stat => !(isFree && stat.hideIfFree));
 
   if (activationLoading) {
     return (
@@ -606,8 +606,6 @@ export default function Dashboard() {
       </div>
     );
   }
-
-  const isFree = plan === "Free";
 
   return (
     <div className="p-6 lg:p-10 space-y-8 max-w-7xl mx-auto">
@@ -623,35 +621,37 @@ export default function Dashboard() {
         </div>
         <div className="flex flex-wrap items-center gap-3">
           {/* Smart Bot Toggle */}
-          <div 
-            onClick={toggleAgent}
-            className={cn(
-              "flex items-center gap-3 px-4 py-2 rounded-2xl cursor-pointer transition-all border-2",
-              agent?.is_active 
-                ? "bg-emerald-50 border-emerald-200 text-emerald-700 shadow-sm shadow-emerald-100" 
-                : "bg-slate-50 border-slate-200 text-slate-500"
-            )}
-          >
-            <div className={cn(
-              "h-8 w-8 rounded-xl flex items-center justify-center transition-all",
-              agent?.is_active ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400"
-            )}>
-              <Bot size={18} />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5">Smart Bot</span>
-              <span className="text-xs font-bold">{agent?.is_active ? "ATIVADO" : "DESATIVADO"}</span>
-            </div>
-            <div className={cn(
-              "w-10 h-5 rounded-full relative transition-all ml-2",
-              agent?.is_active ? "bg-emerald-500" : "bg-slate-300"
-            )}>
+          {!isFree && (
+            <div 
+              onClick={toggleAgent}
+              className={cn(
+                "flex items-center gap-3 px-4 py-2 rounded-2xl cursor-pointer transition-all border-2",
+                agent?.is_active 
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-700 shadow-sm shadow-emerald-100" 
+                  : "bg-slate-50 border-slate-200 text-slate-500"
+              )}
+            >
               <div className={cn(
-                "absolute top-1 w-3 h-3 bg-white rounded-full transition-all",
-                agent?.is_active ? "left-6" : "left-1"
-              )} />
+                "h-8 w-8 rounded-xl flex items-center justify-center transition-all",
+                agent?.is_active ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400"
+              )}>
+                <Bot size={18} />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-[10px] font-black uppercase tracking-widest leading-none mb-0.5">Smart Bot</span>
+                <span className="text-xs font-bold">{agent?.is_active ? "ATIVADO" : "DESATIVADO"}</span>
+              </div>
+              <div className={cn(
+                "w-10 h-5 rounded-full relative transition-all ml-2",
+                agent?.is_active ? "bg-emerald-500" : "bg-slate-300"
+              )}>
+                <div className={cn(
+                  "absolute top-1 w-3 h-3 bg-white rounded-full transition-all",
+                  agent?.is_active ? "left-6" : "left-1"
+                )} />
+              </div>
             </div>
-          </div>
+          )}
 
           <ConnectionStatusBadge status={status} />
           <Button 
@@ -716,44 +716,46 @@ export default function Dashboard() {
         {/* Left Column: Bot Control & Status */}
         <div className="lg:col-span-4 space-y-6">
           {/* Bot Status Card */}
-          <Card className="border-slate-100 shadow-sm overflow-hidden">
-            <div className={cn(
-              "p-6 flex flex-col items-center text-center space-y-4",
-              agent?.is_active ? "bg-emerald-50/50" : "bg-slate-50/50"
-            )}>
+          {!isFree && (
+            <Card className="border-slate-100 shadow-sm overflow-hidden">
               <div className={cn(
-                "h-20 w-20 rounded-3xl flex items-center justify-center shadow-lg transition-all",
-                agent?.is_active ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400"
+                "p-6 flex flex-col items-center text-center space-y-4",
+                agent?.is_active ? "bg-emerald-50/50" : "bg-slate-50/50"
               )}>
-                <Bot size={40} />
+                <div className={cn(
+                  "h-20 w-20 rounded-3xl flex items-center justify-center shadow-lg transition-all",
+                  agent?.is_active ? "bg-emerald-500 text-white" : "bg-slate-200 text-slate-400"
+                )}>
+                  <Bot size={40} />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="font-bold text-slate-900 text-lg">Smart Bot</h3>
+                  <p className="text-sm text-slate-500">
+                    {agent?.is_active 
+                      ? "Respondendo clientes e capturando leads." 
+                      : "O bot está pausado no momento."}
+                  </p>
+                </div>
+                <Button 
+                  onClick={toggleAgent}
+                  className={cn(
+                    "w-full h-12 rounded-xl font-bold transition-all",
+                    agent?.is_active 
+                      ? "bg-white text-emerald-600 border-2 border-emerald-200 hover:bg-emerald-50" 
+                      : "bg-emerald-600 text-white hover:bg-emerald-500"
+                  )}
+                >
+                  {agent?.is_active ? "PAUSAR BOT" : "ATIVAR BOT"}
+                </Button>
               </div>
-              <div className="space-y-1">
-                <h3 className="font-bold text-slate-900 text-lg">Smart Bot</h3>
-                <p className="text-sm text-slate-500">
-                  {agent?.is_active 
-                    ? "Respondendo clientes e capturando leads." 
-                    : "O bot está pausado no momento."}
-                </p>
+              <div className="p-4 bg-white border-t border-slate-50 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Configurações</span>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/agent")} className="text-slate-400 hover:text-emerald-600">
+                  <SettingsIcon size={16} />
+                </Button>
               </div>
-              <Button 
-                onClick={toggleAgent}
-                className={cn(
-                  "w-full h-12 rounded-xl font-bold transition-all",
-                  agent?.is_active 
-                    ? "bg-white text-emerald-600 border-2 border-emerald-200 hover:bg-emerald-50" 
-                    : "bg-emerald-600 text-white hover:bg-emerald-500"
-                )}
-              >
-                {agent?.is_active ? "PAUSAR BOT" : "ATIVAR BOT"}
-              </Button>
-            </div>
-            <div className="p-4 bg-white border-t border-slate-50 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Configurações</span>
-              <Button variant="ghost" size="sm" onClick={() => navigate("/agent")} className="text-slate-400 hover:text-emerald-600">
-                <SettingsIcon size={16} />
-              </Button>
-            </div>
-          </Card>
+            </Card>
+          )}
 
           {/* Connection Status Card */}
           <Card className="border-slate-100 shadow-sm overflow-hidden">
@@ -849,7 +851,7 @@ export default function Dashboard() {
                                 </Button>
                               </motion.div>
                             ) : (
-                              <div className="flex flex-col items-center gap-6 py-4">
+                              <div className="flex flex-col items-center gap-6 py-4 w-full max-w-sm mx-auto">
                                 <div className="h-24 w-24 bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200 flex items-center justify-center text-slate-300 relative">
                                   <QrCode size={40} className="opacity-20" />
                                   <div className="absolute -bottom-1 -right-1 bg-white p-1.5 rounded-full shadow-sm border border-slate-100">
@@ -912,15 +914,17 @@ export default function Dashboard() {
                 >
                   Logs
                 </button>
-                <button 
-                  onClick={() => setActiveTab("leads")}
-                  className={cn(
-                    "flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all",
-                    activeTab === "leads" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                  )}
-                >
-                  Leads
-                </button>
+                {!isFree && (
+                  <button 
+                    onClick={() => setActiveTab("leads")}
+                    className={cn(
+                      "flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all",
+                      activeTab === "leads" ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    Leads
+                  </button>
+                )}
               </div>
             </div>
             <CardContent className="p-0 flex-1">

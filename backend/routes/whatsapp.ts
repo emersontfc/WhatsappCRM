@@ -12,6 +12,121 @@ router.use((req, res, next) => {
   next();
 });
 
+router.post("/send-scheduled*", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { id, type } = req.body;
+  
+  console.log(`[WhatsApp Router] Handling /send-scheduled: user=${userId}, id=${id}, type=${type}, url=${req.url}`);
+
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const table = type === 'status' ? "scheduled_status" : "scheduled_messages";
+    const { data: item, error } = await supabaseAdmin
+      .from(table)
+      .select("*")
+      .eq("id", id)
+      .eq("user_id", userId)
+      .single();
+
+    if (error || !item) throw new Error("Agendamento não encontrado");
+
+    let jid = "";
+    if (type === 'status') {
+      jid = "status@broadcast";
+    } else {
+      const { data: contact } = await supabaseAdmin
+        .from("contacts")
+        .select("phone")
+        .eq("id", item.contact_id)
+        .single();
+      if (!contact?.phone) throw new Error("Contato sem telefone");
+      jid = `${contact.phone}@s.whatsapp.net`;
+    }
+
+    console.log(`[WhatsApp Router] Sending scheduled content to ${jid}`);
+
+    await whatsappManager.sendMessage(
+      userId,
+      jid,
+      type === 'status' ? item.caption : item.message,
+      item.media_url,
+      item.media_type,
+      undefined,
+      item.media_mimetype,
+      item.media_filename
+    );
+
+    await supabaseAdmin
+      .from(table)
+      .update({ status: "sent" })
+      .eq("id", id);
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error(`[WhatsApp Router] Error in /send-scheduled:`, err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get(["/chats", "/chats/"], async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const { data: contacts, error } = await supabaseAdmin
+      .from("contacts")
+      .select("*")
+      .eq("user_id", userId)
+      .order("last_message_at", { ascending: false, nullsFirst: false });
+
+    if (error) throw error;
+    res.json({ success: true, chats: contacts });
+  } catch (err: any) {
+    console.error("[WhatsApp Sync] Error for user", userId, ":", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post(["/sync", "/sync/"], async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const session = whatsappManager.getSession(userId);
+    if (!session || session.status !== "connected") {
+      return res.json({ success: false, error: "WhatsApp não conectado. Por favor, conecte primeiro no Dashboard." });
+    }
+
+    // Return current contacts
+    const { data: contacts, error } = await supabaseAdmin
+      .from("contacts")
+      .select("*")
+      .eq("user_id", userId)
+      .order("last_message_at", { ascending: false, nullsFirst: false });
+
+    if (error) throw error;
+    res.json({ success: true, chats: contacts });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/status", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { mediaUrl, mediaType, text } = req.body;
+  
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!mediaUrl || !mediaType) return res.status(400).json({ error: "Mídia é obrigatória para Status" });
+
+  try {
+    const result = await whatsappManager.sendMessage(userId, "status@broadcast", text || "", mediaUrl, mediaType);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.post("/connect", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   
@@ -34,13 +149,16 @@ router.get("/qr", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  console.log(`[WhatsApp QR] Request received for user: ${userId}`);
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   try {
     const session = whatsappManager.getSession(userId);
     if (!session) {
-      console.log(`[WhatsApp QR] No session found for user: ${userId}`);
-      return res.json({ success: true, status: "disconnected", qr: null });
+      console.log(`[WhatsApp QR] No session found for user: ${userId}. Creating one...`);
+      whatsappManager.createSession(userId); // Trigger session creation if it doesn't exist
+      return res.json({ success: true, status: "connecting", qr: null });
     }
 
     console.log(`[WhatsApp QR] Returning QR for user: ${userId}, status: ${session.status}, hasQR: ${!!session.qr}`);
@@ -48,7 +166,7 @@ router.get("/qr", (req: AuthRequest, res) => {
     res.json({
       success: true,
       qr: session.qr || null,
-      status: session.status
+      status: session.status,
     });
   } catch (error) {
     console.error(`[WhatsApp QR] Error for user ${userId}:`, error);
@@ -59,6 +177,10 @@ router.get("/qr", (req: AuthRequest, res) => {
 router.get("/status", (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
 
   try {
     const session = whatsappManager.getSession(userId);
@@ -72,7 +194,7 @@ router.get("/status", (req: AuthRequest, res) => {
     res.json({
       success: true,
       status,
-      connected: status === "connected"
+      connected: status === "connected",
     });
   } catch (error) {
     console.error(`[WhatsApp Status] Error for user ${userId}:`, error);
@@ -192,7 +314,6 @@ router.post("/pause", async (req: AuthRequest, res) => {
   }
 });
 
-// Group Management
 router.get("/groups", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -328,10 +449,10 @@ router.post("/groups/:jid/rules", async (req: AuthRequest, res) => {
 
 // Catch-all for unmatched WhatsApp routes to help debug 404s
 router.use((req, res) => {
-  console.warn(`[WhatsApp Route Not Found] ${req.method} ${req.originalUrl}`);
+  console.warn(`[WhatsApp Router] Route not handled: ${req.method} ${req.url} (Original: ${req.originalUrl})`);
   res.status(404).json({ 
     success: false, 
-    error: `Rota não encontrada: ${req.method} ${req.originalUrl}` 
+    error: `Rota não encontrada no WhatsApp Router: ${req.method} ${req.url}` 
   });
 });
 

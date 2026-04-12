@@ -1,5 +1,4 @@
-import dotenv from "dotenv";
-dotenv.config();
+import "./backend/loadEnv.ts";
 import { runAI, encrypt, decrypt } from "./backend/agentManager.ts";
 
 async function testAgent() {

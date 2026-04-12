@@ -1,10 +1,8 @@
+import "./backend/loadEnv.ts";
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
-import dotenv from "dotenv";
-
-dotenv.config();
 import whatsappRoutes from "./backend/routes/whatsapp.ts";
 import aiRoutes from "./backend/routes/ai.ts";
 import adminRoutes from "./backend/routes/admin.ts";
@@ -221,6 +219,19 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- Scheduled Status (Stories) table
+      CREATE TABLE IF NOT EXISTS scheduled_status (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        media_url TEXT NOT NULL,
+        media_type TEXT NOT NULL, -- 'image' or 'video'
+        caption TEXT,
+        scheduled_at TIMESTAMPTZ NOT NULL,
+        status TEXT DEFAULT 'pending', -- 'pending', 'sent', 'failed'
+        error TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
       -- Add missing columns to automations if they don't exist
       DO $$ 
       BEGIN 
@@ -242,6 +253,11 @@ async function initDatabase() {
           ALTER TABLE scheduled_messages ADD COLUMN media_filename TEXT;
         END IF;
 
+        -- Add target_type to scheduled_messages
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scheduled_messages' AND column_name='target_type') THEN
+          ALTER TABLE scheduled_messages ADD COLUMN target_type TEXT DEFAULT 'contact';
+        END IF;
+
         -- Add missing columns to messages if they don't exist
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='media_url') THEN
           ALTER TABLE messages ADD COLUMN media_url TEXT;
@@ -255,10 +271,45 @@ async function initDatabase() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='media_filename') THEN
           ALTER TABLE messages ADD COLUMN media_filename TEXT;
         END IF;
+
+        -- Add missing columns to contacts if they don't exist
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='tags') THEN
+          ALTER TABLE contacts ADD COLUMN tags TEXT[] DEFAULT '{}';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='last_message_at') THEN
+          ALTER TABLE contacts ADD COLUMN last_message_at TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='last_message_text') THEN
+          ALTER TABLE contacts ADD COLUMN last_message_text TEXT;
+        END IF;
       END $$;
 
       -- Refresh PostgREST schema cache
       NOTIFY pgrst, 'reload schema';
+      
+      -- Extra schema reload for PostgREST
+      SELECT pg_notify('pgrst', 'reload schema');
+
+      -- Enable RLS and add policies
+      ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;
+      DROP POLICY IF EXISTS "Users can view their own contacts" ON contacts;
+      CREATE POLICY "Users can view their own contacts" ON contacts FOR ALL USING (auth.uid() = user_id);
+
+      ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+      DROP POLICY IF EXISTS "Users can view their own messages" ON messages;
+      CREATE POLICY "Users can view their own messages" ON messages FOR ALL USING (auth.uid() = user_id);
+
+      ALTER TABLE automations ENABLE ROW LEVEL SECURITY;
+      DROP POLICY IF EXISTS "Users can view their own automations" ON automations;
+      CREATE POLICY "Users can view their own automations" ON automations FOR ALL USING (auth.uid() = user_id);
+
+      ALTER TABLE smart_menus ENABLE ROW LEVEL SECURITY;
+      DROP POLICY IF EXISTS "Users can view their own menus" ON smart_menus;
+      CREATE POLICY "Users can view their own menus" ON smart_menus FOR ALL USING (auth.uid() = user_id);
+
+      ALTER TABLE scheduled_status ENABLE ROW LEVEL SECURITY;
+      DROP POLICY IF EXISTS "Users can view their own scheduled status" ON scheduled_status;
+      CREATE POLICY "Users can view their own scheduled status" ON scheduled_status FOR ALL USING (auth.uid() = user_id);
     `;
 
     // Try to check if tables exist
@@ -266,15 +317,25 @@ async function initDatabase() {
     const { error: agentsCheckError } = await supabaseAdmin.from('agents').select('id').limit(1);
     const { error: leadsCheckError } = await supabaseAdmin.from('leads').select('id').limit(1);
     const { error: remindersCheckError } = await supabaseAdmin.from('reminders').select('id').limit(1);
+    const { error: statusCheckError } = await supabaseAdmin.from('scheduled_status').select('id').limit(1);
     const { error: automationsColumnError } = await supabaseAdmin.from('automations').select('media_filename').limit(1);
     
-    const plansMissing = checkError && (checkError.code === 'PGRST116' || checkError.message.includes('does not exist'));
-    const agentsMissing = agentsCheckError && (agentsCheckError.code === 'PGRST116' || agentsCheckError.message.includes('does not exist'));
-    const leadsMissing = leadsCheckError && (leadsCheckError.code === 'PGRST116' || leadsCheckError.message.includes('does not exist'));
-    const remindersMissing = remindersCheckError && (remindersCheckError.code === 'PGRST116' || remindersCheckError.message.includes('does not exist'));
-    const columnsMissing = automationsColumnError && (automationsColumnError.code === 'PGRST204' || automationsColumnError.message.includes('column "media_filename" does not exist'));
+    const isMissing = (err: any) => err && (
+      err.code === 'PGRST116' || 
+      err.code === 'PGRST204' || 
+      err.code === 'PGRST205' || 
+      err.message?.includes('does not exist') || 
+      err.message?.includes('schema cache')
+    );
 
-    if (plansMissing || agentsMissing || leadsMissing || remindersMissing || columnsMissing) {
+    const plansMissing = isMissing(checkError);
+    const agentsMissing = isMissing(agentsCheckError);
+    const leadsMissing = isMissing(leadsCheckError);
+    const remindersMissing = isMissing(remindersCheckError);
+    const statusMissing = isMissing(statusCheckError);
+    const columnsMissing = isMissing(automationsColumnError);
+
+    if (plansMissing || agentsMissing || leadsMissing || remindersMissing || statusMissing || columnsMissing) {
       console.log(`[Database] Missing required tables or columns. Attempting to create/update...`);
       const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
       

@@ -113,25 +113,25 @@ export default function Layout({ children }: LayoutProps) {
       items: [
         { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
         { name: "Mensagens", path: "/messages", icon: MessageCircle },
-        { name: "Agendamentos", path: "/schedule", icon: CalendarIcon },
+        { name: "Agendamentos", path: "/schedule", icon: CalendarIcon, premiumOnly: true },
       ]
     },
     {
       title: "Audiência",
       items: [
-        { name: "Leads", path: "/leads", icon: UserPlus },
+        { name: "Leads", path: "/leads", icon: UserPlus, premiumOnly: true },
         { name: "Contatos", path: "/contacts", icon: Users },
-        { name: "Grupos", path: "/groups", icon: Users2 },
+        { name: "Grupos", path: "/groups", icon: Users2, premiumOnly: true },
       ]
     },
     {
       title: "Automação & IA",
       items: [
-        { name: "Agente IA", path: "/agent", icon: Bot },
+        { name: "Agente IA", path: "/agent", icon: Bot, premiumOnly: true },
         { name: "Automações", path: "/automations", icon: Zap },
-        { name: "Menu Inteligente", path: "/menu-builder", icon: Hash },
+        { name: "Menu Inteligente", path: "/menu-builder", icon: Hash, premiumOnly: true },
         { name: "Respostas Rápidas", path: "/quick-replies", icon: MessageSquareText },
-        { name: "Modelos", path: "/models", icon: FileText },
+        { name: "Modelos", path: "/models", icon: FileText, premiumOnly: true },
       ]
     },
     {
@@ -143,13 +143,24 @@ export default function Layout({ children }: LayoutProps) {
     }
   ];
 
+  // Filter sections based on plan
+  const visibleSections = sections.map(section => ({
+    ...section,
+    items: section.items.filter(item => {
+      if ((item as any).premiumOnly && userPlan === "Free") {
+        return false;
+      }
+      return true;
+    })
+  })).filter(section => section.items.length > 0);
+
   // Add conditional items to the System section
   if (isAdmin) {
-    sections.find(s => s.title === "Sistema")?.items.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
+    visibleSections.find(s => s.title === "Sistema")?.items.push({ name: "Gerenciar Packs", path: "/admin/packs", icon: Package });
   }
 
   if (userPlan === "Free") {
-    sections.find(s => s.title === "Sistema")?.items.push({ name: "Upgrade", path: "/activate", icon: CreditCard });
+    visibleSections.find(s => s.title === "Sistema")?.items.push({ name: "Upgrade", path: "/activate", icon: CreditCard });
   }
 
   if (loading) {
@@ -160,7 +171,7 @@ export default function Layout({ children }: LayoutProps) {
     );
   }
 
-  const allNavItems = sections.flatMap(s => s.items);
+  const allNavItems = visibleSections.flatMap(s => s.items);
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden relative font-sans text-slate-900 transition-colors duration-300">
@@ -204,7 +215,7 @@ export default function Layout({ children }: LayoutProps) {
         </div>
 
         <nav className="flex-1 px-6 py-4 space-y-8 overflow-y-auto custom-scrollbar">
-          {sections.map((section) => (
+          {visibleSections.map((section) => (
             <div key={section.title} className="space-y-2">
               <div className="px-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">{section.title}</div>
               <div className="space-y-1">

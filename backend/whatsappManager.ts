@@ -1,7 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
-  Browsers,
   Contact as BaileysContact,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
@@ -16,10 +15,10 @@ import path from "path";
 import os from "os";
 import { convertToOpus } from "./utils/audioConverter.ts";
 
-const logger = pino({ level: "warn" });
+const logger = pino({ level: "silent" });
 
 export class WhatsAppManager {
-  private sessions: Map<string, { socket: any; status: string; qr?: string }> = new Map();
+  private sessions: Map<string, { socket: any; status: string; qr?: string; createdAt?: number }> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
   private restartRequiredAttempts: Map<string, number> = new Map();
   private maxReconnectAttempts = 5;
@@ -58,7 +57,7 @@ export class WhatsAppManager {
         }
         
         // If it's stuck in connecting/qr for more than 2 minutes, force a new one
-        const sessionAge = Date.now() - (existingSession as any).createdAt;
+        const sessionAge = Date.now() - ((existingSession as any).createdAt || 0);
         if (sessionAge > 120000) {
           console.log(`[WhatsApp] Forcing new session for ${userId} (stuck for ${Math.round(sessionAge/1000)}s)`);
           try { existingSession.socket.end(undefined); } catch (e) {}
@@ -100,12 +99,12 @@ export class WhatsAppManager {
       const socket = makeWASocket({
         version,
         printQRInTerminal: false,
-        browser: ["Whatscrm", "Chrome", "20.0.04"],
+        browser: ["Ubuntu", "Chrome", "120.0.6099.129"],
         auth: state,
         logger,
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
-        markOnlineOnConnect: false,
+        markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 15000,
@@ -113,13 +112,12 @@ export class WhatsAppManager {
         shouldSyncHistoryMessage: () => false,
       });
 
-      this.sessions.set(userId, { 
-        socket, 
+      this.sessions.set(userId, {
+        socket,
         status: "connecting",
-        createdAt: Date.now() 
+        createdAt: Date.now(),
       } as any);
 
-      // Watchdog for stuck connecting state
       const watchdog = setTimeout(async () => {
         const session = this.sessions.get(userId);
         if (session && session.status === "connecting") {
@@ -141,14 +139,14 @@ export class WhatsAppManager {
         const session = this.sessions.get(userId);
         if (!session) return;
 
-        console.log(`[WhatsApp] Connection update for ${userId}: ${connection || "no-connection-change"}, hasQR: ${!!qr}`);
+        console.log(`[WhatsApp] Connection update for ${userId}: ${connection || "no-connection-change"}, status=${session.status}, hasQR: ${!!qr}`);
 
         if (qr) {
           clearTimeout(watchdog);
           session.qr = qr;
           session.status = "qr";
           onUpdate?.("qr", qr);
-          await this.log(userId, "info", "QR Code gerado. Aguardando leitura...");
+          await this.log(userId, "info", "Novo QR Code gerado.");
         }
 
         if (connection === "open") {
@@ -157,6 +155,7 @@ export class WhatsAppManager {
           session.qr = undefined;
           this.reconnectAttempts.delete(userId);
           this.restartRequiredAttempts.delete(userId);
+          console.log(`[WhatsApp] Session ${userId} is now OPEN`);
           await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           onUpdate?.("connected");
         }
@@ -213,10 +212,46 @@ export class WhatsAppManager {
       });
 
       // Sync Logic
+      socket.ev.on("messaging-history.set", async ({ contacts, chats, messages, isLatest }) => {
+        console.log(`[WhatsApp] messaging-history.set for ${userId}: contacts=${contacts?.length}, chats=${chats?.length}, messages=${messages?.length}`);
+        
+        if (contacts) {
+          for (const contact of contacts) {
+            if (contact.id && !contact.id.includes("@g.us")) {
+              await this.syncContact(userId, contact);
+            }
+          }
+        }
+
+        if (chats) {
+          for (const chat of chats) {
+            if (chat.id && !chat.id.includes("@g.us")) {
+              // Create contact if not exists for the chat
+              await this.getOrCreateContact(userId, chat.id, chat.name || undefined);
+            }
+          }
+        }
+
+        if (messages) {
+          for (const msg of messages) {
+            await this.syncMessage(userId, msg);
+          }
+        }
+      });
+
       socket.ev.on("contacts.upsert", async (contacts) => {
+        console.log(`[WhatsApp] contacts.upsert for ${userId}: count=${contacts.length}`);
         for (const contact of contacts) {
-          if (contact.id && !contact.id.includes("@g.us") && (contact.name || contact.notify)) {
+          if (contact.id && !contact.id.includes("@g.us")) {
             await this.syncContact(userId, contact);
+          }
+        }
+      });
+
+      socket.ev.on("contacts.update", async (updates) => {
+        for (const update of updates) {
+          if (update.id && !update.id.includes("@g.us")) {
+            await this.syncContact(userId, update as BaileysContact);
           }
         }
       });
@@ -243,6 +278,11 @@ export class WhatsAppManager {
             const jid = msg.key.remoteJid!;
             const isMe = msg.key.fromMe;
             
+            // Ignora status de outras pessoas para não poluir o log nem ativar a automação/IA
+            if (jid === "status@broadcast" && !isMe) {
+              continue;
+            }
+
             console.log(`[WhatsApp] Message from ${jid} (isMe: ${isMe}): "${text}"`);
 
             await this.syncMessage(userId, msg);
@@ -261,9 +301,10 @@ export class WhatsAppManager {
       });
 
       return socket;
-    } catch (err) {
-      console.error(`Error creating session for ${userId}:`, err);
-      throw err;
+    } catch (err: any) {
+      console.error(`[WhatsApp] Failed to create session for ${userId}:`, err);
+      await this.log(userId, "error", `Erro ao iniciar sessão: ${err.message}`);
+      onUpdate?.("disconnected");
     }
   }
 
@@ -365,16 +406,18 @@ export class WhatsAppManager {
       if (!jid || jid.includes("@g.us")) return;
 
       const phone = jid.split("@")[0];
-      const name = contact.notify || contact.name || phone;
+      const name = contact.notify || contact.name || contact.verifiedName || phone;
+      console.log(`[WhatsApp] Syncing contact for user ${userId}: ${phone} (${name})`);
 
       const { data: existingContact } = await supabaseAdmin
         .from("contacts")
-        .select("id, tags")
+        .select("id, tags, name")
         .eq("user_id", userId)
         .eq("phone", phone)
         .maybeSingle();
 
       if (!existingContact) {
+        console.log(`[WhatsApp] Creating new contact for user ${userId}: ${phone}`);
         await supabaseAdmin.from("contacts").insert({
           user_id: userId,
           name,
@@ -386,10 +429,17 @@ export class WhatsAppManager {
         const currentTags = Array.isArray(existingContact.tags) ? existingContact.tags : [];
         const updatedTags = Array.from(new Set([...currentTags, "WhatsApp"]));
         
+        // Update name only if it's better than what we have (not just the phone number)
+        const shouldUpdateName = name && name !== phone && (!existingContact.name || existingContact.name === phone);
+        
+        if (shouldUpdateName) {
+          console.log(`[WhatsApp] Updating name for user ${userId}, contact ${phone}: ${name}`);
+        }
+
         await supabaseAdmin
           .from("contacts")
           .update({ 
-            name: name !== phone ? name : undefined,
+            name: shouldUpdateName ? name : existingContact.name,
             tags: updatedTags
           })
           .eq("id", existingContact.id);
@@ -472,11 +522,40 @@ export class WhatsAppManager {
       throw new Error("WhatsApp session not connected.");
     }
 
+    const isStatus = jid === "status@broadcast";
+    let result;
+    const options: any = {};
+
+    if (isStatus) {
+      options.backgroundColor = "#333333";
+      options.font = 1;
+      
+      // Fetch contacts to define who can see the status
+      const { data: contacts } = await supabaseAdmin
+        .from("contacts")
+        .select("phone")
+        .eq("user_id", userId)
+        .not("phone", "is", null);
+        
+      const jidList = (contacts || []).map((c: any) => `${c.phone}@s.whatsapp.net`);
+      const myJid = session.socket.user?.id ? session.socket.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+      if (myJid && !jidList.includes(myJid)) {
+          jidList.push(myJid); // É importante enviar para o seu próprio número para aparecer no aparelho
+      }
+      options.statusJidList = jidList;
+    }
+
     if (mediaUrl && mediaType) {
       if (mediaType === 'image') {
-        return await session.socket.sendMessage(jid, { image: { url: mediaUrl }, caption: text });
+        result = await session.socket.sendMessage(jid, { 
+          image: { url: mediaUrl }, 
+          caption: text,
+        }, options);
       } else if (mediaType === 'video') {
-        return await session.socket.sendMessage(jid, { video: { url: mediaUrl }, caption: text });
+        result = await session.socket.sendMessage(jid, { 
+          video: { url: mediaUrl }, 
+          caption: text,
+        }, options);
       } else if (mediaType === 'audio') {
         let audioPath = mediaUrl;
         let tempInputPath = "";
@@ -515,24 +594,40 @@ export class WhatsAppManager {
           }
         }
 
-        const result = await session.socket.sendMessage(jid, { 
+        result = await session.socket.sendMessage(jid, { 
           audio: audioPath.startsWith("http") ? { url: audioPath } : fs.readFileSync(audioPath), 
           mimetype: 'audio/ogg; codecs=opus', 
           ptt: true, 
           seconds: duration 
-        });
+        }, options);
 
         // Cleanup temp files
         if (tempInputPath && fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
         if (tempOutputPath && fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
-
-        return result;
       } else if (mediaType === 'document') {
-        return await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: mimetype || 'application/pdf', fileName: fileName || 'documento', caption: text });
+        result = await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: mimetype || 'application/pdf', fileName: fileName || 'documento', caption: text }, options);
       }
+    } else {
+      result = await session.socket.sendMessage(jid, { text }, options);
     }
 
-    return await session.socket.sendMessage(jid, { text });
+    // Sync the sent message back to DB if it's not a status
+    if (result && !isStatus) {
+      await this.syncMessage(userId, {
+        key: {
+          remoteJid: jid,
+          fromMe: true,
+          id: result.key.id
+        },
+        message: {
+          conversation: text
+        },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        pushName: session.socket.user?.name || "Me"
+      });
+    }
+
+    return result;
   }
 
   async sendPresenceUpdate(userId: string, jid: string, presence: "composing" | "recording" | "paused") {
@@ -607,12 +702,15 @@ export class WhatsAppManager {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
 
-    const { name, description, items } = menu;
-    let text = `*${name}*\n\n${description}\n\n`;
+    const { name, description, message, options, items } = menu;
+    const menuText = message || description || "Escolha uma opção:";
+    const menuOptions = options || items || [];
     
-    if (items && Array.isArray(items)) {
-      items.forEach((item: any, index: number) => {
-        text += `${index + 1}. ${item.label}\n`;
+    let text = `*${name}*\n\n${menuText}\n\n`;
+
+    if (Array.isArray(menuOptions)) {
+      menuOptions.forEach((item: any, index: number) => {
+        text += `${item.key || (index + 1)}. ${item.label}\n`;
       });
     }
 

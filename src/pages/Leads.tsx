@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
 import { 
   UserPlus, 
@@ -13,13 +14,16 @@ import {
   User
 } from "lucide-react";
 import { supabase, getUserId } from "../supabase";
-import { Card } from "../components/ui/Card";
+import { Card, CardContent } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
 import { cn } from "../lib/utils";
+import { useActivation } from "../lib/useActivation";
 
 export default function Leads() {
+  const navigate = useNavigate();
+  const { isActivated, plan, loading: activationLoading } = useActivation();
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -48,6 +52,33 @@ export default function Leads() {
     lead.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     lead.intent?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  if (activationLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent"></div>
+      </div>
+    );
+  }
+
+  if (!isActivated || plan === "Free") {
+    return (
+      <div className="max-w-4xl mx-auto space-y-8">
+        <Card className="bg-amber-50 border-amber-200">
+          <CardContent className="py-12 text-center space-y-4">
+            <UserPlus size={48} className="mx-auto text-amber-400" />
+            <h3 className="text-xl font-bold text-amber-900">Recurso Indisponível</h3>
+            <p className="text-amber-700 max-w-md mx-auto">
+              A captura de Leads não está disponível no plano gratuito. Faça um upgrade para utilizar este recurso.
+            </p>
+            <Button onClick={() => navigate("/activate")} className="bg-amber-600 hover:bg-amber-700">
+              Fazer Upgrade
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-10 space-y-8 max-w-7xl mx-auto">

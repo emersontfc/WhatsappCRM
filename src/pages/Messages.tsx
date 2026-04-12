@@ -114,11 +114,13 @@ export default function Messages() {
         }
 
         // Initial contacts fetch
-        const { data: initialContacts } = await supabase
+        const { data: initialContacts, error: contactsError } = await supabase
           .from("contacts")
           .select("*")
           .eq("user_id", uId)
           .order("last_message_at", { ascending: false, nullsFirst: false });
+        
+        if (contactsError) throw contactsError;
         
         if (isMounted && initialContacts) {
           setContacts(initialContacts);
@@ -132,6 +134,17 @@ export default function Messages() {
               setShowChatOnMobile(true);
             }
           }
+        }
+
+        // Fetch contacts from WhatsApp to sync names and chats
+        try {
+          const chatsResponse = await apiFetch("/api/whatsapp/chats");
+          if (isMounted && chatsResponse.success && chatsResponse.chats) {
+            // Update local state if different
+            setContacts(chatsResponse.chats);
+          }
+        } catch (err) {
+          console.error("Failed to sync chats from WhatsApp:", err);
         }
 
         // Real-time contacts subscription
@@ -234,6 +247,23 @@ export default function Messages() {
     }
   };
 
+  const syncChats = async () => {
+    setLoading(true);
+    try {
+      const response = await apiFetch("/api/whatsapp/sync", { method: "POST" });
+      if (response.success && response.chats) {
+        setContacts(response.chats);
+        toast.success("Chats sincronizados!");
+      } else {
+        toast.error(response.error || "Falha ao sincronizar chats");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erro na sincronização");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSelectContact = (contact: Contact) => {
     setSelectedContact(contact);
     setShowChatOnMobile(true);
@@ -302,6 +332,12 @@ export default function Messages() {
     }
   };
 
+  const filteredContacts = contacts.filter(
+    (c) =>
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
+      c.phone.includes(search)
+  );
+
   return (
     <div className="flex h-[calc(100vh-10rem)] lg:h-[calc(100vh-12rem)] gap-0 lg:gap-6 relative">
       {/* Contact List */}
@@ -313,48 +349,76 @@ export default function Messages() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <Input 
-              placeholder="Buscar chat..." 
+              placeholder="Buscar conversa..." 
               className="pl-9 h-9 text-xs" 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={refreshContacts}>
-            <Zap size={16} className="text-emerald-600" />
+          <Button 
+            variant="outline" 
+            size="icon" 
+            className="h-9 w-9 shrink-0" 
+            onClick={syncChats}
+            disabled={loading}
+            title="Sincronizar"
+          >
+            <Zap size={16} className={cn("text-emerald-600", loading && "animate-pulse text-amber-500")} />
           </Button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {contacts
-            .filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search))
-            .map((contact) => (
-            <button
-              key={contact.id}
-              onClick={() => handleSelectContact(contact)}
-              className={cn(
-                "w-full p-3 flex items-center gap-3 hover:bg-slate-50 transition-all text-left rounded-xl border border-transparent",
-                selectedContact?.id === contact.id ? "bg-emerald-50/80 border-emerald-100 shadow-sm" : "hover:border-slate-100"
-              )}
-            >
-              <div className={cn("h-11 w-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 shadow-sm", getColorClass(contact.name))}>
-                {getInitials(contact.name)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-start">
-                  <p className={cn("font-semibold text-sm truncate", selectedContact?.id === contact.id ? "text-emerald-900" : "text-slate-900")}>
-                    {contact.name}
-                  </p>
-                  {contact.last_message_at && (
-                    <span className="text-[10px] text-slate-400">
-                      {new Date(contact.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  )}
+        <div className="flex-1 overflow-y-auto min-h-0 space-y-1 p-2">
+          {filteredContacts.length > 0 ? (
+            filteredContacts.map((contact) => (
+              <button
+                key={contact.id}
+                onClick={() => handleSelectContact(contact)}
+                className={cn(
+                  "w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 group text-left",
+                  selectedContact?.id === contact.id
+                    ? "bg-emerald-50 text-emerald-900 ring-1 ring-emerald-200 shadow-sm"
+                    : "hover:bg-slate-50 text-slate-600 hover:text-slate-900"
+                )}
+              >
+                <div className={cn(
+                  "h-12 w-12 rounded-full flex items-center justify-center font-semibold text-lg shrink-0",
+                  selectedContact?.id === contact.id ? "bg-emerald-200" : getColorClass(contact.name || contact.phone)
+                )}>
+                  {getInitials(contact.name || contact.phone)}
                 </div>
-                <p className="text-xs text-slate-500 truncate font-medium mt-0.5">
-                  {contact.last_message_text || contact.phone}
-                </p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-start mb-0.5">
+                    <span className="font-semibold truncate pr-2">
+                      {contact.name || contact.phone}
+                    </span>
+                    {contact.last_message_at && (
+                      <span className="text-[10px] text-slate-400 shrink-0 font-medium">
+                        {new Date(contact.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 truncate line-clamp-1">
+                    {contact.last_message_text || "Inicie uma conversa..."}
+                  </p>
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full py-12 px-4 text-center">
+              <div className="h-16 w-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                <MessageSquare className="h-8 w-8 text-slate-300" />
               </div>
-            </button>
-          ))}
+              <p className="text-slate-900 font-semibold mb-1">Nenhuma conversa encontrada</p>
+              <p className="text-slate-500 text-sm max-w-[200px] mb-6">
+                {search ? `Nenhum resultado para "${search}"` : "Suas conversas do WhatsApp aparecerão aqui assim que você se conectar."}
+              </p>
+              {!search && (
+                <Button onClick={syncChats} variant="outline" size="sm" className="gap-2">
+                  <Zap size={14} />
+                  Sincronizar Chats
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </Card>
 

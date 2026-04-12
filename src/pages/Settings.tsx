@@ -326,6 +326,26 @@ export default function Settings() {
     }
   };
 
+  const handleResetStats = async () => {
+    if (!confirm("ATENÇÃO: Tem certeza que deseja zerar suas estatísticas? Isso apagará permanentemente seu histórico de mensagens, leads e atividades. Esta ação não pode ser desfeita.")) return;
+    setLoading(true);
+    try {
+      const userId = await getUserId();
+      if (!userId) return;
+      await Promise.all([
+        supabase.from("messages").delete().eq("user_id", userId),
+        supabase.from("leads").delete().eq("user_id", userId),
+        supabase.from("agent_logs").delete().eq("user_id", userId),
+        supabase.from("logs").delete().eq("user_id", userId)
+      ]);
+      toast.success("Estatísticas e histórico zerados com sucesso!");
+    } catch (err: any) {
+      toast.error("Erro ao zerar estatísticas.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       {pageLoading ? (
@@ -461,6 +481,24 @@ export default function Settings() {
                         Fazer Upgrade de Plano
                       </Button>
                     )}
+                
+                <div className="pt-6 border-t border-slate-100">
+                  <div className="space-y-1 mb-4">
+                    <p className="text-xs font-bold uppercase text-red-500 flex items-center gap-1">
+                      <Trash2 size={14} /> Zona de Perigo
+                    </p>
+                    <p className="text-[10px] text-slate-500">Zerar todas as estatísticas e histórico do dashboard.</p>
+                  </div>
+                  <Button 
+                    type="button"
+                    variant="outline" 
+                    className="w-full border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                    onClick={handleResetStats}
+                    disabled={loading}
+                  >
+                    {loading ? "Zerando..." : "Zerar Estatísticas"}
+                  </Button>
+                </div>
                   </CardContent>
                 </Card>
               </div>
@@ -560,7 +598,7 @@ export default function Settings() {
             </CardContent>
           </Card>
         </>
-      ) : (
+      ) : activeTab === "users" ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Usuários Cadastrados</CardTitle>
@@ -658,7 +696,7 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
-      )}
+      ) : null}
 
       {activeTab === "plans" && isAdmin && (
         <Card>

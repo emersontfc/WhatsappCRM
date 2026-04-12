@@ -65,7 +65,20 @@ export default function Login() {
       navigate("/dashboard");
     } catch (err: any) {
       console.error("Auth error:", err);
-      setError(err.message || "Falha na autenticação. Tente novamente.");
+      const raw = String(err?.message || err || "");
+      const lower = raw.toLowerCase();
+      if (
+        lower.includes("failed to fetch") ||
+        lower.includes("networkerror") ||
+        lower.includes("network request failed") ||
+        lower.includes("load failed")
+      ) {
+        setError(
+          "Não foi possível ligar ao servidor (rede). Confirme a internet; no PC local use NODE_ENV=development, reinicie com npm run dev e verifique VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY no .env."
+        );
+      } else {
+        setError(raw || "Falha na autenticação. Tente novamente.");
+      }
     } finally {
       setLoading(false);
     }

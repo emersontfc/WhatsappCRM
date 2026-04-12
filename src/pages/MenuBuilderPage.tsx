@@ -175,12 +175,16 @@ export default function MenuBuilderPage() {
         <CardContent className="prose prose-slate prose-sm max-w-none">
           <p>
             Este sistema substitui os botões nativos do WhatsApp (que costumam falhar em muitos aparelhos) por uma interface baseada em números.
+            Crie menus interativos modernos e profissionais utilizando os recursos nativos do WhatsApp.
           </p>
           <ul className="list-disc pl-5 space-y-2">
             <li><strong>Mensagem Principal:</strong> O texto que inicia a conversa.</li>
             <li><strong>Opções:</strong> Cada opção recebe um número automático (1️⃣, 2️⃣, 3️⃣...).</li>
             <li><strong>Resposta:</strong> O que o cliente recebe ao digitar o número correspondente.</li>
             <li><strong>Compatibilidade:</strong> Funciona 100% em WhatsApp Web, Android, iOS e até aparelhos antigos.</li>
+            <li><strong>Botões (até 3 opções):</strong> O cliente verá botões rápidos diretamente na conversa.</li>
+            <li><strong>Listas (+4 opções):</strong> O menu se transforma numa lista suspensa nativa do WhatsApp.</li>
+            <li><strong>Resposta:</strong> O que o cliente recebe ao clicar na opção.</li>
           </ul>
         </CardContent>
       </Card>
