@@ -1,11 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle, Eye, EyeOff, Rocket, ArrowLeft, Sparkles } from "lucide-react";
+import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle, Eye, EyeOff, Rocket, ArrowLeft, Sparkles, CheckCircle2 } from "lucide-react";
 import { supabase } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { apiFetch } from "../lib/api";
 import { motion, AnimatePresence } from "motion/react";
+import { toast } from "sonner";
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
@@ -49,6 +50,8 @@ export default function Login() {
         });
 
         if (signInError) throw signInError;
+
+        toast.success("Conta criada com sucesso! Bem-vindo ao Agentex 🚀");
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
@@ -61,7 +64,11 @@ export default function Login() {
           }
           throw signInError;
         }
+
+        toast.success("Login realizado com sucesso!");
       }
+
+      // Redirect to dashboard - onboarding check happens in Dashboard or App router
       navigate("/dashboard");
     } catch (err: any) {
       console.error("Auth error:", err);
@@ -74,7 +81,7 @@ export default function Login() {
         lower.includes("load failed")
       ) {
         setError(
-          "Não foi possível ligar ao servidor (rede). Confirme a internet; no PC local use NODE_ENV=development, reinicie com npm run dev e verifique VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY no .env."
+          "Não foi possível ligar ao servidor (rede). Confirme a internet; no PC local use NODE_ENV=development, reinicie com npm run dev e verifique VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY"
         );
       } else {
         setError(raw || "Falha na autenticação. Tente novamente.");
@@ -126,6 +133,22 @@ export default function Login() {
               <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Ultra Rápido</p>
             </div>
           </div>
+
+          {/* Benefits List */}
+          <div className="space-y-3 pt-8 border-t border-slate-200">
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+              <span className="text-sm text-slate-600 font-medium">Acesso imediato ao Plano Free</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+              <span className="text-sm text-slate-600 font-medium">Sem cartão de crédito necessário</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+              <span className="text-sm text-slate-600 font-medium">Upgrade quando estiver pronto</span>
+            </div>
+          </div>
         </motion.div>
 
         {/* Decorative elements */}
@@ -157,7 +180,7 @@ export default function Login() {
               </h1>
               <p className="text-sm sm:text-base text-slate-500 font-medium">
                 {isRegistering 
-                  ? "Comece sua jornada de automação agora." 
+                  ? "Comece sua jornada de automação agora. Plano Free incluso!" 
                   : "Acesse sua conta para gerenciar seu negócio."}
               </p>
             </div>
@@ -189,7 +212,7 @@ export default function Login() {
                       <input
                         type="text"
                         required
-                        className="w-full bg-white border border-slate-200 rounded-2xl px-12 py-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium"
+                        className="w-full bg-white border border-slate-200 rounded-2xl px-12 py-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                         placeholder="Seu Nome"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
@@ -205,7 +228,7 @@ export default function Login() {
                     <input
                       type="email"
                       required
-                      className="w-full bg-white border border-slate-200 rounded-2xl px-12 py-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium"
+                      className="w-full bg-white border border-slate-200 rounded-2xl px-12 py-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                       placeholder="seu@email.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -225,7 +248,7 @@ export default function Login() {
                     <input
                       type={showPassword ? "text" : "password"}
                       required
-                      className="w-full bg-white border border-slate-200 rounded-2xl px-12 py-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium pr-12"
+                      className="w-full bg-white border border-slate-200 rounded-2xl px-12 py-4 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                       placeholder="••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
