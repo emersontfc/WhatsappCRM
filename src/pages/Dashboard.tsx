@@ -97,16 +97,20 @@ export default function Dashboard() {
         }
 
         // Check if agent exists, if not redirect to onboarding
-        const { data: agentData } = await supabase
-          .from("agents")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
-        
-        if (!agentData) {
-          navigate("/onboarding");
-        } else {
-          setAgent(agentData);
+        // Check if agent exists
+const { data: agentData } = await supabase
+  .from("agents")
+  .select("*")
+  .eq("user_id", user.id)
+  .maybeSingle();
+
+// ❗ NÃO REDIRECIONA MAIS
+if (agentData) {
+  setAgent(agentData);
+} else {
+  // apenas deixa null — evita loop
+  setAgent(null);
+}
         }
       }
     };
