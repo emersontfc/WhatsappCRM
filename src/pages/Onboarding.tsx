@@ -10,7 +10,9 @@ import {
   RefreshCw,
   CheckCircle2,
   ArrowRight,
-  Bot
+  Bot,
+  AlertCircle,
+  ChevronLeft
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -22,6 +24,7 @@ export default function Onboarding() {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState({
     businessType: "",
     goal: ""
@@ -51,18 +54,32 @@ export default function Onboarding() {
   ];
 
   const handleSelect = (field: string, value: string) => {
+    setError(null);
     setData(prev => ({ ...prev, [field]: value }));
-    if (step < 3) setStep(step + 1);
+    // Only move to next step if we haven't reached the final step yet
+    if (step < steps.length) {
+      setStep(step + 1);
+    } else {
+      // Move to review/activation step
+      setStep(3);
+    }
   };
 
   const activateBot = async () => {
+    if (!data.businessType || !data.goal) {
+      setError("Por favor, complete todas as etapas antes de ativar o bot");
+      toast.error("Configuração incompleta");
+      return;
+    }
+
     setLoading(true);
+    setError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Usuário não encontrado");
 
       // 1. Enable AI Agent
-      await apiFetch("/api/agent/config", {
+      const agentResponse = await apiFetch("/api/agent/config", {
         method: "POST",
         body: JSON.stringify({
           is_active: true,
@@ -72,34 +89,58 @@ export default function Onboarding() {
         })
       });
 
-      // 2. Create a default automation if none exists
-      const { count } = await supabase
-        .from("automations")
-        .select("id", { count: "exact" })
-        .eq("user_id", user.id);
-
-      if (count === 0) {
-        await supabase.from("automations").insert({
-          user_id: user.id,
-          name: "Boas-vindas",
-          trigger: "keyword",
-          keyword: "ola, oi, bom dia, boa tarde, boa noite",
-          response: "Olá! Seja bem-vindo. Como posso te ajudar hoje?",
-          active: true
-        });
+      if (!agentResponse.ok) {
+        throw new Error("Erro ao ativar o agente IA");
       }
 
-      toast.success("Smart Bot ativado com sucesso!");
-      navigate("/dashboard");
+      // 2. Create a default automation if none exists
+      try {
+        const { count, error: countError } = await supabase
+          .from("automations")
+          .select("id", { count: "exact" })
+          .eq("user_id", user.id);
+
+        if (countError) {
+          console.warn("Warning checking automations:", countError);
+        }
+
+        if (!count || count === 0) {
+          const { error: insertError } = await supabase.from("automations").insert({
+            user_id: user.id,
+            name: "Boas-vindas",
+            trigger: "keyword",
+            keyword: "ola, oi, bom dia, boa tarde, boa noite",
+            response: "Olá! Seja bem-vindo. Como posso te ajudar hoje?",
+            active: true
+          });
+
+          if (insertError) {
+            console.warn("Warning creating default automation:", insertError);
+            // Don't fail the entire process if automation creation fails
+          }
+        }
+      } catch (err) {
+        console.warn("Error managing automations:", err);
+        // Don't fail the entire onboarding if automations check fails
+      }
+
+      toast.success("Smart Bot ativado com sucesso! 🚀");
+      
+      // Redirect to dashboard after a short delay
+      setTimeout(() => {
+        navigate("/dashboard");
+      }, 1000);
     } catch (err: any) {
       console.error("Onboarding error:", err);
-      toast.error("Erro ao ativar o bot: " + err.message);
+      const errorMessage = err.message || "Erro ao ativar o bot";
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  const currentStep = steps[step - 1];
+  const currentStep = step <= steps.length ? steps[step - 1] : null;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-6">
@@ -116,8 +157,20 @@ export default function Onboarding() {
           ))}
         </div>
 
+        {/* Error Alert */}
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700"
+          >
+            <AlertCircle size={20} className="flex-shrink-0" />
+            <p className="text-sm font-medium">{error}</p>
+          </motion.div>
+        )}
+
         <AnimatePresence mode="wait">
-          {step <= 2 ? (
+          {step <= 2 && currentStep ? (
             <motion.div
               key={step}
               initial={{ opacity: 0, x: 20 }}
@@ -151,8 +204,18 @@ export default function Onboarding() {
                   </button>
                 ))}
               </div>
+
+              {step > 1 && (
+                <button 
+                  onClick={() => setStep(step - 1)}
+                  className="flex items-center justify-center gap-2 text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest w-full py-2"
+                >
+                  <ChevronLeft size={16} />
+                  Voltar
+                </button>
+              )}
             </motion.div>
-          ) : (
+          ) : step === 3 ? (
             <motion.div
               key="final"
               initial={{ opacity: 0, scale: 0.9 }}
@@ -193,19 +256,28 @@ export default function Onboarding() {
               <Button 
                 onClick={activateBot}
                 disabled={loading}
-                className="w-full h-14 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 transition-all"
+                className="w-full h-14 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? <RefreshCw className="animate-spin mr-2" /> : "ATIVAR SMART BOT"}
+                {loading ? (
+                  <>
+                    <RefreshCw className="animate-spin mr-2" size={20} />
+                    Ativando...
+                  </>
+                ) : (
+                  "ATIVAR SMART BOT"
+                )}
               </Button>
 
-              <button 
-                onClick={() => setStep(1)}
-                className="text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest"
-              >
-                Recomeçar configuração
-              </button>
+              {!loading && (
+                <button 
+                  onClick={() => setStep(1)}
+                  className="text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+                >
+                  Editar configuração
+                </button>
+              )}
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
       </div>
     </div>
