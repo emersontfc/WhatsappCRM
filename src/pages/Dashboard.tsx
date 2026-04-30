@@ -86,36 +86,66 @@ export default function Dashboard() {
   const [userName, setUserName] = useState("Usuário");
   const [showTemplateModal, setShowTemplateModal] = useState(false);
 
-  useEffect(() => {
-    const fetchUserData = async () => {
+  // 🔥 APENAS ESTA PARTE FOI ALTERADA — resto mantém igual
+
+useEffect(() => {
+  const fetchUserData = async () => {
+    try {
       const user = await getUser();
-      if (user) {
-        setUserId(user.id);
-        setUserName(user.user_metadata?.full_name || user.email?.split("@")[0] || "Usuário");
-        if (user.template_applied === false) {
-          setShowTemplateModal(true);
-        }
 
-        // Check if agent exists, if not redirect to onboarding
-        // Check if agent exists
-const { data: agentData } = await supabase
-  .from("agents")
-  .select("*")
-  .eq("user_id", user.id)
-  .maybeSingle();
+      if (!user) return;
 
-// ❗ NÃO REDIRECIONA MAIS
-if (agentData) {
-  setAgent(agentData);
-} else {
-  // apenas deixa null — evita loop
-  setAgent(null);
-}
-        }
+      setUserId(user.id);
+      setUserName(
+        user.user_metadata?.full_name ||
+        user.email?.split("@")[0] ||
+        "Usuário"
+      );
+
+      if (user.template_applied === false) {
+        setShowTemplateModal(true);
       }
-    };
-    fetchUserData();
-  }, []);
+
+      // ✅ BUSCAR AGENT
+      const { data: agentData, error } = await supabase
+        .from("agents")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Erro ao buscar agent:", error);
+      }
+
+      // 🔥 SE NÃO EXISTIR → CRIA AUTOMATICAMENTE
+      if (!agentData) {
+        console.log("Agent não encontrado, criando automaticamente...");
+
+        const { data: newAgent, error: insertError } = await supabase
+          .from("agents")
+          .insert({
+            user_id: user.id,
+            is_active: false
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error("Erro ao criar agent:", insertError);
+        } else {
+          setAgent(newAgent);
+        }
+      } else {
+        setAgent(agentData);
+      }
+
+    } catch (err) {
+      console.error("Erro no fetchUserData:", err);
+    }
+  };
+
+  fetchUserData();
+}, []);
 
   useEffect(() => {
     if (!userId) return;
