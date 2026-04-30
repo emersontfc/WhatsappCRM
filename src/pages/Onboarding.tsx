@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { apiFetch } from "../lib/api";
-import { toast } from "soner";
 import { supabase } from "../supabase";
 
 export default function Onboarding() {
