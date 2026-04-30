@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -12,12 +12,12 @@ import {
   ArrowRight,
   Bot,
   AlertCircle,
-  ChevronLeft
+  ChevronLeft,
+  X
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
-import { Card } from "../components/ui/Card";
 import { apiFetch } from "../lib/api";
-import { toast } from "sonner";
+import { toast } from "soner";
 import { supabase } from "../supabase";
 
 export default function Onboarding() {
@@ -25,6 +25,7 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(true);
   const [data, setData] = useState({
     businessType: "",
     goal: ""
@@ -53,15 +54,74 @@ export default function Onboarding() {
     }
   ];
 
+  // Check if user should see onboarding (only if they have a premium subscription)
+  useEffect(() => {
+    const checkUserPlan = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          navigate("/login");
+          return;
+        }
+
+        // Check if user has a subscription (plan)
+        const { data: subscription, error: subError } = await supabase
+          .from("subscriptions")
+          .select("plan, status")
+          .eq("user_id", user.id)
+          .single();
+
+        if (subError && subError.code !== 'PGRST116') {
+          console.error("Error checking subscription:", subError);
+        }
+
+        // If no subscription or plan is 'Free', redirect to dashboard
+        if (!subscription || subscription.plan === "Free") {
+          navigate("/dashboard");
+          return;
+        }
+
+        // Check if user already completed onboarding
+        const { data: userProfile } = await supabase
+          .from("users")
+          .select("id")
+          .eq("id", user.id)
+          .single();
+
+        if (userProfile) {
+          setChecking(false);
+        }
+      } catch (err) {
+        console.error("Error in checkUserPlan:", err);
+        setChecking(false);
+      }
+    };
+
+    checkUserPlan();
+  }, [navigate]);
+
   const handleSelect = (field: string, value: string) => {
     setError(null);
     setData(prev => ({ ...prev, [field]: value }));
-    // Only move to next step if we haven't reached the final step yet
     if (step < steps.length) {
       setStep(step + 1);
     } else {
-      // Move to review/activation step
       setStep(3);
+    }
+  };
+
+  const skipOnboarding = async () => {
+    setLoading(true);
+    try {
+      toast.success("Configuração pulada! Bem-vindo ao Agentex 🚀");
+      setTimeout(() => {
+        navigate("/dashboard");
+      }, 800);
+    } catch (err: any) {
+      console.error("Error skipping onboarding:", err);
+      toast.error("Erro ao pular configuração");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -116,17 +176,14 @@ export default function Onboarding() {
 
           if (insertError) {
             console.warn("Warning creating default automation:", insertError);
-            // Don't fail the entire process if automation creation fails
           }
         }
       } catch (err) {
         console.warn("Error managing automations:", err);
-        // Don't fail the entire onboarding if automations check fails
       }
 
       toast.success("Smart Bot ativado com sucesso! 🚀");
       
-      // Redirect to dashboard after a short delay
       setTimeout(() => {
         navigate("/dashboard");
       }, 1000);
@@ -140,21 +197,41 @@ export default function Onboarding() {
     }
   };
 
+  if (checking) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent"></div>
+      </div>
+    );
+  }
+
   const currentStep = step <= steps.length ? steps[step - 1] : null;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-6">
       <div className="max-w-md w-full space-y-8">
-        {/* Progress Bar */}
-        <div className="flex justify-center gap-2 mb-8">
-          {[1, 2, 3].map((s) => (
-            <div 
-              key={s} 
-              className={`h-1.5 w-12 rounded-full transition-all duration-500 ${
-                s <= step ? "bg-emerald-500" : "bg-slate-200"
-              }`}
-            />
-          ))}
+        {/* Header with Skip Button */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex justify-center gap-2 flex-1">
+            {[1, 2, 3].map((s) => (
+              <div 
+                key={s} 
+                className={`h-1.5 w-12 rounded-full transition-all duration-500 ${
+                  s <= step ? "bg-emerald-500" : "bg-slate-200"
+                }`}
+              />
+            ))}
+          </div>
+          
+          {/* Skip Button - Always visible */}
+          <button
+            onClick={skipOnboarding}
+            disabled={loading}
+            className="ml-4 p-2 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Pular configuração"
+          >
+            <X size={20} className="text-slate-400 hover:text-slate-600" />
+          </button>
         </div>
 
         {/* Error Alert */}
@@ -253,29 +330,31 @@ export default function Onboarding() {
                 </div>
               </div>
 
-              <Button 
-                onClick={activateBot}
-                disabled={loading}
-                className="w-full h-14 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <>
-                    <RefreshCw className="animate-spin mr-2" size={20} />
-                    Ativando...
-                  </>
-                ) : (
-                  "ATIVAR SMART BOT"
-                )}
-              </Button>
-
-              {!loading && (
-                <button 
-                  onClick={() => setStep(1)}
-                  className="text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest"
+              <div className="space-y-3">
+                <Button 
+                  onClick={activateBot}
+                  disabled={loading}
+                  className="w-full h-14 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Editar configuração
-                </button>
-              )}
+                  {loading ? (
+                    <>
+                      <RefreshCw className="animate-spin mr-2" size={20} />
+                      Ativando...
+                    </>
+                  ) : (
+                    "ATIVAR SMART BOT"
+                  )}
+                </Button>
+
+                {!loading && (
+                  <button 
+                    onClick={() => setStep(1)}
+                    className="text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-widest w-full"
+                  >
+                    Editar configuração
+                  </button>
+                )}
+              </div>
             </motion.div>
           ) : null}
         </AnimatePresence>
