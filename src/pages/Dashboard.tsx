@@ -350,10 +350,10 @@ useEffect(() => {
         } else if (Date.now() - qrSince.current > 120000) { // 120 seconds timeout for QR
           console.log("[WhatsApp] QR timeout reached, resetting...");
           qrSince.current = null;
-          await resetSession();
+          await resetSession(false);
           setStatus("disconnected");
           setQr(null);
-          toast.error("O código expirou. Tente novamente.");
+          if (manual) toast.error("O código expirou. Tente novamente.");
           return;
         }
 
@@ -376,10 +376,10 @@ useEffect(() => {
         } else if (Date.now() - connectingSince.current > 60000) { // 60 seconds timeout for connecting
           console.log("[WhatsApp] Connecting timeout reached, resetting...");
           connectingSince.current = null;
-          await resetSession();
+          await resetSession(false);
           setStatus("disconnected");
           setQr(null);
-          toast.error("A conexão demorou muito. Tente novamente.");
+          if (manual) toast.error("A conexão demorou muito. Tente novamente.");
           return;
         }
         // Just wait if it's still connecting
@@ -440,10 +440,12 @@ useEffect(() => {
     }
   };
 
-  const resetSession = async () => {
+  const resetSession = async (notify = true) => {
     if (!userId) return;
-    setLoading(true);
-    setError(null);
+    if (notify) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       await apiFetch(`/api/whatsapp/reset`, {
         method: "POST",
@@ -451,13 +453,13 @@ useEffect(() => {
       setStatus("disconnected");
       setQr(null);
       setMe(null);
-      toast.success("Sessão resetada com sucesso!");
+      if (notify) toast.success("Sessão resetada com sucesso!");
     } catch (err: any) {
       console.error("Failed to reset:", err);
-      setError(err.message);
-      toast.error("Erro ao resetar sessão.");
+      if (notify) setError(err.message);
+      if (notify) toast.error("Erro ao resetar sessão.");
     } finally {
-      setLoading(false);
+      if (notify) setLoading(false);
     }
   };
 
