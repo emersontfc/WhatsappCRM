@@ -1,7 +1,16 @@
 import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
+import ffprobeStatic from "@ffprobe-installer/ffprobe";
 import path from "path";
 import fs from "fs";
 import os from "os";
+
+if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+}
+if (ffprobeStatic && ffprobeStatic.path) {
+  ffmpeg.setFfprobePath(ffprobeStatic.path);
+}
 
 /**
  * Converts any audio file to OGG/Opus format for WhatsApp PTT
@@ -9,7 +18,7 @@ import os from "os";
  * @returns Path to the converted OGG file
  */
 export async function convertToOpus(inputPath: string): Promise<string> {
-  const outputPath = path.join(os.tmpdir(), `audio_${Date.now()}.ogg`);
+  const outputPath = path.join(os.tmpdir(), `audio_${Date.now()}_${Math.round(Math.random() * 1e6)}.ogg`);
   
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -41,3 +50,4 @@ export async function prepareAudioForWhatsApp(inputPath: string): Promise<string
     return inputPath;
   }
 }
+

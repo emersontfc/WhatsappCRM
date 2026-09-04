@@ -3,7 +3,17 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
+import ffprobeStatic from "@ffprobe-installer/ffprobe";
 import { authenticate } from "../middleware/auth.ts";
+
+// Configure ffmpeg & ffprobe binary paths
+if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+}
+if (ffprobeStatic && ffprobeStatic.path) {
+  ffmpeg.setFfprobePath(ffprobeStatic.path);
+}
 
 const router = express.Router();
 
@@ -18,8 +28,9 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || ".webm";
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname));
+    cb(null, `audio-${uniqueSuffix}${ext}`);
   },
 });
 
@@ -41,47 +52,72 @@ router.post("/upload-audio", authenticate, (req, res) => {
       }
 
       const inputPath = req.file.path;
-      const outputFilename = `audio-${Date.now()}.ogg`;
+      const outputFilename = `voice-${Date.now()}-${Math.round(Math.random() * 1e6)}.ogg`;
       const outputPath = path.join(uploadsDir, outputFilename);
 
-      console.log(`[Media] Converting ${inputPath} to ${outputPath}`);
+      const protocol = req.headers["x-forwarded-proto"] || req.protocol;
+      const host = req.headers["x-forwarded-host"] || req.get("host");
 
-      // Get duration first
-      ffmpeg.ffprobe(inputPath, (err, metadata) => {
-        const duration = metadata?.format?.duration || 0;
+      // Probe duration safely
+      let duration = 0;
+      try {
+        await new Promise<void>((resolve) => {
+          ffmpeg.ffprobe(inputPath, (err, metadata) => {
+            if (!err && metadata?.format?.duration) {
+              duration = Math.round(metadata.format.duration);
+            }
+            resolve();
+          });
+        });
+      } catch (probeErr) {
+        console.warn("[Media] ffprobe warning:", probeErr);
+      }
+
+      // Convert to WhatsApp OGG Opus format
+      try {
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg(inputPath)
+            .audioCodec("libopus")
+            .audioChannels(1)
+            .audioFrequency(16000)
+            .toFormat("ogg")
+            .on("error", (convErr) => {
+              reject(convErr);
+            })
+            .on("end", () => {
+              resolve();
+            })
+            .save(outputPath);
+        });
+
+        // Clean up input file if different from output
+        if (fs.existsSync(inputPath) && inputPath !== outputPath) {
+          try { fs.unlinkSync(inputPath); } catch (_) {}
+        }
+
+        const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
+        console.log(`[Media] Converted audio successfully: ${audioUrl}, duration: ${duration}s`);
+
+        return res.json({
+          success: true,
+          url: audioUrl,
+          filename: outputFilename,
+          duration: duration || 1,
+        });
+      } catch (convErr: any) {
+        console.warn("[Media] FFmpeg conversion failed, falling back to original upload:", convErr.message);
         
-        // Convert
-        ffmpeg(inputPath)
-          .audioCodec("libopus")
-          .audioChannels(1)
-          .audioFrequency(16000)
-          .toFormat("ogg")
-          .on("error", (err) => {
-            console.error("[Media] ffmpeg error:", err.message);
-            res.status(500).json({ 
-              success: false, 
-              error: "Erro na conversão do áudio.",
-              details: err.message
-            });
-            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-          })
-          .on("end", () => {
-            console.log("[Media] Conversion finished");
-            if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+        // Fallback: serve original uploaded audio file directly
+        const fallbackFilename = path.basename(inputPath);
+        const fallbackUrl = `${protocol}://${host}/uploads/${fallbackFilename}`;
 
-            const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-            const host = req.headers["x-forwarded-host"] || req.get("host");
-            const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
-
-            res.json({ 
-              success: true, 
-              url: audioUrl,
-              filename: outputFilename,
-              duration: Math.floor(duration)
-            });
-          })
-          .save(outputPath);
-      });
+        return res.json({
+          success: true,
+          url: fallbackUrl,
+          filename: fallbackFilename,
+          duration: duration || 1,
+        });
+      }
 
     } catch (err: any) {
       console.error("[Media] General error:", err);

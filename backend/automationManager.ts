@@ -177,8 +177,9 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
               await whatsappManager.sendMessage(userId, jid, "Desculpe, houve um erro ao carregar o menu.");
             }
           } else {
-            await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, automation.media_type, undefined, automation.media_mimetype, automation.media_filename);
-            await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: automation.media_type });
+            const finalMediaType = automation.media_type || (automation.response_type === "audio" ? "audio" : undefined);
+            await whatsappManager.sendMessage(userId, jid, automation.response, automation.media_url, finalMediaType, undefined, automation.media_mimetype, automation.media_filename);
+            await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: finalMediaType });
           }
           
           try {
