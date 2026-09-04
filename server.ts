@@ -12,6 +12,7 @@ import templateRoutes from "./backend/routes/templates.ts";
 import packRoutes from "./backend/routes/packs.ts";
 import mediaRoutes from "./backend/routes/media.ts";
 import menuRoutes from "./backend/routes/menus.ts";
+import appointmentRoutes from "./backend/routes/appointments.ts";
 import { startScheduler } from "./backend/scheduler.ts";
 import { authenticate } from "./backend/middleware/auth.ts";
 import fs from "fs";
@@ -232,6 +233,54 @@ async function initDatabase() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
 
+      -- Services table (Consultas / Procedimentos)
+      CREATE TABLE IF NOT EXISTS services (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT,
+        duration_minutes INTEGER DEFAULT 30,
+        price NUMERIC DEFAULT 0,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Professionals table (Médicos / Especialistas)
+      CREATE TABLE IF NOT EXISTS professionals (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        role TEXT,
+        email TEXT,
+        phone TEXT,
+        working_days TEXT[] DEFAULT ARRAY['mon','tue','wed','thu','fri'],
+        start_time TEXT DEFAULT '08:00',
+        end_time TEXT DEFAULT '17:00',
+        break_start TEXT DEFAULT '12:00',
+        break_end TEXT DEFAULT '13:00',
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Appointments table (Agendamentos e Consultas)
+      CREATE TABLE IF NOT EXISTS appointments (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+        contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
+        service_id UUID REFERENCES services(id) ON DELETE SET NULL,
+        professional_id UUID REFERENCES professionals(id) ON DELETE SET NULL,
+        customer_name TEXT NOT NULL,
+        customer_phone TEXT,
+        appointment_date DATE NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        status TEXT DEFAULT 'scheduled', -- 'scheduled', 'confirmed', 'completed', 'cancelled'
+        notes TEXT,
+        reminder_24h_sent BOOLEAN DEFAULT FALSE,
+        reminder_2h_sent BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
       -- Add missing columns to automations if they don't exist
       DO $$ 
       BEGIN 
@@ -393,6 +442,9 @@ async function initDatabase() {
     const { error: remindersCheckError } = await supabaseAdmin.from('reminders').select('id').limit(1);
     const { error: statusCheckError } = await supabaseAdmin.from('scheduled_status').select('id').limit(1);
     const { error: automationsColumnError } = await supabaseAdmin.from('automations').select('media_filename').limit(1);
+    const { error: servicesCheckError } = await supabaseAdmin.from('services').select('id').limit(1);
+    const { error: professionalsCheckError } = await supabaseAdmin.from('professionals').select('id').limit(1);
+    const { error: appointmentsCheckError } = await supabaseAdmin.from('appointments').select('id').limit(1);
     
     const isMissing = (err: any) => err && (
       err.code === 'PGRST116' || 
@@ -408,8 +460,11 @@ async function initDatabase() {
     const remindersMissing = isMissing(remindersCheckError);
     const statusMissing = isMissing(statusCheckError);
     const columnsMissing = isMissing(automationsColumnError);
+    const servicesMissing = isMissing(servicesCheckError);
+    const professionalsMissing = isMissing(professionalsCheckError);
+    const appointmentsMissing = isMissing(appointmentsCheckError);
 
-    if (plansMissing || agentsMissing || leadsMissing || remindersMissing || statusMissing || columnsMissing) {
+    if (plansMissing || agentsMissing || leadsMissing || remindersMissing || statusMissing || columnsMissing || servicesMissing || professionalsMissing || appointmentsMissing) {
       console.log(`[Database] Missing required tables or columns. Attempting to create/update...`);
       const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
       
@@ -538,6 +593,7 @@ async function startServer() {
   app.use("/api/packs", authenticate, packRoutes);
   app.use("/api/media", authenticate, mediaRoutes);
   app.use("/api/menus", authenticate, menuRoutes);
+  app.use("/api/appointments", appointmentRoutes);
 
   // Serve uploads directory
   const uploadsDir = path.join(process.cwd(), "uploads");

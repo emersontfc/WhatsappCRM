@@ -113,12 +113,101 @@ export function startScheduler() {
         }
       }
 
-      if (!pendingMessages || pendingMessages.length === 0) {
-        // Only log if we found status or reminders but no messages
-        if ((pendingStatus && pendingStatus.length > 0) || (pendingReminders && pendingReminders.length > 0)) {
-          // already logged above
+      // 4. Process Automated Appointment Reminders (24h & 2h before)
+      try {
+        const todayStr = nowISO.split("T")[0];
+        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        const tomorrowStr = tomorrow.toISOString().split("T")[0];
+
+        // 4a. 24h Reminders: Appointments tomorrow that haven't received 24h reminder
+        const { data: apps24h } = await supabaseAdmin
+          .from("appointments")
+          .select(`
+            id, user_id, customer_name, customer_phone, appointment_date, start_time,
+            services (name),
+            professionals (name)
+          `)
+          .eq("appointment_date", tomorrowStr)
+          .eq("reminder_24h_sent", false)
+          .in("status", ["scheduled", "confirmed"])
+          .limit(10);
+
+        if (apps24h && apps24h.length > 0) {
+          console.log(`[Scheduler] Processing ${apps24h.length} 24h appointment reminders.`);
+          for (const app of apps24h) {
+            try {
+              if (app.customer_phone) {
+                let clean = app.customer_phone.replace(/\D/g, "");
+                if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
+                  clean = `258${clean}`;
+                }
+                const jid = `${clean}@s.whatsapp.net`;
+                const serviceName = (app.services as any)?.name || "Consulta/Serviço";
+                const profName = (app.professionals as any)?.name ? ` com ${(app.professionals as any).name}` : "";
+
+                const reminderMsg = `🔔 *LEMBRETE DE CONSULTA AMANHÃ*\n\nOlá *${app.customer_name}*!\nLembramos do seu agendamento de *${serviceName}*${profName} amanhã às *${app.start_time}*.\n\nPor favor, responda com:\n1️⃣ para *CONFIRMAR*\n2️⃣ para *REAGENDAR*`;
+
+                await whatsappManager.sendMessage(app.user_id, jid, reminderMsg);
+                console.log(`[Scheduler] 24h appointment reminder sent to ${jid}`);
+              }
+              await supabaseAdmin.from("appointments").update({ reminder_24h_sent: true }).eq("id", app.id);
+            } catch (err: any) {
+              console.error(`[Scheduler] Failed to send 24h reminder for app ${app.id}:`, err.message);
+            }
+          }
         }
-        return;
+
+        // 4b. 2h Reminders: Appointments today starting within 2 hours
+        const currentHours = now.getHours();
+        const currentMinutes = now.getMinutes();
+        const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+        const { data: appsToday } = await supabaseAdmin
+          .from("appointments")
+          .select(`
+            id, user_id, customer_name, customer_phone, appointment_date, start_time,
+            services (name),
+            professionals (name)
+          `)
+          .eq("appointment_date", todayStr)
+          .eq("reminder_2h_sent", false)
+          .in("status", ["scheduled", "confirmed"])
+          .limit(15);
+
+        if (appsToday && appsToday.length > 0) {
+          for (const app of appsToday) {
+            try {
+              const [ah, am] = (app.start_time || "00:00").split(":").map(Number);
+              const appTotalMinutes = ah * 60 + am;
+              const diffMinutes = appTotalMinutes - currentTotalMinutes;
+
+              // If appointment is between 30 and 150 minutes away (approx 2h before)
+              if (diffMinutes >= 0 && diffMinutes <= 150) {
+                if (app.customer_phone) {
+                  let clean = app.customer_phone.replace(/\D/g, "");
+                  if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
+                    clean = `258${clean}`;
+                  }
+                  const jid = `${clean}@s.whatsapp.net`;
+                  const serviceName = (app.services as any)?.name || "Consulta/Serviço";
+                  const profName = (app.professionals as any)?.name ? ` com ${(app.professionals as any).name}` : "";
+
+                  const reminderMsg = `⏰ *LEMBRETE: SUA CONSULTA É HOJE!*\n\nOlá *${app.customer_name}*!\nSua consulta de *${serviceName}*${profName} está agendada para hoje às *${app.start_time}*.\n\nEstamos preparando tudo para o seu atendimento. Até breve!`;
+
+                  await whatsappManager.sendMessage(app.user_id, jid, reminderMsg);
+                  console.log(`[Scheduler] 2h appointment reminder sent to ${jid}`);
+                }
+                await supabaseAdmin.from("appointments").update({ reminder_2h_sent: true }).eq("id", app.id);
+              }
+            } catch (err: any) {
+              console.error(`[Scheduler] Failed to send 2h reminder for app ${app.id}:`, err.message);
+            }
+          }
+        }
+      } catch (appReminderErr: any) {
+        if (!isSchemaError(appReminderErr)) {
+          console.error("[Scheduler] Error in appointment reminders:", appReminderErr.message);
+        }
       }
 
       console.log(`[Scheduler] Found ${pendingMessages.length} pending messages.`);

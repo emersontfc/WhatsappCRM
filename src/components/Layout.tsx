@@ -23,7 +23,8 @@ import {
   FileText,
   Users2,
   Hash,
-  UserPlus
+  UserPlus,
+  CalendarCheck
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -126,7 +127,8 @@ export default function Layout({ children }: LayoutProps) {
       items: [
         { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
         { name: "Mensagens", path: "/messages", icon: MessageCircle },
-        { name: "Agendamentos", path: "/schedule", icon: CalendarIcon, premiumOnly: true },
+        { name: "Agenda & Consultas", path: "/appointments", icon: CalendarCheck },
+        { name: "Disparos Programados", path: "/schedule", icon: Clock, premiumOnly: true },
       ]
     },
     {

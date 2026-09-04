@@ -21,6 +21,8 @@ import Groups from "./pages/Groups";
 import MenuBuilderPage from "./pages/MenuBuilderPage";
 import Leads from "./pages/Leads";
 import ActivityLog from "./pages/ActivityLog";
+import Appointments from "./pages/Appointments";
+import PublicBooking from "./pages/PublicBooking";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -69,6 +71,7 @@ export default function App() {
         {/* Públicas */}
         <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <Landing />} />
         <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/book/:userId" element={<PublicBooking />} />
 
         {/* 🔥 Onboarding REMOVIDO - redirect permanente */}
         <Route path="/onboarding" element={<Navigate to="/dashboard" replace />} />
@@ -77,6 +80,10 @@ export default function App() {
         <Route
           path="/dashboard"
           element={user ? <Layout><Dashboard key={user?.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/appointments"
+          element={user ? <Layout><Appointments key={user?.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/activate"
