@@ -28,14 +28,21 @@ export default function ActivityLog() {
       if (!userId) return;
 
       const { data, error } = await supabase
-        .from("system_logs")
+        .from("logs")
         .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(100);
 
       if (error) console.error("Error fetching logs:", error);
-      else setLogs(data || []);
+      else {
+        const normalized = (data || []).map((l: any) => ({
+          ...l,
+          level: l.type || l.level || 'info',
+          details: l.metadata || l.details || {}
+        }));
+        setLogs(normalized);
+      }
       setLoading(false);
     };
 

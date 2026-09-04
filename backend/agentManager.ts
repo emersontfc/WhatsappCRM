@@ -2,6 +2,7 @@ import { supabaseAdmin } from "./supabaseAdmin.ts";
 import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
 import { executeAction } from "./actionEngine.ts";
+import { executeToolByName, getToolsPromptDescription, UserRole, ToolResult } from "./tools/index.ts";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "your-fallback-encryption-key-32-chars-long";
 const IV_LENGTH = 16;
@@ -46,7 +47,7 @@ export function normalizeResponse(data: any): string {
   return JSON.stringify(data);
 }
 
-async function fetchWithTimeout(url: string, options: RequestInit, timeout = 10000): Promise<Response> {
+async function fetchWithTimeout(url: string, options: RequestInit, timeout = 30000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
@@ -269,9 +270,24 @@ export async function runCustom(agent: any, prompt: string, systemInstruction?: 
   return normalizeResponse(data);
 }
 
-export async function runAI(agent: any, message: string, context: string[]): Promise<string> {
-  const jsonInstruction = "\n\nIMPORTANTE: Responda SEMPRE em formato JSON com os campos: 'reply' (sua resposta ao usuário), 'intent' (intenção detectada), 'action' (ação a ser executada, se houver) e 'data' (dados para a ação). Se não houver ação, deixe 'action' vazio. Exemplo: {\"reply\": \"Olá!\", \"intent\": \"saudação\", \"action\": \"\", \"data\": {}}";
-  const systemInstruction = (agent.instructions || "Você é um assistente útil.") + jsonInstruction;
+export async function runAI(agent: any, message: string, context: string[], role: UserRole = "lead"): Promise<string> {
+  let roleHeader = "";
+  let baseInstruction = "";
+
+  if (role === "admin") {
+    roleHeader = `ATENÇÃO: VOCÊ ESTÁ CONVERSANDO COM O SEU ADMINISTRADOR / CHEFE / DONO DO SISTEMA.
+O SEU PAPEL É DE OPERADOR EXECUTIVO DO NEGÓCIO E CRM.
+NÃO TENTE VENDER NADA PARA ELE! Ele é o proprietário / gestor da empresa.
+Você tem total poder e acesso às ferramentas do sistema para executar o que ele pedir (consultar métricas do funil, verificar conversas pendentes, agendar mensagens, agendar postagens no status, criar regras de automação, pausar ou retomar IA, cadastrar leads, etc.).
+Seja ágil, prestativo e direto.`;
+    baseInstruction = "Seja extremamente eficiente e execute os comandos solicitados através das ferramentas apropriadas.";
+  } else {
+    roleHeader = "VOCÊ É O AGENTEX ATENDENTE, assistente virtual de atendimento ao cliente. Ajude o cliente com cordialidade, tire dúvidas e qualifique o interesse do lead.";
+    baseInstruction = agent.instructions || "Você é um assistente útil e inteligente.";
+  }
+
+  const toolsInstruction = getToolsPromptDescription(role);
+  const systemInstruction = `${roleHeader}\n\n${baseInstruction}\n\n${toolsInstruction}`;
   const contextStr = context.slice(-5).join("\n");
   const prompt = contextStr ? `CONTEXT:\n${contextStr}\n\nUSER:\n${message}` : message;
   
@@ -303,7 +319,7 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
     if (agent.provider !== "gemini") {
       console.log(`[AI Engine] Falling back to Gemini...`);
       try {
-        return await runGemini(agent, prompt, systemInstruction);
+        return await runGemini({ ...agent, model: "gemini-2.5-flash" }, prompt, systemInstruction);
       } catch (fallbackErr: any) {
         console.error(`[AI Engine] Fallback to Gemini failed:`, fallbackErr.message);
       }
@@ -316,29 +332,122 @@ export async function runAI(agent: any, message: string, context: string[]): Pro
 // In-memory context cache
 const contextCache: Map<string, string[]> = new Map();
 
-function safeParseJSON(text: string) {
-  if (!text) return null;
+export function robustParseAgentJSON(raw: string): { reply: string; tool: string | null; args: any; action?: string; intent?: string; data?: any } | null {
+  if (!raw) return null;
+  let text = raw.trim();
+  
+  // 1. Strip markdown code fence
+  text = text.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  // 2. Direct JSON.parse attempt
   try {
-    // 1. Try direct parse
-    return JSON.parse(text);
-  } catch (e) {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj === "object") {
+      return {
+        reply: typeof obj.reply === "string" ? obj.reply : (obj.message || ""),
+        tool: obj.tool || null,
+        args: obj.args || {},
+        action: obj.action,
+        intent: obj.intent,
+        data: obj.data
+      };
+    }
+  } catch (e) {}
+
+  // 3. Extract JSON object substring between first '{' and last '}'
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    const candidate = text.substring(start, end + 1);
     try {
-      // 2. Try to find JSON block if it's wrapped in markdown or other text
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+      const obj = JSON.parse(candidate);
+      if (obj && typeof obj === "object") {
+        return {
+          reply: typeof obj.reply === "string" ? obj.reply : (obj.message || ""),
+          tool: obj.tool || null,
+          args: obj.args || {},
+          action: obj.action,
+          intent: obj.intent,
+          data: obj.data
+        };
       }
     } catch (e2) {
-      return null;
+      // 4. Try sanitizing unescaped newlines inside strings
+      try {
+        const sanitized = candidate.replace(/(:\s*"[\s\S]*?")/g, (match) => {
+          return match.replace(/\r?\n/g, "\\n");
+        });
+        const obj = JSON.parse(sanitized);
+        if (obj && typeof obj === "object") {
+          return {
+            reply: typeof obj.reply === "string" ? obj.reply : (obj.message || ""),
+            tool: obj.tool || null,
+            args: obj.args || {},
+            action: obj.action,
+            intent: obj.intent,
+            data: obj.data
+          };
+        }
+      } catch (e3) {}
     }
   }
+
+  // 5. Regex extraction fallback if JSON syntax is damaged
+  try {
+    const toolMatch = text.match(/"tool"\s*:\s*("([^"]+)"|null)/i);
+    const replyMatch = text.match(/"reply"\s*:\s*"([\s\S]*?)(?=",\s*"(tool|args)"|"\s*\})/i);
+    let tool = toolMatch && toolMatch[2] ? toolMatch[2] : null;
+    let reply = replyMatch ? replyMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"') : "";
+    let args: any = {};
+    const argsMatch = text.match(/"args"\s*:\s*(\{[\s\S]*?\})/i);
+    if (argsMatch) {
+      try { args = JSON.parse(argsMatch[1]); } catch (e4) {}
+    }
+    if (tool || reply) {
+      return { reply, tool, args };
+    }
+  } catch (e5) {}
+
   return null;
 }
 
-export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string) {
+export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult): string {
+  if (!result.success) {
+    return `❌ *Falha ao executar ${toolName}*: ${result.message || 'Erro durante a operação.'}`;
+  }
+
+  let formatted = `✅ ${result.message || 'Operação realizada com sucesso.'}`;
+
+  if (toolName === "get_pending_conversations" && result.data?.conversas?.length > 0) {
+    const list = result.data.conversas.slice(0, 5).map((c: any, i: number) => {
+      const unreadBadge = c.mensagensNaoLidas > 0 ? ` (${c.mensagensNaoLidas} não lidas)` : "";
+      return `*${i + 1}. ${c.nome}* [${c.telefone}]${unreadBadge}\n   💬 _"${c.ultimaMensagem}"_`;
+    }).join("\n\n");
+    formatted += `\n\n📌 *Conversas Pendentes:*\n${list}`;
+  } else if (toolName === "get_pipeline_metrics" && result.data) {
+    const stages = result.data.distribuicaoEtapas || {};
+    const stageLines = Object.entries(stages)
+      .map(([st, count]) => `• *${st.toUpperCase()}*: ${count} lead(s)`)
+      .join("\n");
+    formatted += `\n\n📊 *Distribuição do Funil:*\n${stageLines || "Nenhum lead encontrado."}`;
+  } else if (toolName === "search_contact" && result.data?.contact) {
+    const c = result.data.contact;
+    formatted += `\n\n👤 *${c.name || 'Sem nome'}*\n📱 Telefone: ${c.phone}\n🏷️ Tags: ${(c.tags || []).join(', ') || 'Nenhuma'}\n🤖 IA: ${c.ai_paused ? 'Pausada' : 'Ativa'}`;
+  } else if (toolName === "create_lead" && result.data) {
+    formatted += `\n\n👤 *Lead Cadastrado*: ${result.data.name || ''}\n📱 *Telefone*: ${result.data.phone || ''}\n🏷️ *Etapa*: ${result.data.stage || 'novo'}`;
+  } else if (toolName === "schedule_message" && result.data) {
+    formatted += `\n\n📅 *Agendado para*: ${result.data.dataAgendada || ''}\n👤 *Destinatário*: ${result.data.contacto || ''}`;
+  } else if (toolName === "schedule_status" && result.data) {
+    formatted += `\n\n📅 *Status agendado para*: ${result.data.dataAgendada || ''}`;
+  }
+
+  return formatted;
+}
+
+export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false) {
   try {
-    console.log(`[AI Engine] Checking agents for ${userId}, text: "${text}"`);
-    const { data: agents, error } = await supabaseAdmin
+    console.log(`[AI Engine] Checking agents for ${userId}, text: "${text}" (isSelfMessage: ${isSelfMessage})`);
+    let { data: agents, error } = await supabaseAdmin
       .from("agents")
       .select("*")
       .eq("user_id", userId)
@@ -351,9 +460,22 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       return;
     }
 
+    if (!agents || agents.length === 0) {
+      const { data: anyAgents } = await supabaseAdmin
+        .from("agents")
+        .select("*")
+        .eq("user_id", userId)
+        .not("api_key", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (anyAgents && anyAgents.length > 0) {
+        agents = anyAgents;
+      }
+    }
+
     const agent = agents && agents.length > 0 ? agents[0] : null;
     if (!agent) {
-      console.log(`[AI Engine] No active agent found for user ${userId}`);
+      console.log(`[AI Engine] No active or configured agent found for user ${userId}`);
       return;
     }
     
@@ -367,14 +489,76 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       return;
     }
 
-    // Check if user is admin
+    // Check contact and clean phone
+    const phone = jid.split("@")[0];
+    const cleanSenderPhone = phone.replace(/\D/g, "");
+
+    const { data: contactData } = await supabaseAdmin
+      .from("contacts")
+      .select("id, ai_paused, name, tags")
+      .eq("user_id", userId)
+      .eq("phone", phone)
+      .maybeSingle();
+
+    // Determine if sender is the administrator, account owner or authorized manager
+    const myInfo = whatsappManager.getMe(userId);
+    const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
+    const myLid = myInfo?.lid ? myInfo.lid.split(":")[0].replace(/\D/g, "") : "";
+
     const { data: userData } = await supabaseAdmin
       .from("users")
-      .select("role")
+      .select("phone, admin_phones, role")
       .eq("id", userId)
       .maybeSingle();
-      
-    const isAdmin = userData?.role === 'admin';
+
+    // Number matching helper tolerating Mozambique 258 prefix differences
+    const matchesNumber = (a: string, b: string) => {
+      if (!a || !b) return false;
+      const cleanA = a.replace(/\D/g, "");
+      const cleanB = b.replace(/\D/g, "");
+      if (!cleanA || !cleanB) return false;
+      if (cleanA === cleanB) return true;
+      const noPrefixA = cleanA.startsWith("258") ? cleanA.slice(3) : cleanA;
+      const noPrefixB = cleanB.startsWith("258") ? cleanB.slice(3) : cleanB;
+      return noPrefixA.length >= 8 && noPrefixB.length >= 8 && noPrefixA === noPrefixB;
+    };
+
+    const rawList = [
+      myPhone,
+      myLid,
+      userData?.phone,
+      ...(userData?.admin_phones ? userData.admin_phones.split(/[\n,;]+/) : [])
+    ].filter(Boolean);
+
+    const isContactAdmin = contactData && (
+      /emerson/i.test(contactData.name || "") ||
+      (Array.isArray(contactData.tags) && contactData.tags.some((t: string) => /admin|gerente|proprietario|dono/i.test(t)))
+    );
+
+    const isOwner = isSelfMessage || 
+                    rawList.some(adminNum => matchesNumber(cleanSenderPhone, String(adminNum))) ||
+                    (Boolean(myLid) && cleanSenderPhone === myLid) ||
+                    (Boolean(myPhone) && cleanSenderPhone === myPhone) ||
+                    Boolean(isContactAdmin);
+
+    const role: UserRole = isOwner ? "admin" : "lead";
+
+    console.log(`[AI Engine] Message evaluation for ${jid}:`);
+    console.log(`  - cleanSenderPhone: ${cleanSenderPhone}, isSelf: ${isSelfMessage}`);
+    console.log(`  - contactName: "${contactData?.name || ''}"`);
+    console.log(`  - isOwner: ${isOwner}, role: ${role}`);
+
+    if (isOwner) {
+      console.log(`[AI Engine] Message from AUTHORIZED ADMIN/MANAGER (${cleanSenderPhone}). Granting operational tools.`);
+    }
+
+    // Leads are skipped if human takeover (ai_paused) is active
+    if (!isOwner && contactData?.ai_paused) {
+      console.log(`[AI Engine] AI is paused for contact ${phone} (${contactData.name || "Human assumed"}). Skipping AI.`);
+      return;
+    }
+
+    const isAdmin = isOwner || userData?.role === 'admin';
 
     // Check subscription if not admin
     let currentUsed = 0;
@@ -429,33 +613,58 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     
     await whatsappManager.sendPresenceUpdate(userId, jid, "composing");
     
-    // Random delay between 5-15s to simulate human typing
-    const delay = Math.floor(Math.random() * 10000) + 5000;
+    // Typing delay (faster for admin operator: 1.5-3s, human-like for leads: 3-6s)
+    const delay = isOwner ? Math.floor(Math.random() * 1500) + 1200 : Math.floor(Math.random() * 3000) + 2000;
     await new Promise(resolve => setTimeout(resolve, delay));
     
-    const responseText = await runAI(agent, text, context);
+    const responseText = await runAI(agent, text, context, role);
     
     await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
 
     if (responseText) {
-      const parsed = safeParseJSON(responseText);
+      const parsed = robustParseAgentJSON(responseText);
       let finalReply = responseText;
-      let actionResult = null;
+      let actionResult: any = null;
 
-      // If it's a valid JSON with a 'reply' field, extract it
+      // Handle structured tool or action execution
       if (parsed && typeof parsed === 'object') {
         finalReply = parsed.reply || "";
         
-        if (parsed.action) {
-          console.log(`[AI Engine] AI suggested action: ${parsed.action} with intent: ${parsed.intent}`);
+        // 1. Tool Registry execution (New Agentic Architecture)
+        if (parsed.tool) {
+          console.log(`[AI Engine] Executing Tool: "${parsed.tool}" for role "${role}" with args:`, JSON.stringify(parsed.args));
+          const toolResult = await executeToolByName(parsed.tool, parsed.args || {}, {
+            userId,
+            phone: cleanSenderPhone,
+            jid,
+            role,
+            whatsappManager,
+            userPhone: myPhone
+          });
+
+          if (toolResult) {
+            actionResult = toolResult;
+            const formatted = formatToolOutputForWhatsApp(parsed.tool, toolResult);
+            if (!finalReply || finalReply.trim().length === 0) {
+              finalReply = formatted;
+            } else {
+              finalReply = `${finalReply}\n\n${formatted}`;
+            }
+          }
+        } else if (parsed.action) {
+          // 2. Legacy action execution fallback
+          console.log(`[AI Engine] AI suggested legacy action: ${parsed.action} with intent: ${parsed.intent}`);
           actionResult = await executeAction({
             action: parsed.action,
             data: parsed.data || {},
             userId,
-            phone: jid.split("@")[0],
+            phone: cleanSenderPhone,
             intent: parsed.intent
           });
         }
+      } else {
+        // Plain text fallback: strip markdown json wrappers if present
+        finalReply = responseText.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
       }
 
       if (finalReply) {
@@ -479,7 +688,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         provider: agent.provider, 
         response: finalReply,
         intent: parsed?.intent,
-        action: parsed?.action,
+        action: parsed?.tool || parsed?.action,
         action_success: actionResult?.success
       });
     }

@@ -139,6 +139,35 @@ router.put("/plans/:id", async (req, res) => {
   }
 });
 
+router.post("/plans", async (req, res) => {
+  const { name, max_connections, max_contacts, max_messages_per_day, ai_enabled, automation_level, price } = req.body;
+  if (!name) {
+    return res.status(400).json({ success: false, error: "Nome do plano é obrigatório" });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("plans")
+      .insert({
+        name,
+        max_connections: Number(max_connections) || 1,
+        max_contacts: Number(max_contacts) || 500,
+        max_messages_per_day: Number(max_messages_per_day) || 150,
+        ai_enabled: Boolean(ai_enabled),
+        automation_level: automation_level || "basic",
+        price: Number(price) || 0
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err: any) {
+    console.error("Failed to create plan:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // User Management Routes
 router.get("/users", async (req, res) => {
   try {

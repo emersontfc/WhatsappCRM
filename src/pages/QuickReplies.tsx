@@ -73,7 +73,7 @@ export default function QuickReplies() {
         <Button 
           variant="outline" 
           className="gap-2"
-          onClick={() => window.location.href = '/user-models'}
+          onClick={() => navigate('/models')}
         >
           <Zap size={18} className="text-amber-500" />
           Importar Novos Packs

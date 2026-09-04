@@ -282,6 +282,58 @@ async function initDatabase() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='last_message_text') THEN
           ALTER TABLE contacts ADD COLUMN last_message_text TEXT;
         END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='ai_paused') THEN
+          ALTER TABLE contacts ADD COLUMN ai_paused BOOLEAN DEFAULT FALSE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='ai_paused_at') THEN
+          ALTER TABLE contacts ADD COLUMN ai_paused_at TIMESTAMPTZ;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='notes') THEN
+          ALTER TABLE contacts ADD COLUMN notes TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='contacts' AND column_name='unread_count') THEN
+          ALTER TABLE contacts ADD COLUMN unread_count INTEGER DEFAULT 0;
+        END IF;
+
+        -- Add CRM columns to leads
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='contact_id') THEN
+          ALTER TABLE leads ADD COLUMN contact_id UUID REFERENCES contacts(id) ON DELETE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='stage') THEN
+          ALTER TABLE leads ADD COLUMN stage TEXT DEFAULT 'novo';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='value') THEN
+          ALTER TABLE leads ADD COLUMN value NUMERIC DEFAULT 0;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='source') THEN
+          ALTER TABLE leads ADD COLUMN source TEXT DEFAULT 'whatsapp';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='assigned_to') THEN
+          ALTER TABLE leads ADD COLUMN assigned_to TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='notes') THEN
+          ALTER TABLE leads ADD COLUMN notes TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='leads' AND column_name='follow_up_date') THEN
+          ALTER TABLE leads ADD COLUMN follow_up_date TIMESTAMPTZ;
+        END IF;
+
+        -- Add is_read to messages
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='is_read') THEN
+          ALTER TABLE messages ADD COLUMN is_read BOOLEAN DEFAULT FALSE;
+        END IF;
+
+        -- Add phone and admin_phones to users
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='phone') THEN
+          ALTER TABLE users ADD COLUMN phone TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='admin_phones') THEN
+          ALTER TABLE users ADD COLUMN admin_phones TEXT DEFAULT '';
+        END IF;
+
+        -- Allow text-only scheduled status
+        ALTER TABLE scheduled_status ALTER COLUMN media_url DROP NOT NULL;
+        ALTER TABLE scheduled_status ALTER COLUMN media_type DROP NOT NULL;
       END $$;
 
       -- Refresh PostgREST schema cache
@@ -310,6 +362,28 @@ async function initDatabase() {
       ALTER TABLE scheduled_status ENABLE ROW LEVEL SECURITY;
       DROP POLICY IF EXISTS "Users can view their own scheduled status" ON scheduled_status;
       CREATE POLICY "Users can view their own scheduled status" ON scheduled_status FOR ALL USING (auth.uid() = user_id);
+
+      -- Enable Realtime publication for messages and contacts
+      DO $$
+      BEGIN
+        BEGIN
+          ALTER PUBLICATION supabase_realtime ADD TABLE messages;
+        EXCEPTION WHEN duplicate_object THEN
+        WHEN undefined_object THEN
+        END;
+
+        BEGIN
+          ALTER PUBLICATION supabase_realtime ADD TABLE contacts;
+        EXCEPTION WHEN duplicate_object THEN
+        WHEN undefined_object THEN
+        END;
+
+        BEGIN
+          ALTER TABLE messages REPLICA IDENTITY FULL;
+          ALTER TABLE contacts REPLICA IDENTITY FULL;
+        EXCEPTION WHEN OTHERS THEN
+        END;
+      END $$;
     `;
 
     // Try to check if tables exist
@@ -493,7 +567,19 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     try {
       const vite = await createViteServer({
-        server: { middlewareMode: true },
+        server: { 
+          middlewareMode: true,
+          watch: {
+            ignored: [
+              '**/whatsapp_sessions_data/**',
+              '**/uploads/**',
+              '**/scratch/**',
+              '**/*.log',
+              '**/*.json',
+              '**/.gemini/**'
+            ]
+          }
+        },
         appType: "spa",
       });
       app.use(vite.middlewares);

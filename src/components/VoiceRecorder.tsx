@@ -16,7 +16,7 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<any>(null);
   const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {

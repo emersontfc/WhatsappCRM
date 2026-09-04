@@ -2,6 +2,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   Contact as BaileysContact,
+  downloadMediaMessage,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
@@ -18,7 +19,7 @@ import { convertToOpus } from "./utils/audioConverter.ts";
 const logger = pino({ level: "silent" });
 
 export class WhatsAppManager {
-  private sessions: Map<string, { socket: any; status: string; qr?: string; createdAt?: number }> = new Map();
+  private sessions: Map<string, { socket: any; status: string; qr?: string; pairingCode?: string; createdAt?: number }> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
   private restartRequiredAttempts: Map<string, number> = new Map();
   private maxReconnectAttempts = 5;
@@ -116,6 +117,8 @@ export class WhatsAppManager {
         socket,
         status: "connecting",
         createdAt: Date.now(),
+        contactsMap: new Map(),
+        chatsMap: new Map(),
       } as any);
 
       const watchdog = setTimeout(async () => {
@@ -158,6 +161,11 @@ export class WhatsAppManager {
           console.log(`[WhatsApp] Session ${userId} is now OPEN`);
           await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           onUpdate?.("connected");
+
+          // Clean up orphan contacts from older sessions asynchronously
+          this.cleanOrphanContactsFromPreviousSessions(userId).catch(e => {
+            console.error("[WhatsApp] Post-connection cleanup error:", e);
+          });
         }
 
         if (connection === "close") {
@@ -172,8 +180,9 @@ export class WhatsAppManager {
           this.sessions.delete(userId);
           
           // Reconnect if not logged out
-          const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
-          const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515;
+          const isConflict = String(reason).toLowerCase().includes("conflict") || statusCode === 440;
+          const isLoggedOut = (statusCode === DisconnectReason.loggedOut || (statusCode === 401 && !isConflict && String(reason).toLowerCase().includes("logged out")));
+          const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515 || isConflict;
           
           if (isRestartRequired) {
             const restartAttempts = (this.restartRequiredAttempts.get(userId) || 0) + 1;
@@ -211,23 +220,36 @@ export class WhatsAppManager {
         }
       });
 
-      // Sync Logic
+      // Sync Logic - Selective Ingestion (Gravados na Agenda + Conversas Ativas Disponíveis)
       socket.ev.on("messaging-history.set", async ({ contacts, chats, messages, isLatest }) => {
         console.log(`[WhatsApp] messaging-history.set for ${userId}: contacts=${contacts?.length}, chats=${chats?.length}, messages=${messages?.length}`);
+        const session = this.sessions.get(userId);
         
-        if (contacts) {
-          for (const contact of contacts) {
-            if (contact.id && !contact.id.includes("@g.us")) {
-              await this.syncContact(userId, contact);
+        const activeChatPhones = new Set<string>();
+        if (chats) {
+          for (const chat of chats) {
+            if (chat.id && !chat.id.includes("@g.us") && !chat.id.includes("@broadcast") && !chat.id.startsWith("120363")) {
+              const cp = chat.id.split("@")[0].replace(/\D/g, "");
+              if (cp) activeChatPhones.add(cp);
+              if (session) (session as any).chatsMap?.set(chat.id, chat);
+              // Create contact if not exists for the chat (disponível)
+              await this.getOrCreateContact(userId, chat.id, chat.name || undefined);
             }
           }
         }
 
-        if (chats) {
-          for (const chat of chats) {
-            if (chat.id && !chat.id.includes("@g.us")) {
-              // Create contact if not exists for the chat
-              await this.getOrCreateContact(userId, chat.id, chat.name || undefined);
+        if (contacts) {
+          for (const contact of contacts) {
+            if (contact.id && !contact.id.includes("@g.us") && !contact.id.includes("@broadcast") && !contact.id.startsWith("120363")) {
+              if (session) (session as any).contactsMap?.set(contact.id, contact);
+              const cp = contact.id.split("@")[0].replace(/\D/g, "");
+              const isSaved = this.isSavedContact(contact);
+              const hasActiveChat = Boolean(cp && activeChatPhones.has(cp));
+
+              // ONLY sync if saved in phonebook ("gravados") OR has active conversation ("disponível")
+              if (isSaved || hasActiveChat) {
+                await this.syncContact(userId, contact, isSaved);
+              }
             }
           }
         }
@@ -241,17 +263,26 @@ export class WhatsAppManager {
 
       socket.ev.on("contacts.upsert", async (contacts) => {
         console.log(`[WhatsApp] contacts.upsert for ${userId}: count=${contacts.length}`);
+        const session = this.sessions.get(userId);
         for (const contact of contacts) {
-          if (contact.id && !contact.id.includes("@g.us")) {
-            await this.syncContact(userId, contact);
+          if (contact.id && !contact.id.includes("@g.us") && !contact.id.includes("@broadcast") && !contact.id.startsWith("120363")) {
+            if (session) (session as any).contactsMap?.set(contact.id, contact);
+            const isSaved = this.isSavedContact(contact);
+            // Only sync if saved with a real name in the phonebook
+            if (isSaved) {
+              await this.syncContact(userId, contact, true);
+            }
           }
         }
       });
 
       socket.ev.on("contacts.update", async (updates) => {
         for (const update of updates) {
-          if (update.id && !update.id.includes("@g.us")) {
-            await this.syncContact(userId, update as BaileysContact);
+          if (update.id && !update.id.includes("@g.us") && !update.id.includes("@broadcast") && !update.id.startsWith("120363")) {
+            const isSaved = this.isSavedContact(update as BaileysContact);
+            if (isSaved) {
+              await this.syncContact(userId, update as BaileysContact, true);
+            }
           }
         }
       });
@@ -287,12 +318,30 @@ export class WhatsAppManager {
 
             await this.syncMessage(userId, msg);
 
-            if (!isMe && text) {
-              console.log(`[WhatsApp] Passing message to handlers for ${userId}`);
+            // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
+            const myInfo = this.getMe(userId);
+            const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
+            const myLid = myInfo?.lid ? myInfo.lid.split(":")[0].replace(/\D/g, "") : "";
+            const senderPhone = jid.split("@")[0].replace(/\D/g, "");
+            const isSelfMessage = isMe && (
+              (Boolean(myPhone) && senderPhone === myPhone) || 
+              (Boolean(myLid) && senderPhone === myLid) ||
+              (Boolean(myInfo?.id) && jid.includes(myInfo.id.split(":")[0])) ||
+              (Boolean(myInfo?.lid) && jid.includes(myInfo.lid.split(":")[0]))
+            );
+            const isGroupOrBroadcast = jid.includes("@g.us") || 
+                                       jid.includes("@broadcast") || 
+                                       jid.includes("@newsletter") || 
+                                       jid.startsWith("120363");
+
+            if ((!isMe || isSelfMessage) && text && !isGroupOrBroadcast) {
+              console.log(`[WhatsApp] Processing message for ${userId} (from: ${jid}, text: "${text}", isSelf: ${isSelfMessage})`);
               const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
               if (!handledByAutomation) {
-                await handleAgentMessage(this, userId, jid, text);
+                await handleAgentMessage(this, userId, jid, text, isSelfMessage);
               }
+            } else if (isGroupOrBroadcast) {
+              console.log(`[WhatsApp] Skipping group/broadcast message for ${userId} (jid: ${jid})`);
             }
           } catch (err) {
             console.error("Error processing message:", err);
@@ -308,7 +357,14 @@ export class WhatsAppManager {
     }
   }
 
-  private async syncMessage(userId: string, msg: any) {
+  private async syncMessage(
+    userId: string, 
+    msg: any, 
+    explicitMediaUrl?: string, 
+    explicitMediaType?: string, 
+    explicitMimetype?: string, 
+    explicitFilename?: string
+  ) {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(userId)) return;
@@ -334,10 +390,21 @@ export class WhatsAppManager {
         else if (msg.message.stickerMessage) text = "🎨 Sticker";
       }
 
-      if (!text) return;
+      if (!text && !explicitMediaUrl) return;
+
+      const isGroupOrBroadcast = jid.includes("@g.us") || 
+                                 jid.includes("@broadcast") || 
+                                 jid.includes("@newsletter") || 
+                                 jid.startsWith("120363");
 
       const pushName = msg.pushName || "";
-      const contactId = await this.getOrCreateContact(userId, jid, pushName);
+      let contactId: string | null = null;
+      if (!isGroupOrBroadcast) {
+        const cId = await this.getOrCreateContact(userId, jid, pushName);
+        if (cId && cId !== "unknown") {
+          contactId = cId;
+        }
+      }
       
       const { data: existingMsg } = await supabaseAdmin
         .from("messages")
@@ -347,27 +414,57 @@ export class WhatsAppManager {
         .maybeSingle();
 
       if (!existingMsg) {
-        let mediaUrl = "";
-        let mediaType = "";
-        let mediaMimetype = "";
-        let mediaFilename = "";
+        let mediaUrl = explicitMediaUrl || "";
+        let mediaType = explicitMediaType || "";
+        let mediaMimetype = explicitMimetype || "";
+        let mediaFilename = explicitFilename || "";
 
-        if (msg.message.imageMessage) {
-          mediaType = "image";
-          mediaMimetype = msg.message.imageMessage.mimetype || "image/jpeg";
-          mediaFilename = "image.jpg";
-        } else if (msg.message.videoMessage) {
-          mediaType = "video";
-          mediaMimetype = msg.message.videoMessage.mimetype || "video/mp4";
-          mediaFilename = "video.mp4";
-        } else if (msg.message.audioMessage) {
-          mediaType = "audio";
-          mediaMimetype = msg.message.audioMessage.mimetype || "audio/ogg";
-          mediaFilename = "audio.ogg";
-        } else if (msg.message.documentMessage) {
-          mediaType = "document";
-          mediaMimetype = msg.message.documentMessage.mimetype || "application/pdf";
-          mediaFilename = msg.message.documentMessage.fileName || "document";
+        if (!mediaType) {
+          if (msg.message.imageMessage) {
+            mediaType = "image";
+            mediaMimetype = msg.message.imageMessage.mimetype || "image/jpeg";
+            mediaFilename = "image.jpg";
+          } else if (msg.message.videoMessage) {
+            mediaType = "video";
+            mediaMimetype = msg.message.videoMessage.mimetype || "video/mp4";
+            mediaFilename = "video.mp4";
+          } else if (msg.message.audioMessage) {
+            mediaType = "audio";
+            mediaMimetype = msg.message.audioMessage.mimetype || "audio/ogg";
+            mediaFilename = "audio.ogg";
+          } else if (msg.message.documentMessage) {
+            mediaType = "document";
+            mediaMimetype = msg.message.documentMessage.mimetype || "application/pdf";
+            mediaFilename = msg.message.documentMessage.fileName || "document";
+          }
+        }
+
+        // 📥 Download incoming media from WhatsApp if not already provided
+        if (!msg.key.fromMe && !mediaUrl && (msg.message.audioMessage || msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage)) {
+          try {
+            const session = this.sessions.get(userId);
+            if (session?.socket) {
+              const buffer = await downloadMediaMessage(
+                msg,
+                'buffer',
+                {},
+                {
+                  logger: pino({ level: 'silent' }),
+                  reuploadRequest: (m: any) => session.socket.updateMediaMessage(m)
+                }
+              );
+              if (buffer && buffer.length > 0) {
+                const ext = mediaType === "audio" ? "ogg" : mediaType === "image" ? "jpg" : mediaType === "video" ? "mp4" : "pdf";
+                const filename = `received-${Date.now()}-${Math.round(Math.random() * 1e4)}.${ext}`;
+                const uploadsPath = path.join(process.cwd(), "uploads", filename);
+                fs.writeFileSync(uploadsPath, buffer);
+                mediaUrl = `/uploads/${filename}`;
+                console.log(`[WhatsApp] Downloaded and saved incoming media to: ${mediaUrl}`);
+              }
+            }
+          } catch (dlErr: any) {
+            console.error("[WhatsApp] Error downloading incoming media:", dlErr.message);
+          }
         }
 
         await supabaseAdmin.from("messages").insert({
@@ -387,40 +484,91 @@ export class WhatsAppManager {
       const msgDate = new Date((msg.messageTimestamp as number) * 1000);
       const now = new Date();
       if (now.getTime() - msgDate.getTime() < 7 * 24 * 60 * 60 * 1000) {
-        await supabaseAdmin
-          .from("contacts")
-          .update({
-            last_message_at: msgDate.toISOString(),
-            last_message_text: text.substring(0, 100)
-          })
-          .eq("id", contactId);
+        // 1. Always update last_message_at and last_message_text (these columns always exist)
+        try {
+          await supabaseAdmin
+            .from("contacts")
+            .update({
+              last_message_at: msgDate.toISOString(),
+              last_message_text: text.substring(0, 100)
+            })
+            .eq("id", contactId);
+        } catch (updateErr: any) {
+          console.warn("[WhatsApp] Could not update contact last_message:", updateErr.message);
+        }
+
+        // 2. Try incrementing unread_count safely for incoming messages
+        if (!msg.key.fromMe) {
+          try {
+            const { data: currentContact } = await supabaseAdmin
+              .from("contacts")
+              .select("unread_count")
+              .eq("id", contactId)
+              .maybeSingle();
+            
+            if (currentContact && currentContact.unread_count !== undefined) {
+              await supabaseAdmin
+                .from("contacts")
+                .update({ unread_count: (currentContact.unread_count || 0) + 1 })
+                .eq("id", contactId);
+            }
+          } catch (unreadErr) {
+            // unread_count column might not exist yet; safe to ignore
+          }
+        }
       }
     } catch (err) {
       console.error("Sync message error:", err);
     }
   }
 
-  private async syncContact(userId: string, contact: BaileysContact) {
+  public isSavedContact(contact: BaileysContact): boolean {
+    const rawName = (contact.name || "").trim();
+    if (!rawName) return false;
+    const cleanPhone = (contact.id || "").split("@")[0].replace(/\D/g, "");
+    const nameDigits = rawName.replace(/\D/g, "");
+    if (nameDigits.length > 5 && nameDigits === cleanPhone) return false;
+    if (/^[\d\s+()\-#]+$/.test(rawName)) return false;
+    if (rawName === "</>" || rawName === "Sem Nome") return false;
+    return true;
+  }
+
+  private async syncContact(userId: string, contact: BaileysContact, isSaved = false) {
     try {
       const jid = contact.id;
-      if (!jid || jid.includes("@g.us")) return;
+      if (!jid || 
+          jid.includes("@g.us") || 
+          jid.includes("@lid") || 
+          jid.includes("@broadcast") || 
+          jid.includes("@newsletter") || 
+          jid.startsWith("120363")) return;
 
-      const phone = jid.split("@")[0];
-      const name = contact.notify || contact.name || contact.verifiedName || phone;
-      console.log(`[WhatsApp] Syncing contact for user ${userId}: ${phone} (${name})`);
+      const phone = jid.split("@")[0].replace(/\D/g, "");
+      if (!phone || phone.length < 8 || phone.length > 15 || phone.startsWith("120363")) return;
+
+      const phoneNo258 = phone.startsWith("258") ? phone.slice(3) : phone;
+      const phoneWith258 = phone.startsWith("258") ? phone : `258${phone}`;
 
       const { data: existingContact } = await supabaseAdmin
         .from("contacts")
         .select("id, tags, name")
         .eq("user_id", userId)
-        .eq("phone", phone)
+        .or(`phone.eq.${phone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
         .maybeSingle();
 
+      const savedName = this.isSavedContact(contact) ? (contact.name || "").trim() : "";
+      const name = savedName || contact.notify || contact.verifiedName || "";
+
       if (!existingContact) {
-        console.log(`[WhatsApp] Creating new contact for user ${userId}: ${phone}`);
+        // Seletividade: Não criar novo contacto a menos que esteja gravado na agenda ou tenha conversa ativa
+        if (!savedName && !isSaved) {
+          return;
+        }
+
+        console.log(`[WhatsApp] Creating new selective contact for user ${userId}: ${name || phone}`);
         await supabaseAdmin.from("contacts").insert({
           user_id: userId,
-          name,
+          name: name || phone,
           phone,
           tags: ["WhatsApp"],
           created_at: new Date().toISOString(),
@@ -430,16 +578,16 @@ export class WhatsAppManager {
         const updatedTags = Array.from(new Set([...currentTags, "WhatsApp"]));
         
         // Update name only if it's better than what we have (not just the phone number)
-        const shouldUpdateName = name && name !== phone && (!existingContact.name || existingContact.name === phone);
+        const shouldUpdateName = savedName && savedName !== phone && (!existingContact.name || existingContact.name === phone);
         
         if (shouldUpdateName) {
-          console.log(`[WhatsApp] Updating name for user ${userId}, contact ${phone}: ${name}`);
+          console.log(`[WhatsApp] Updating name for user ${userId}, contact ${phone}: ${savedName}`);
         }
 
         await supabaseAdmin
           .from("contacts")
           .update({ 
-            name: shouldUpdateName ? name : existingContact.name,
+            name: shouldUpdateName ? savedName : existingContact.name,
             tags: updatedTags
           })
           .eq("id", existingContact.id);
@@ -454,12 +602,32 @@ export class WhatsAppManager {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(userId)) return "unknown";
 
-      const phone = jid.split("@")[0];
+      // Do NOT create contacts for groups or broadcasts
+      if (jid.includes("@g.us") || jid.includes("@broadcast") || jid.includes("@newsletter") || jid.startsWith("120363")) {
+        return "unknown";
+      }
+
+      const phone = jid.split("@")[0].replace(/\D/g, "");
+      if (!phone || phone.startsWith("120363") || phone.length < 7) {
+        return "unknown";
+      }
+
+      // Do not create contact for the user's own account (self-messages)
+      const myInfo = this.getMe(userId);
+      const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
+      const myLid = myInfo?.lid ? myInfo.lid.split(":")[0].replace(/\D/g, "") : "";
+      if ((Boolean(myPhone) && phone === myPhone) || (Boolean(myLid) && phone === myLid)) {
+        return "unknown";
+      }
+
+      const phoneNo258 = phone.startsWith("258") ? phone.slice(3) : phone;
+      const phoneWith258 = phone.startsWith("258") ? phone : `258${phone}`;
+
       const { data: existingContact } = await supabaseAdmin
         .from("contacts")
         .select("id, name")
         .eq("user_id", userId)
-        .eq("phone", phone)
+        .or(`phone.eq.${phone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
         .maybeSingle();
 
       if (existingContact) {
@@ -494,6 +662,60 @@ export class WhatsAppManager {
 
   getSession(userId: string) {
     return this.sessions.get(userId);
+  }
+
+  async requestPairingCode(userId: string, phoneNumber: string): Promise<string> {
+    const cleanPhone = phoneNumber.replace(/\D/g, "");
+    if (!cleanPhone || cleanPhone.length < 8) {
+      throw new Error("Número de telefone inválido. Informe o código do país e número (ex: 258841234567).");
+    }
+
+    console.log(`[WhatsApp Pairing Code] Requesting pairing code for user: ${userId}, phone: ${cleanPhone}`);
+    await this.log(userId, "info", `Solicitando código de pareamento para +${cleanPhone}...`);
+
+    let session = this.sessions.get(userId);
+
+    // If the session is already registered or was previously connected, Baileys disallows requestPairingCode.
+    // Cleanly delete and recreate session to allow pairing a new device.
+    if (session?.socket?.authState?.creds?.registered) {
+      console.log(`[WhatsApp Pairing Code] Session already has registered credentials for user ${userId}. Resetting for new pairing code...`);
+      await this.deleteSession(userId);
+      session = undefined;
+    }
+
+    // If no session exists or disconnected, create one
+    if (!session || !session.socket || session.status === "disconnected") {
+      await this.createSession(userId);
+      session = this.sessions.get(userId);
+    }
+
+    if (!session || !session.socket) {
+      throw new Error("Falha ao inicializar conexão para gerar o código.");
+    }
+
+    // Wait for the socket WebSocket to reach OPEN state (readyState === 1)
+    let waitAttempts = 0;
+    while ((!session.socket.ws || session.socket.ws.readyState !== 1) && waitAttempts < 25) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      waitAttempts++;
+    }
+
+    if (!session.socket.ws || session.socket.ws.readyState !== 1) {
+      throw new Error("O servidor WhatsApp demorou a responder. Por favor, tente novamente em instantes.");
+    }
+
+    try {
+      const code = await session.socket.requestPairingCode(cleanPhone);
+      const formattedCode = (code && code.length === 8) ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+      session.pairingCode = formattedCode;
+      session.status = "pairing_code";
+      await this.log(userId, "success", `Código de pareamento gerado: ${formattedCode}`);
+      return formattedCode;
+    } catch (err: any) {
+      console.error(`[WhatsApp Pairing Code] Error generating code:`, err);
+      await this.log(userId, "error", `Erro ao gerar código de pareamento: ${err.message}`);
+      throw new Error(err.message || "Erro ao gerar código de pareamento no WhatsApp.");
+    }
   }
 
   getMe(userId: string) {
@@ -561,10 +783,30 @@ export class WhatsAppManager {
         let tempInputPath = "";
         let tempOutputPath = "";
 
-        // If it's a URL or local path, convert to OGG/Opus for PTT
         if (mediaUrl) {
           try {
-            if (mediaUrl.startsWith("http")) {
+            // Check if mediaUrl points directly to a local file in uploads/
+            let localPath = "";
+            if (mediaUrl.includes("/uploads/")) {
+              const filename = mediaUrl.split("/uploads/").pop()?.split("?")[0];
+              if (filename) {
+                const candidate = path.join(process.cwd(), "uploads", filename);
+                if (fs.existsSync(candidate)) localPath = candidate;
+              }
+            } else if (fs.existsSync(mediaUrl)) {
+              localPath = mediaUrl;
+            }
+
+            if (localPath) {
+              if (localPath.toLowerCase().endsWith(".ogg")) {
+                // Already in OGG/Opus format from upload! Send directly with 0 conversion overhead!
+                audioPath = localPath;
+                console.log(`[WhatsAppManager] Fast direct audio dispatch from disk: ${audioPath}`);
+              } else {
+                tempOutputPath = await convertToOpus(localPath);
+                audioPath = tempOutputPath;
+              }
+            } else if (mediaUrl.startsWith("http")) {
               tempInputPath = path.join(os.tmpdir(), `input_${Date.now()}`);
               const response = await axios({
                 method: 'get',
@@ -578,18 +820,10 @@ export class WhatsAppManager {
                 writer.on('error', (err) => reject(err));
               });
               tempOutputPath = await convertToOpus(tempInputPath);
-            } else if (fs.existsSync(mediaUrl)) {
-              // It's a local path
-              tempOutputPath = await convertToOpus(mediaUrl);
-            }
-
-            if (tempOutputPath) {
-              audioPath = tempOutputPath;
-              console.log(`[WhatsAppManager] Audio converted for PTT: ${audioPath}`);
+              if (tempOutputPath) audioPath = tempOutputPath;
             }
           } catch (err) {
-            console.error("[WhatsAppManager] Error converting audio, sending original:", err);
-            // Fallback to original if conversion fails
+            console.error("[WhatsAppManager] Error preparing audio, falling back to original:", err);
             audioPath = mediaUrl;
           }
         }
@@ -613,18 +847,29 @@ export class WhatsAppManager {
 
     // Sync the sent message back to DB if it's not a status
     if (result && !isStatus) {
-      await this.syncMessage(userId, {
-        key: {
-          remoteJid: jid,
-          fromMe: true,
-          id: result.key.id
+      await this.syncMessage(
+        userId, 
+        {
+          key: {
+            remoteJid: jid,
+            fromMe: true,
+            id: result.key.id
+          },
+          message: {
+            conversation: text,
+            audioMessage: mediaType === 'audio' ? { mimetype: 'audio/ogg' } : undefined,
+            imageMessage: mediaType === 'image' ? { caption: text } : undefined,
+            videoMessage: mediaType === 'video' ? { caption: text } : undefined,
+            documentMessage: mediaType === 'document' ? { fileName: fileName } : undefined,
+          },
+          messageTimestamp: Math.floor(Date.now() / 1000),
+          pushName: session.socket.user?.name || "Me"
         },
-        message: {
-          conversation: text
-        },
-        messageTimestamp: Math.floor(Date.now() / 1000),
-        pushName: session.socket.user?.name || "Me"
-      });
+        mediaUrl,
+        mediaType,
+        mimetype,
+        fileName
+      );
     }
 
     return result;
@@ -682,19 +927,44 @@ export class WhatsAppManager {
   }
 
   async reconnectAllSessions() {
-    console.log("[WhatsApp] Reconnecting all sessions from database...");
-    const { data: sessions } = await supabaseAdmin
-      .from("whatsapp_sessions")
-      .select("user_id");
+    console.log("[WhatsApp] Reconnecting all sessions from database and local disk...");
+    const userIds = new Set<string>();
 
-    if (sessions) {
-      for (const s of sessions) {
-        console.log(`[WhatsApp] Auto-reconnecting session for user ${s.user_id}`);
-        this.createSession(s.user_id).catch(err => {
-          console.error(`Failed to reconnect session for ${s.user_id}:`, err);
-        });
-        await new Promise(resolve => setTimeout(resolve, 2000)); // 2s delay between sessions
+    // 1. Scan local sessions directory
+    try {
+      const sessionsDir = path.join(process.cwd(), "whatsapp_sessions_data");
+      if (fs.existsSync(sessionsDir)) {
+        const files = fs.readdirSync(sessionsDir);
+        for (const f of files) {
+          if (f.endsWith(".json")) {
+            const uid = f.replace(".json", "");
+            if (uid && uid.length > 5) userIds.add(uid);
+          }
+        }
       }
+    } catch (e) {
+      console.warn("[WhatsApp] Error scanning local sessions directory:", e);
+    }
+
+    // 2. Scan Supabase if table exists
+    try {
+      const { data: sessions } = await supabaseAdmin
+        .from("whatsapp_sessions")
+        .select("user_id");
+
+      if (sessions) {
+        for (const s of sessions) {
+          if (s.user_id) userIds.add(s.user_id);
+        }
+      }
+    } catch (e) {}
+
+    for (const uid of userIds) {
+      console.log(`[WhatsApp] Auto-reconnecting session for user ${uid}`);
+      this.createSession(uid).catch(err => {
+        console.error(`Failed to reconnect session for ${uid}:`, err);
+      });
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 2s delay between sessions
     }
   }
 
@@ -716,6 +986,119 @@ export class WhatsAppManager {
 
     text += `\nDigite o número da opção desejada.`;
     return await session.socket.sendMessage(jid, { text });
+  }
+
+  async cleanOrphanContactsFromPreviousSessions(userId: string): Promise<number> {
+    try {
+      console.log(`[WhatsApp] Cleaning orphan contacts from previous sessions for user ${userId}...`);
+      
+      const { data: contacts, error: cErr } = await supabaseAdmin
+        .from("contacts")
+        .select("id, name, phone, tags, last_message_at, created_at")
+        .eq("user_id", userId);
+        
+      if (cErr || !contacts || contacts.length === 0) return 0;
+
+      const { data: leads } = await supabaseAdmin
+        .from("leads")
+        .select("contact_id, phone")
+        .eq("user_id", userId);
+
+      const leadContactIds = new Set(leads?.map(l => l.contact_id).filter(Boolean));
+      const leadPhones = new Set(leads?.map(l => (l.phone || "").replace(/\D/g, "")).filter(Boolean));
+
+      const { data: messages } = await supabaseAdmin
+        .from("messages")
+        .select("contact_id")
+        .eq("user_id", userId);
+
+      const messageContactIds = new Set(messages?.map(m => m.contact_id).filter(Boolean));
+
+      // Get current session contacts in memory if available
+      const session = this.sessions.get(userId);
+      const currentPhones = new Set<string>();
+      if (session && (session as any).contactsMap) {
+        for (const [jid] of (session as any).contactsMap.entries()) {
+          const p = jid.split("@")[0].replace(/\D/g, "");
+          if (p) currentPhones.add(p);
+        }
+      }
+
+      const idsToDelete: string[] = [];
+
+      for (const c of contacts) {
+        const cleanP = (c.phone || "").replace(/\D/g, "");
+        const tags = Array.isArray(c.tags) ? c.tags : [];
+        const isManual = tags.includes("Manual") || tags.includes("Importado");
+        const hasLead = leadContactIds.has(c.id) || leadPhones.has(cleanP);
+        const hasMessages = messageContactIds.has(c.id) || Boolean(c.last_message_at);
+        const isInCurrentSession = currentPhones.size > 0 ? currentPhones.has(cleanP) : false;
+
+        // Keep contacts created in the current active session (today)
+        const isToday = c.created_at && c.created_at.startsWith(new Date().toISOString().slice(0, 10));
+
+        if (isManual || hasLead || hasMessages || isInCurrentSession || isToday) {
+          continue;
+        }
+
+        idsToDelete.push(c.id);
+      }
+
+      if (idsToDelete.length > 0) {
+        console.log(`[WhatsApp] Deleting ${idsToDelete.length} orphan contacts from previous sessions for user ${userId}...`);
+        for (let i = 0; i < idsToDelete.length; i += 100) {
+          const chunk = idsToDelete.slice(i, i + 100);
+          await supabaseAdmin.from("contacts").delete().in("id", chunk);
+        }
+      }
+
+      console.log(`[WhatsApp] Cleanup finished: ${idsToDelete.length} orphan contacts removed.`);
+      return idsToDelete.length;
+    } catch (err: any) {
+      console.error("[WhatsApp] Error cleaning orphan contacts:", err.message);
+      return 0;
+    }
+  }
+
+  async syncCurrentSessionContacts(userId: string) {
+    const session = this.sessions.get(userId);
+    if (!session || session.status !== "connected") {
+      throw new Error("WhatsApp não está conectado. Conecte primeiro no painel.");
+    }
+
+    // 1. Clean orphan contacts from previous connections
+    const cleanedCount = await this.cleanOrphanContactsFromPreviousSessions(userId);
+
+    // 2. Sync any in-memory cached contacts from current session
+    if (session && (session as any).contactsMap) {
+      for (const contact of (session as any).contactsMap.values()) {
+        if (this.isSavedContact(contact)) {
+          await this.syncContact(userId, contact, true);
+        }
+      }
+    }
+
+    // 3. Count saved contacts and active chats from current session in database
+    const { data: contacts } = await supabaseAdmin
+      .from("contacts")
+      .select("id, name, phone, last_message_at, tags")
+      .eq("user_id", userId);
+
+    const savedCount = (contacts || []).filter(c => {
+      const raw = (c.name || "").trim();
+      const phone = (c.phone || "").replace(/\D/g, "");
+      return raw && raw !== phone && !/^[\d\s+()\-#]+$/.test(raw) && raw !== "</>" && raw !== "Sem Nome";
+    }).length;
+
+    const activeChatsCount = (contacts || []).filter(c => Boolean(c.last_message_at)).length;
+
+    return {
+      success: true,
+      total: contacts?.length || 0,
+      savedCount,
+      activeChatsCount,
+      cleanedCount,
+    };
   }
 
   async deleteSession(userId: string) {

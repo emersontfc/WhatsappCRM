@@ -88,6 +88,79 @@ router.get(["/chats", "/chats/"], async (req: AuthRequest, res) => {
   }
 });
 
+router.post("/chats/:contactId/toggle-ai", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { contactId } = req.params;
+  const { paused } = req.body;
+
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    let nextPaused = paused;
+    if (nextPaused === undefined) {
+      const { data: current } = await supabaseAdmin
+        .from("contacts")
+        .select("ai_paused")
+        .eq("id", contactId)
+        .eq("user_id", userId)
+        .single();
+      nextPaused = !current?.ai_paused;
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("contacts")
+      .update({ 
+        ai_paused: nextPaused,
+        ai_paused_at: nextPaused ? new Date().toISOString() : null
+      })
+      .eq("id", contactId)
+      .eq("user_id", userId)
+      .select("id, ai_paused, ai_paused_at")
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, ai_paused: data?.ai_paused, data });
+  } catch (err: any) {
+    console.error("[WhatsApp Chat] toggle-ai error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/chats/:contactId/read", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { contactId } = req.params;
+
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    try {
+      await supabaseAdmin
+        .from("contacts")
+        .update({ unread_count: 0 })
+        .eq("id", contactId)
+        .eq("user_id", userId);
+    } catch (e) {
+      // unread_count column might not exist yet
+    }
+
+    try {
+      await supabaseAdmin
+        .from("messages")
+        .update({ is_read: true })
+        .eq("contact_id", contactId)
+        .eq("user_id", userId)
+        .eq("is_read", false);
+    } catch (e) {
+      // is_read column might not exist yet
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("[WhatsApp Chat] read error:", err);
+    res.json({ success: true });
+  }
+});
+
 router.post(["/sync", "/sync/"], async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -108,6 +181,19 @@ router.post(["/sync", "/sync/"], async (req: AuthRequest, res) => {
     if (error) throw error;
     res.json({ success: true, chats: contacts });
   } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/sync-contacts", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const result = await whatsappManager.syncCurrentSessionContacts(userId);
+    res.json(result);
+  } catch (err: any) {
+    console.error("[WhatsApp sync-contacts] error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -195,10 +281,29 @@ router.get("/status", (req: AuthRequest, res) => {
       success: true,
       status,
       connected: status === "connected",
+      pairingCode: session?.pairingCode || null,
     });
   } catch (error) {
     console.error(`[WhatsApp Status] Error for user ${userId}:`, error);
     res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+router.post("/pair-code", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+  const { phoneNumber } = req.body;
+  if (!phoneNumber) {
+    return res.status(400).json({ success: false, error: "Número de telefone é obrigatório" });
+  }
+
+  try {
+    const code = await whatsappManager.requestPairingCode(userId, phoneNumber);
+    res.json({ success: true, code });
+  } catch (error: any) {
+    console.error(`[WhatsApp Pair Code] Error for user ${userId}:`, error);
+    res.status(500).json({ success: false, error: error.message || "Falha ao gerar código de pareamento" });
   }
 });
 
@@ -255,13 +360,21 @@ router.post("/send", async (req: AuthRequest, res) => {
     });
   }
 
-  // Ensure jid is correctly formatted for WhatsApp
-  if (!jid.includes("@")) {
-    jid = `${jid.replace(/\D/g, "")}@s.whatsapp.net`;
+  // Normalize JID: handle Mozambique local 9-digit numbers, groups, and standard formats
+  let cleanDigits = (jid || "").replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@lid/g, "").replace(/\D/g, "");
+  if (cleanDigits.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanDigits.slice(0, 2))) {
+    cleanDigits = `258${cleanDigits}`;
+  }
+
+  let formattedJid = jid;
+  if (cleanDigits.startsWith("120363") || jid.includes("@g.us")) {
+    formattedJid = `${cleanDigits}@g.us`;
+  } else {
+    formattedJid = `${cleanDigits}@s.whatsapp.net`;
   }
 
   try {
-    const result = await whatsappManager.sendMessage(userId, jid, text || "", mediaUrl, mediaType, duration);
+    const result = await whatsappManager.sendMessage(userId, formattedJid, text || "", mediaUrl, mediaType, duration);
     
     // Increment usage
     await supabaseAdmin
@@ -269,7 +382,64 @@ router.post("/send", async (req: AuthRequest, res) => {
       .update({ messages_used: currentUsed + 1 })
       .eq("user_id", userId);
 
-    res.json({ success: true, result });
+    // Save outbound message to database immediately
+    const msgTimestamp = new Date().toISOString();
+    const msgId = result?.key?.id || `out-${Date.now()}`;
+    const messageText = text || (mediaType === "audio" ? "🎵 Áudio" : "Mídia");
+
+    const phoneNo258 = cleanDigits.startsWith("258") ? cleanDigits.slice(3) : cleanDigits;
+    const phoneWith258 = cleanDigits.startsWith("258") ? cleanDigits : `258${cleanDigits}`;
+
+    const { data: contact } = await supabaseAdmin
+      .from("contacts")
+      .select("id")
+      .eq("user_id", userId)
+      .or(`phone.eq.${cleanDigits},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
+      .maybeSingle();
+
+    let contactId = contact?.id;
+    if (!contactId && !formattedJid.includes("@g.us")) {
+      const { data: createdContact } = await supabaseAdmin
+        .from("contacts")
+        .insert({
+          user_id: userId,
+          name: cleanDigits,
+          phone: cleanDigits,
+          tags: ["WhatsApp"],
+          created_at: msgTimestamp,
+        })
+        .select("id")
+        .single();
+      contactId = createdContact?.id;
+    }
+
+    let savedMessage = null;
+    if (contactId) {
+      const { data: newMsg } = await supabaseAdmin.from("messages").insert({
+        user_id: userId,
+        contact_id: contactId,
+        text: messageText,
+        type: "outbound",
+        timestamp: msgTimestamp,
+        msg_id: msgId,
+        media_url: mediaUrl || null,
+        media_type: mediaType || null
+      }).select().single();
+      savedMessage = newMsg;
+
+      // Safely update last_message on contact
+      try {
+        await supabaseAdmin
+          .from("contacts")
+          .update({
+            last_message_at: msgTimestamp,
+            last_message_text: messageText.substring(0, 100)
+          })
+          .eq("id", contactId);
+      } catch (e) {}
+    }
+
+    res.json({ success: true, result, message: savedMessage, contact_id: contactId });
   } catch (err: any) {
     console.error("Failed to send message:", err);
     if (err.message && err.message.includes("WhatsApp session not connected")) {

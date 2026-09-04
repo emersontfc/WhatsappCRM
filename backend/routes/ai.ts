@@ -279,15 +279,19 @@ router.get("/subscription", async (req: AuthRequest, res) => {
 
 router.post("/profile", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  const { name } = req.body;
+  const { name, phone, admin_phones } = req.body;
 
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
-  if (!name) return res.status(400).json({ error: "Name is required" });
 
   try {
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (phone !== undefined) updateData.phone = phone;
+    if (admin_phones !== undefined) updateData.admin_phones = admin_phones;
+
     const { data, error } = await supabaseAdmin
       .from("users")
-      .update({ name })
+      .update(updateData)
       .eq("id", userId)
       .select()
       .single();

@@ -2,6 +2,9 @@
  * Load repo-root `.env` before any module reads `process.env`.
  * Under Vite middleware restarts, `process.cwd()` may not be the project root; `import.meta.url` is stable.
  */
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";

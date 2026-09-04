@@ -9,24 +9,60 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(userId)) return false;
 
-    // 0. Capture Lead (runs before any automation)
-    try {
-      const phone = jid.split("@")[0];
-      await supabaseAdmin.from("leads").upsert({
-        user_id: userId,
-        phone,
-        last_message: text,
-        updated_at: new Date().toISOString()
-      }, { onConflict: "user_id, phone" });
-      console.log(`[Automation] Lead captured for ${phone}`);
-    } catch (e) {
-      console.error("[Automation] Error capturing lead:", e);
+    // 0. Capture Lead & Update Contact unread count (Only for real direct contacts, not groups or broadcast)
+    const phone = jid.split("@")[0];
+    const isGroupOrBroadcast = jid.includes("@g.us") || 
+                               jid.includes("@broadcast") || 
+                               jid.includes("@newsletter") || 
+                               jid.startsWith("120363");
+    
+    const cleanPhone = phone.replace(/\D/g, "");
+    // Valid direct contacts are non-group contacts with at least 8 digits
+    const isValidContact = !isGroupOrBroadcast && cleanPhone.length >= 8 && !cleanPhone.startsWith("120363");
+
+    let contactId: string | null = null;
+    if (isValidContact) {
+      try {
+        const { data: contact } = await supabaseAdmin
+          .from("contacts")
+          .select("id, name, unread_count")
+          .eq("user_id", userId)
+          .eq("phone", phone)
+          .maybeSingle();
+
+        if (contact) {
+          contactId = contact.id;
+          await supabaseAdmin
+            .from("contacts")
+            .update({
+              unread_count: (contact.unread_count || 0) + 1,
+              last_message_at: new Date().toISOString(),
+              last_message_text: text.substring(0, 100)
+            })
+            .eq("id", contact.id);
+        }
+
+        // Upsert lead if it's a real phone number
+        if (cleanPhone.length <= 15) {
+          await supabaseAdmin.from("leads").upsert({
+            user_id: userId,
+            contact_id: contactId,
+            phone,
+            name: contact?.name || null,
+            last_message: text,
+            updated_at: new Date().toISOString()
+          }, { onConflict: "user_id,phone" });
+          console.log(`[Automation] Lead captured for contact: ${phone}`);
+        }
+      } catch (e) {
+        console.error("[Automation] Error capturing lead:", e);
+      }
     }
 
     const normalizedText = text.trim().toLowerCase();
     let triggered = false;
     
-    console.log(`[Automation] Checking automations for ${userId}, text: "${normalizedText}"`);
+    console.log(`[Automation] Checking automations for user ${userId}, JID: ${jid}, text: "${normalizedText}"`);
 
     // 0. Check if user is responding to a menu
     const stateKey = `${userId}:${jid}`;
@@ -61,7 +97,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
           await supabaseAdmin.from("messages").insert({
             user_id: userId,
-            contact_id: contact?.id || "automated",
+            contact_id: contact?.id || null,
             text: selectedOption.response,
             type: "outbound",
             timestamp: new Date().toISOString(),
@@ -155,7 +191,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
             await supabaseAdmin.from("messages").insert({
               user_id: userId,
-              contact_id: contact?.id || "automated",
+              contact_id: contact?.id || null,
               text: automation.response_type === "menu" ? "Menu Inteligente Enviado" : automation.response,
               type: "outbound",
               timestamp: new Date().toISOString(),
@@ -211,7 +247,7 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
               await supabaseAdmin.from("messages").insert({
                 user_id: userId,
-                contact_id: contact?.id || "automated",
+                contact_id: contact?.id || null,
                 text: qr.response_text,
                 type: "outbound",
                 timestamp: new Date().toISOString(),

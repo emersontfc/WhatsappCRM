@@ -313,4 +313,105 @@ router.post("/test", async (req: AuthRequest, res) => {
   }
 });
 
+router.post("/chat", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+
+  const { message, context = [] } = req.body;
+  if (!message || typeof message !== "string") {
+    return res.status(400).json({ success: false, error: "Mensagem obrigatória." });
+  }
+
+  try {
+    // 1. Fetch configured agent or default
+    let { data: agents } = await supabaseAdmin
+      .from("agents")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (!agents || agents.length === 0) {
+      const { data: anyAgents } = await supabaseAdmin
+        .from("agents")
+        .select("*")
+        .eq("user_id", userId)
+        .not("api_key", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (anyAgents && anyAgents.length > 0) {
+        agents = anyAgents;
+      }
+    }
+
+    const agent = (agents && agents.length > 0) ? agents[0] : {
+      provider: process.env.GEMINI_API_KEY ? "gemini" : "custom",
+      model: "gemini-2.5-flash",
+      instructions: "Você é o Agentex Operador, assistente executivo e operador autônomo da plataforma de CRM e WhatsApp.",
+      is_active: true
+    };
+
+    console.log(`[Agent Web Copilot] User ${userId} invoking agent (provider: ${agent.provider}, model: ${agent.model || 'default'})`);
+
+    // 2. Call runAI in admin mode
+    const { runAI, robustParseAgentJSON, formatToolOutputForWhatsApp } = await import("../agentManager.ts");
+    const { executeToolByName } = await import("../tools/index.ts");
+    const { whatsappManager } = await import("../whatsappManager.ts");
+
+    const responseText = await runAI(agent, message, context, "admin");
+
+    // 3. Parse and execute tools if selected
+    let reply = responseText;
+    let toolResult: any = null;
+    let toolName: string | null = null;
+    let toolArgs: any = null;
+
+    const parsed = robustParseAgentJSON(responseText);
+
+    if (parsed && typeof parsed === "object") {
+      reply = parsed.reply || "";
+
+      if (parsed.tool) {
+        toolName = parsed.tool;
+        toolArgs = parsed.args || {};
+        console.log(`[Agent Web Copilot] Executing tool "${parsed.tool}" for admin ${userId}`);
+        const myInfo = whatsappManager.getMe(userId);
+        const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
+
+        toolResult = await executeToolByName(parsed.tool, toolArgs, {
+          userId,
+          phone: myPhone,
+          jid: myInfo?.id || `${userId}@crm`,
+          role: "admin",
+          whatsappManager,
+          userPhone: myPhone
+        });
+
+        if (toolResult) {
+          const formatted = formatToolOutputForWhatsApp(parsed.tool, toolResult);
+          if (!reply || reply.trim().length === 0) {
+            reply = formatted;
+          } else {
+            reply = `${reply}\n\n${formatted}`;
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        reply,
+        tool: toolName,
+        args: toolArgs,
+        toolResult
+      }
+    });
+  } catch (err: any) {
+    console.error("[Agent Web Chat Error]:", err);
+    res.status(500).json({ success: false, error: err.message || "Erro ao processar mensagem com o Agentex." });
+  }
+});
+
 export default router;

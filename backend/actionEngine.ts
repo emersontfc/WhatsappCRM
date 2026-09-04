@@ -8,7 +8,7 @@ export interface ActionPayload {
   intent?: string;
 }
 
-const ALLOWED_ACTIONS = ["create_lead", "trigger_price_flow", "create_reminder"];
+const ALLOWED_ACTIONS = ["create_lead", "trigger_price_flow", "create_reminder", "pause_bot"];
 
 export async function executeAction(payload: ActionPayload) {
   const { action, data, userId, phone, intent } = payload;
@@ -68,6 +68,8 @@ export async function executeAction(payload: ActionPayload) {
         return await handleTriggerPriceFlow(userId, phone, data);
       case "create_reminder":
         return await handleCreateReminder(userId, phone, data);
+      case "pause_bot":
+        return await handlePauseBot(userId, phone);
       default:
         return { success: false, error: "Action not implemented" };
     }
@@ -80,21 +82,30 @@ export async function executeAction(payload: ActionPayload) {
 async function handleCreateLead(userId: string, phone: string, data: any) {
   const { name, email, notes } = data;
   
+  // Also try to find contact_id
+  const { data: contact } = await supabaseAdmin
+    .from("contacts")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("phone", phone)
+    .maybeSingle();
+
   const { error } = await supabaseAdmin.from("leads").upsert({
     user_id: userId,
+    contact_id: contact?.id || null,
     phone,
     name: name || null,
     last_message: notes || "Lead atualizado via IA",
     status: "qualified",
+    stage: "em_atendimento",
     updated_at: new Date().toISOString()
-  }, { onConflict: "user_id, phone" });
+  }, { onConflict: "user_id,phone" });
 
   if (error) throw error;
   return { success: true, message: "Lead created/updated successfully" };
 }
 
 async function handleTriggerPriceFlow(userId: string, phone: string, data: any) {
-  // Em um cenário real, isso enviaria o catálogo de produtos
   console.log(`[Action Engine] Price flow triggered for ${phone}. Data:`, data);
   return { success: true, message: "Price flow triggered" };
 }
@@ -102,7 +113,6 @@ async function handleTriggerPriceFlow(userId: string, phone: string, data: any) 
 async function handleCreateReminder(userId: string, phone: string, data: any) {
   const { text, date } = data;
   
-  // 12. Reminder System
   const scheduledAt = date ? new Date(date) : new Date(Date.now() + 24 * 60 * 60 * 1000); // Default to 24h later
   
   const { error } = await supabaseAdmin.from("reminders").insert({
@@ -115,4 +125,18 @@ async function handleCreateReminder(userId: string, phone: string, data: any) {
 
   if (error) throw error;
   return { success: true, message: "Reminder scheduled successfully" };
+}
+
+async function handlePauseBot(userId: string, phone: string) {
+  const { error } = await supabaseAdmin
+    .from("contacts")
+    .update({
+      ai_paused: true,
+      ai_paused_at: new Date().toISOString()
+    })
+    .eq("user_id", userId)
+    .eq("phone", phone);
+
+  if (error) throw error;
+  return { success: true, message: "Bot pausado para este contacto (Modo Humano activado)" };
 }

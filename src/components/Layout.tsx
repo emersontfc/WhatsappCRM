@@ -30,6 +30,8 @@ import { cn } from "../lib/utils";
 import { Badge } from "./ui/Badge";
 import { apiFetch } from "../lib/api";
 import { Button } from "./ui/Button";
+import { AgentexCopilot } from "./AgentexCopilot";
+import { getStoredNiche, NICHE_CONFIGS } from "../lib/niches";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -45,6 +47,17 @@ export default function Layout({ children }: LayoutProps) {
   const [userEmail, setUserEmail] = useState("");
   const [userPlan, setUserPlan] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeNiche, setActiveNiche] = useState(getStoredNiche);
+
+  useEffect(() => {
+    const handleNicheChange = () => setActiveNiche(getStoredNiche());
+    window.addEventListener("crm_niche_changed", handleNicheChange);
+    window.addEventListener("storage", handleNicheChange);
+    return () => {
+      window.removeEventListener("crm_niche_changed", handleNicheChange);
+      window.removeEventListener("storage", handleNicheChange);
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -255,40 +268,44 @@ export default function Layout({ children }: LayoutProps) {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10">
-        <header className="h-20 border-b-2 border-slate-50 bg-white/80 backdrop-blur-xl sticky top-0 z-30 flex items-center px-8 lg:px-12 justify-between shrink-0">
-          <div className="flex items-center gap-6">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative z-10 h-[100dvh]">
+        <header className="h-16 sm:h-20 border-b-2 border-slate-50 bg-white/80 backdrop-blur-xl sticky top-0 z-30 flex items-center px-3 sm:px-8 lg:px-12 justify-between shrink-0">
+          <div className="flex items-center gap-3 sm:gap-6 min-w-0">
             <Button 
               variant="ghost" 
               size="icon" 
-              className="lg:hidden text-slate-500 hover:bg-slate-50 rounded-xl" 
+              className="lg:hidden text-slate-500 hover:bg-slate-50 rounded-xl shrink-0" 
               onClick={() => setIsSidebarOpen(true)}
             >
-              <Menu size={24} />
+              <Menu size={22} />
             </Button>
-            <div className="flex flex-col">
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">
+            <div className="flex flex-col min-w-0">
+              <h1 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight truncate">
                 {allNavItems.find(item => item.path === location.pathname)?.name || "Dashboard"}
               </h1>
-              <div className="flex items-center gap-2 mt-0.5">
+              <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5">
                 {isAdmin && (
-                  <Badge variant="success" className="text-[9px] px-2 py-0.5 font-bold uppercase tracking-widest">
-                    Admin
+                  <Badge variant="success" className="text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 font-bold uppercase tracking-widest">
+                    Administrador
                   </Badge>
                 )}
-                {userPlan && (
+                {userPlan && userPlan.toLowerCase() !== "admin" && (
                   <Badge 
                     variant="info"
-                    className="text-[9px] px-2 py-0.5 font-bold uppercase tracking-widest"
+                    className="text-[8px] sm:text-[9px] px-1.5 sm:px-2 py-0.5 font-bold uppercase tracking-widest"
                   >
-                    Plano {userPlan}
+                    {userPlan}
                   </Badge>
                 )}
+                <span className="inline-flex items-center gap-1 text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                  {NICHE_CONFIGS[activeNiche]?.icon && React.createElement(NICHE_CONFIGS[activeNiche].icon, { size: 10, className: "text-emerald-600" })}
+                  {NICHE_CONFIGS[activeNiche]?.label || "Geral"}
+                </span>
               </div>
             </div>
           </div>
           
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3 sm:gap-6 shrink-0">
             <div className="hidden lg:flex items-center gap-2 px-4 py-2 bg-slate-50 rounded-xl border border-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
               <Clock size={14} className="text-emerald-600" />
               Maputo, MZ
@@ -297,18 +314,30 @@ export default function Layout({ children }: LayoutProps) {
               <p className="text-sm font-bold text-slate-900 leading-none mb-1">{userName}</p>
               <p className="text-[10px] text-slate-400 font-medium">{userEmail}</p>
             </div>
-            <div className="h-10 w-10 rounded-xl bg-slate-900 flex items-center justify-center text-emerald-500 font-bold text-lg shadow-lg group cursor-pointer hover:scale-105 transition-all">
+            <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-slate-900 flex items-center justify-center text-emerald-500 font-bold text-base sm:text-lg shadow-lg group cursor-pointer hover:scale-105 transition-all">
               {userName.charAt(0).toUpperCase()}
             </div>
           </div>
         </header>
         
-        <div className="flex-1 overflow-y-auto p-6 lg:p-10 custom-scrollbar">
-          <div className="max-w-7xl mx-auto pb-20">
+        {/* Responsive Content Body */}
+        <div className={cn(
+          "flex-1 overflow-y-auto custom-scrollbar",
+          location.pathname.startsWith("/messages")
+            ? "p-1 sm:p-3 lg:p-6 overflow-hidden flex flex-col"
+            : "p-3 sm:p-6 lg:p-10"
+        )}>
+          <div className={cn(
+            "max-w-7xl mx-auto w-full",
+            location.pathname.startsWith("/messages") ? "flex-1 flex flex-col h-full" : "pb-16 sm:pb-20"
+          )}>
             {children}
           </div>
         </div>
       </main>
+
+      {/* Agentex Copilot Slide-over and Floating Trigger */}
+      <AgentexCopilot />
     </div>
   );
 }

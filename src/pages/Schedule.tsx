@@ -37,6 +37,8 @@ interface ScheduledMessage {
   message: string;
   media_url?: string;
   media_type?: string;
+  media_mimetype?: string;
+  media_filename?: string;
   scheduled_at: string;
   status: "pending" | "sent" | "failed";
   target_type?: "contact" | "status";
@@ -63,11 +65,19 @@ export default function Schedule() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   
-  // Helper to get local ISO string for datetime-local input without timezone shift issues
-  const getLocalISOString = (date: Date) => {
-    const offset = date.getTimezoneOffset();
-    const localDate = new Date(date.getTime() - (offset * 60000));
-    return localDate.toISOString().slice(0, 16);
+  // Helper to format Date for input[type=datetime-local] using local clock
+  const formatForDateTimeInput = (d: Date) => {
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  // Helper to parse input[type=datetime-local] string as local Date
+  const parseDateTimeInput = (str: string) => {
+    const [dPart, tPart] = (str || "").split('T');
+    if (!dPart || !tPart) return new Date(str);
+    const [y, m, d] = dPart.split('-').map(Number);
+    const [hh, mm] = tPart.split(':').map(Number);
+    return new Date(y, m - 1, d, hh, mm, 0, 0);
   };
 
   const [newMessage, setNewMessage] = useState<Partial<ScheduledMessage>>({
@@ -77,7 +87,7 @@ export default function Schedule() {
     media_url: "",
     media_type: "",
     target_type: "contact",
-    scheduled_at: getLocalISOString(new Date(Date.now() + 3600000))
+    scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
   });
 
   useEffect(() => {
@@ -97,15 +107,8 @@ export default function Schedule() {
         .order("name", { ascending: true });
       
       if (contactsData) {
-        // Show contacts that are Manual, Imported, or NOT from WhatsApp
-        const manualContacts = contactsData
-          .map(c => ({ ...c, tags: Array.isArray(c.tags) ? c.tags : [] }))
-          .filter(c => {
-            const tags = c.tags;
-            // Show if it's explicitly manual/imported OR if it doesn't have the WhatsApp tag
-            return tags.includes("Manual") || tags.includes("Importado") || !tags.includes("WhatsApp");
-          });
-        setContacts(manualContacts);
+        const allContacts = contactsData.map(c => ({ ...c, tags: Array.isArray(c.tags) ? c.tags : [] }));
+        setContacts(allContacts);
       }
 
       // Fetch scheduled messages
@@ -355,13 +358,15 @@ export default function Schedule() {
       setNewMessage(prev => ({
         ...prev,
         media_url: publicUrl,
-        media_type: mediaType
+        media_type: mediaType,
+        media_filename: file.name,
+        media_mimetype: file.type || (mediaType === "document" ? "application/pdf" : undefined)
       }));
 
-      toast.success("Mídia anexada com sucesso!");
+      toast.success(mediaType === "document" ? "Documento/Fatura anexada com sucesso!" : "Mídia anexada com sucesso!");
     } catch (err: any) {
       console.error("Upload error:", err);
-      toast.error(err.message || "Erro ao fazer upload da mídia.");
+      toast.error(err.message || "Erro ao fazer upload do arquivo.");
     } finally {
       setUploadingMedia(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -369,70 +374,77 @@ export default function Schedule() {
   };
 
   const handleAdd = async () => {
-    if ((newMessage.target_type === 'contact' && !newMessage.contact_id) || !newMessage.message || !newMessage.scheduled_at) {
-      toast.error("Preencha todos os campos obrigatórios.");
+    if (newMessage.target_type === 'contact' && (!newMessage.contact_id || !newMessage.message?.trim())) {
+      toast.error("Selecione um contato e digite a mensagem.");
       return;
     }
 
-    const scheduledDate = new Date(newMessage.scheduled_at);
-    if (scheduledDate <= new Date()) {
-      toast.error("A data/hora de agendamento deve ser no futuro.");
+    if (newMessage.target_type === 'status' && !newMessage.media_url && !newMessage.message?.trim()) {
+      toast.error("Informe um texto ou selecione uma mídia para o Status.");
+      return;
+    }
+
+    if (!newMessage.scheduled_at) {
+      toast.error("Selecione a data e hora do agendamento.");
+      return;
+    }
+
+    const scheduledDate = parseDateTimeInput(newMessage.scheduled_at);
+    if (isNaN(scheduledDate.getTime())) {
+      toast.error("Data ou hora inválida.");
+      return;
+    }
+
+    // Allow scheduling even if within current minute with a 2-minute buffer
+    if (scheduledDate.getTime() < Date.now() - 2 * 60 * 1000) {
+      toast.error("A data/hora de agendamento não pode estar no passado.");
       return;
     }
 
     // Story Limits: Videos max 30s
     if (newMessage.target_type === 'status' && newMessage.media_type === 'video') {
-      // In a real app we'd check duration, for now we just warn
       toast.info("Lembrete: O WhatsApp limita vídeos no Status a 30 segundos.");
     }
     
     try {
       const userId = await getUserId();
       if (!userId) throw new Error("Usuário não identificado.");
-      
-      const selectedContact = contacts.find(c => c.id === newMessage.contact_id);
 
       if (newMessage.target_type === 'status') {
-        if (!newMessage.media_url) {
-          toast.error("Mídia é obrigatória para postar no Status.");
-          return;
-        }
-
-        const statusPayload = {
+        const statusPayload: any = {
           user_id: userId,
-          media_url: newMessage.media_url,
-          media_type: newMessage.media_type,
-          caption: newMessage.message,
+          media_url: newMessage.media_url || null,
+          media_type: newMessage.media_type || (newMessage.media_url ? "image" : null),
+          caption: newMessage.message || "",
           scheduled_at: scheduledDate.toISOString(),
           status: "pending"
         };
 
         if (editingId) {
-          const { data, error } = await supabase
+          const { error } = await supabase
             .from("scheduled_status")
             .update(statusPayload)
-            .eq("id", editingId)
-            .select()
-            .single();
+            .eq("id", editingId);
           if (error) throw error;
           toast.success("Status atualizado!");
         } else {
-          const { data, error } = await supabase
+          const { error } = await supabase
             .from("scheduled_status")
-            .insert(statusPayload)
-            .select()
-            .single();
+            .insert(statusPayload);
           if (error) throw error;
-          toast.success("Status agendado!");
+          toast.success("Status agendado com sucesso!");
         }
       } else {
-        // Normal message scheduling
-        const messagePayload = {
-          ...newMessage,
-          contact_name: selectedContact?.name || "Desconhecido",
-          phone: selectedContact?.phone || "",
-          text: newMessage.message || "",
+        // Normal message / invoice scheduling
+        const messagePayload: any = {
           user_id: userId,
+          contact_id: newMessage.contact_id,
+          message: newMessage.message || "",
+          media_url: newMessage.media_url || null,
+          media_type: newMessage.media_type || null,
+          media_mimetype: newMessage.media_mimetype || null,
+          media_filename: newMessage.media_filename || null,
+          target_type: "contact",
           status: "pending",
           scheduled_at: scheduledDate.toISOString(),
         };
@@ -449,7 +461,7 @@ export default function Schedule() {
             .from("scheduled_messages")
             .insert(messagePayload);
           if (error) throw error;
-          toast.success("Mensagem agendada!");
+          toast.success("Mensagem/Fatura agendada com sucesso!");
         }
       }
 
@@ -461,8 +473,10 @@ export default function Schedule() {
         message: "",
         media_url: "",
         media_type: "",
+        media_mimetype: "",
+        media_filename: "",
         target_type: "contact",
-        scheduled_at: new Date(Date.now() + 3600000).toISOString().slice(0, 16)
+        scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
       });
     } catch (err: any) {
       console.error("Error saving scheduled message:", err);
@@ -504,7 +518,7 @@ export default function Schedule() {
       media_url: msg.media_url,
       media_type: msg.media_type,
       target_type: msg.target_type || "contact",
-      scheduled_at: getLocalISOString(new Date(msg.scheduled_at))
+      scheduled_at: formatForDateTimeInput(new Date(msg.scheduled_at))
     });
     setEditingId(msg.id);
     setIsAdding(true);
@@ -521,7 +535,7 @@ export default function Schedule() {
       media_url: "",
       media_type: "",
       target_type: "contact",
-      scheduled_at: getLocalISOString(new Date(Date.now() + 3600000))
+      scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
     });
   };
 
@@ -705,13 +719,15 @@ export default function Schedule() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase text-slate-500">Arquivo de Mídia {newMessage.target_type === 'status' && "(Obrigatório)"}</label>
-                  <div className="flex items-center gap-4">
+                  <label className="text-xs font-bold uppercase text-slate-500">
+                    Arquivo de Mídia {newMessage.target_type === 'status' ? "(Opcional se houver texto)" : "(Opcional: PDF/Fatura, Imagem, Áudio)"}
+                  </label>
+                  <div className="flex items-center gap-4 flex-wrap">
                     <input 
                       type="file" 
                       ref={fileInputRef}
                       className="hidden" 
-                      accept={newMessage.target_type === 'status' ? "image/*,video/*" : "image/*,video/*,audio/*,application/pdf"}
+                      accept={newMessage.target_type === 'status' ? "image/*,video/*" : "image/*,video/*,audio/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx"}
                       onChange={handleFileUpload}
                     />
                     <Button 
@@ -726,7 +742,7 @@ export default function Schedule() {
                       ) : (
                         <Paperclip size={16} />
                       )}
-                      {uploadingMedia ? "Enviando..." : "Selecionar Mídia"}
+                      {uploadingMedia ? "Enviando..." : "Anexar Arquivo / Fatura"}
                     </Button>
 
                     {newMessage.target_type === 'contact' && (
@@ -748,11 +764,13 @@ export default function Schedule() {
                         {newMessage.media_type === 'video' && <Smartphone size={14} />}
                         {newMessage.media_type === 'audio' && <Music size={14} />}
                         {newMessage.media_type === 'document' && <FileText size={14} />}
-                        <span className="truncate max-w-[150px]">Arquivo pronto</span>
+                        <span className="truncate max-w-[220px] font-medium" title={newMessage.media_filename || ""}>
+                          {newMessage.media_filename || (newMessage.media_type === 'document' ? "Fatura/Documento pronto" : "Arquivo pronto")}
+                        </span>
                         <button 
                           type="button"
-                          onClick={() => setNewMessage(prev => ({ ...prev, media_url: "", media_type: "" }))}
-                          className="p-1 hover:bg-emerald-100 rounded-full transition-colors"
+                          onClick={() => setNewMessage(prev => ({ ...prev, media_url: "", media_type: "", media_filename: "", media_mimetype: "" }))}
+                          className="p-1 hover:bg-emerald-100 rounded-full transition-colors cursor-pointer"
                         >
                           <X size={14} />
                         </button>
@@ -844,7 +862,7 @@ export default function Schedule() {
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <span className="flex items-center gap-1 font-medium text-slate-700">
                             <CalendarIcon size={12} />
-                            {new Date(msg.scheduled_at).toLocaleString("pt-MZ", { timeZone: "Africa/Maputo" })}
+                            {new Date(msg.scheduled_at).toLocaleString("pt-MZ", { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                           </span>
                           <span>•</span>
                           <span className={cn(

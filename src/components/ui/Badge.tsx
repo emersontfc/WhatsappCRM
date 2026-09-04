@@ -1,14 +1,17 @@
 import * as React from "react";
-import { cn } from "@/src/lib/utils";
+import { cn } from "../../lib/utils";
 
 export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
-  variant?: "success" | "warning" | "error" | "info" | "outline";
+  variant?: "success" | "warning" | "error" | "info" | "outline" | "default" | "primary" | "secondary";
   pulse?: boolean;
 }
 
 const Badge = React.forwardRef<HTMLDivElement, BadgeProps>(
   ({ className, variant = "info", pulse = false, ...props }, ref) => {
-    const variants = {
+    const variants: Record<string, string> = {
+      default: "bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-900/20",
+      primary: "bg-emerald-600 text-white border-emerald-600 shadow-lg shadow-emerald-600/20",
+      secondary: "bg-slate-800 text-white border-slate-800",
       success: "bg-emerald-600 text-white border-emerald-600 shadow-lg shadow-emerald-600/20",
       warning: "bg-amber-500 text-white border-amber-500 shadow-lg shadow-amber-500/20",
       error: "bg-red-600 text-white border-red-600 shadow-lg shadow-red-600/20",
@@ -21,7 +24,7 @@ const Badge = React.forwardRef<HTMLDivElement, BadgeProps>(
         ref={ref}
         className={cn(
           "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-bold transition-colors",
-          variants[variant],
+          variants[variant] || variants.info,
           pulse && "animate-pulse-soft",
           className
         )}

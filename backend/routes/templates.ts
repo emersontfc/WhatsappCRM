@@ -69,10 +69,10 @@ router.post("/apply/:templateId", async (req: AuthRequest, res) => {
       await supabaseAdmin.from("automations").insert(automationsToInsert);
     }
 
-    // 3. Update AI Prompt (assumindo que existe uma tabela de config do agente)
+    // 3. Update AI Prompt na tabela oficial agents
     await supabaseAdmin
-      .from("agent_configs")
-      .upsert({ user_id: userId, instructions: template.ai_prompt }, { onConflict: 'user_id' });
+      .from("agents")
+      .upsert({ user_id: userId, instructions: template.ai_prompt, provider: "gemini" }, { onConflict: 'user_id' });
 
     // 4. Mark user
     await supabaseAdmin.from("users").update({ template_applied: true }).eq("id", userId);
