@@ -138,6 +138,7 @@ export default function Landing() {
               {[["#features","Recursos"],["#ai-agent","Agente IA"],["#pricing","Planos"]].map(([href,label]) => (
                 <a key={href} href={href} className="text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-emerald-400 transition-colors">{label}</a>
               ))}
+              <Link to="/docs" className="text-xs font-bold uppercase tracking-widest text-emerald-400 hover:text-emerald-300 transition-colors">Docs</Link>
             </div>
 
             <div className="hidden md:flex items-center gap-3">
@@ -165,6 +166,7 @@ export default function Landing() {
             {[["#features","Recursos"],["#ai-agent","Agente IA"],["#pricing","Planos"]].map(([href,label]) => (
               <a key={href} href={href} className="block text-sm font-black uppercase tracking-widest text-slate-300 hover:text-emerald-400 py-1" onClick={() => setIsMenuOpen(false)}>{label}</a>
             ))}
+            <Link to="/docs" className="block text-sm font-black uppercase tracking-widest text-emerald-400 hover:text-emerald-300 py-1" onClick={() => setIsMenuOpen(false)}>Documentação (Docs)</Link>
             <Link to="/login" className="block text-sm font-black uppercase tracking-widest text-slate-300 hover:text-emerald-400 py-1" onClick={() => setIsMenuOpen(false)}>Entrar</Link>
             <Link to="/login" className="block pt-2" onClick={() => setIsMenuOpen(false)}>
               <Button className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-black py-3 rounded-xl shadow-lg shadow-emerald-600/30">

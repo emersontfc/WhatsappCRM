@@ -24,7 +24,8 @@ import {
   Users2,
   Hash,
   UserPlus,
-  CalendarCheck
+  CalendarCheck,
+  BookOpen
 } from "lucide-react";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
@@ -153,6 +154,7 @@ export default function Layout({ children }: LayoutProps) {
       title: "Sistema",
       items: [
         { name: "Atividade", path: "/activity", icon: Activity },
+        { name: "Documentação", path: "/docs", icon: BookOpen },
         { name: "Configurações", path: "/settings", icon: Settings },
       ]
     }

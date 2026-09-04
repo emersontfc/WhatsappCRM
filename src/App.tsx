@@ -23,6 +23,7 @@ import Leads from "./pages/Leads";
 import ActivityLog from "./pages/ActivityLog";
 import Appointments from "./pages/Appointments";
 import PublicBooking from "./pages/PublicBooking";
+import Docs from "./pages/Docs";
 import Layout from "./components/Layout";
 
 export default function App() {
@@ -72,6 +73,8 @@ export default function App() {
         <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <Landing />} />
         <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
         <Route path="/book/:userId" element={<PublicBooking />} />
+        <Route path="/docs" element={<Docs />} />
+        <Route path="/documentacao" element={<Docs />} />
 
         {/* 🔥 Onboarding REMOVIDO - redirect permanente */}
         <Route path="/onboarding" element={<Navigate to="/dashboard" replace />} />
