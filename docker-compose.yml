@@ -1,0 +1,25 @@
+services:
+  agentx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentx-crm
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      # Persistent storage for uploaded media (voice notes, images, PDFs)
+      - ./uploads:/app/uploads
+      # Persistent storage for Baileys WhatsApp sessions
+      - ./whatsapp_sessions_data:/app/whatsapp_sessions_data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+

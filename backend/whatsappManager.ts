@@ -1117,6 +1117,20 @@ export class WhatsAppManager {
     const session = this.sessions.get(userId);
     return session?.status || "disconnected";
   }
+
+  closeAllSessions() {
+    console.log(`[WhatsApp] Gracefully closing all active sessions (${this.sessions.size} sessions)...`);
+    for (const [userId, session] of this.sessions.entries()) {
+      try {
+        if (session.socket) {
+          session.socket.end(undefined);
+        }
+      } catch (e) {
+        console.warn(`[WhatsApp] Error closing session for user ${userId}:`, e);
+      }
+    }
+    this.sessions.clear();
+  }
 }
 
 export const whatsappManager = new WhatsAppManager();

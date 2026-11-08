@@ -73,23 +73,29 @@ export default function Layout({ children }: LayoutProps) {
         }
 
         if (isMounted) {
-          setUserName(user.user_metadata?.full_name || user.email?.split("@")[0] || "Usuário");
-          setUserEmail(user.email || "");
+          const rawName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Usuário";
+          setUserName(typeof rawName === "string" ? rawName : "Usuário");
+          setUserEmail(typeof user.email === "string" ? user.email : "");
         }
 
         // Fetch profile/subscription from backend to ensure consistency and isolation
-        const response = await apiFetch("/api/ai/subscription");
-        
-        if (isMounted && response.success && response.data) {
-          const sub = response.data;
-          const adminStatus = sub?.role === "admin";
-          setIsAdmin(adminStatus);
-          
-          const plan = sub?.plan || sub?.subscription?.plan;
-          setUserPlan(plan || "Free");
-          
-          // Standardized: plan is always present
-          setIsActivated(true);
+        try {
+          const response = await apiFetch("/api/ai/subscription");
+          if (isMounted && response?.success && response?.data) {
+            const sub = response.data;
+            const adminStatus = sub?.role === "admin";
+            setIsAdmin(adminStatus);
+            
+            const rawPlan = sub?.plan || sub?.subscription?.plan;
+            setUserPlan(typeof rawPlan === "string" ? rawPlan : "Free");
+            setIsActivated(true);
+          }
+        } catch (subErr) {
+          console.warn("Could not fetch subscription in Layout, defaulting to Free:", subErr);
+          if (isMounted) {
+            setUserPlan("Free");
+            setIsActivated(true);
+          }
         }
       } catch (err) {
         console.error("Layout status check failed:", err);
@@ -319,7 +325,7 @@ export default function Layout({ children }: LayoutProps) {
               <p className="text-[10px] text-slate-400 font-medium">{userEmail}</p>
             </div>
             <div className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-slate-900 flex items-center justify-center text-emerald-500 font-bold text-base sm:text-lg shadow-lg group cursor-pointer hover:scale-105 transition-all">
-              {userName.charAt(0).toUpperCase()}
+              {typeof userName === "string" && userName.length > 0 ? userName.charAt(0).toUpperCase() : "U"}
             </div>
           </div>
         </header>

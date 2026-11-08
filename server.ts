@@ -499,6 +499,9 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
 
+  // Trust reverse proxy (Nginx, Traefik, Docker, Cloudflare)
+  app.set("trust proxy", 1);
+
   app.use(cors({
     origin: true,
     credentials: true
@@ -602,6 +605,12 @@ async function startServer() {
   }
   app.use("/uploads", express.static(uploadsDir));
 
+  // Ensure whatsapp_sessions_data directory exists
+  const sessionsDir = path.join(process.cwd(), "whatsapp_sessions_data");
+  if (!fs.existsSync(sessionsDir)) {
+    fs.mkdirSync(sessionsDir, { recursive: true });
+  }
+
   // Catch-all for unmatched API routes
   app.all("/api/*", (req, res) => {
     res.status(404).json({ 
@@ -681,7 +690,7 @@ async function startServer() {
     console.error("CRITICAL: Uncaught Exception:", err);
   });
 
-  app.listen(Number(PORT), "0.0.0.0", () => {
+  const server = app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`[Startup] Server listening on port ${PORT}`);
     
     // Reconnect existing WhatsApp sessions in background
@@ -691,6 +700,34 @@ async function startServer() {
       });
     }
   });
+
+  // Graceful shutdown handling for Docker, PM2 and VPS process managers
+  let isShuttingDown = false;
+  const gracefulShutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`[Shutdown] Received ${signal}. Starting graceful shutdown...`);
+
+    try {
+      whatsappManager.closeAllSessions();
+    } catch (e) {
+      console.error("[Shutdown] Error while closing WhatsApp sessions:", e);
+    }
+
+    server.close(() => {
+      console.log("[Shutdown] HTTP server closed cleanly.");
+      process.exit(0);
+    });
+
+    // Timeout safety fallback
+    setTimeout(() => {
+      console.warn("[Shutdown] Forcefully terminating process after timeout.");
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
 startServer().catch((err) => {

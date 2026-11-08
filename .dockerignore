@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+.gemini
+scratch
+uploads/*
+!uploads/.gitkeep
+whatsapp_sessions_data/*
+!whatsapp_sessions_data/.gitkeep
+*.log
+.env.local
+

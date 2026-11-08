@@ -7,12 +7,20 @@ import ffmpegStatic from "ffmpeg-static";
 import ffprobeStatic from "@ffprobe-installer/ffprobe";
 import { authenticate } from "../middleware/auth.ts";
 
-// Configure ffmpeg & ffprobe binary paths
-if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
+// Configure ffmpeg & ffprobe binary paths with safe fallback for Linux VPS environments
+if (ffmpegStatic && typeof ffmpegStatic === "string" && fs.existsSync(ffmpegStatic)) {
+  try {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+  } catch (e) {
+    console.warn("[Media] Using system ffmpeg fallback:", e);
+  }
 }
-if (ffprobeStatic && ffprobeStatic.path) {
-  ffmpeg.setFfprobePath(ffprobeStatic.path);
+if (ffprobeStatic && ffprobeStatic.path && fs.existsSync(ffprobeStatic.path)) {
+  try {
+    ffmpeg.setFfprobePath(ffprobeStatic.path);
+  } catch (e) {
+    console.warn("[Media] Using system ffprobe fallback:", e);
+  }
 }
 
 const router = express.Router();

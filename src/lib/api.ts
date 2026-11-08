@@ -82,21 +82,7 @@ export async function apiFetch(url: string, options: FetchOptions = {}) {
 
     if (!response.ok) {
       if (response.status === 401) {
-        console.error(`[apiFetch] 401 Unauthorized for ${fullUrl}`);
-        
-        // Only sign out if we're not already on a login/auth page to avoid loops
-        if (typeof window !== 'undefined' && !window.location.pathname.includes('/login') && !window.location.pathname.includes('/auth')) {
-          // Use a flag to prevent multiple sign-outs in a short period
-          if (!(window as any)._isSigningOut) {
-            (window as any)._isSigningOut = true;
-            console.warn("[apiFetch] 401 detected, signing out to clear session...");
-            supabase.auth.signOut().then(() => {
-              window.location.href = '/login';
-            }).finally(() => {
-              setTimeout(() => { (window as any)._isSigningOut = false; }, 5000);
-            });
-          }
-        }
+        console.warn(`[apiFetch] 401 Unauthorized for ${fullUrl}`);
       }
       
       const errorMsg = data.error || data.message || `Request failed with status ${response.status}`;

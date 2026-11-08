@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "start": "tsx server.ts",
+    "start:prod": "NODE_ENV=production tsx server.ts",
     "dev": "tsx watch server.ts",
     "build": "vite build",
     "postinstall": "npm run build",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist', { recursive: true, force: true });\"",
     "lint": "tsc --noEmit",
+    "db:check": "tsx scripts/check-db.ts",
     "test:agent": "tsx test-agent.ts"
   },
   "dependencies": {

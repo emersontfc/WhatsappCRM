@@ -5,11 +5,21 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 
-if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
+// Configure ffmpeg & ffprobe paths with safe fallback to system binaries on Linux/VPS
+if (ffmpegStatic && typeof ffmpegStatic === "string" && fs.existsSync(ffmpegStatic)) {
+  try {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+  } catch (e) {
+    console.warn("[AudioConverter] Using system ffmpeg fallback:", e);
+  }
 }
-if (ffprobeStatic && ffprobeStatic.path) {
-  ffmpeg.setFfprobePath(ffprobeStatic.path);
+
+if (ffprobeStatic && ffprobeStatic.path && fs.existsSync(ffprobeStatic.path)) {
+  try {
+    ffmpeg.setFfprobePath(ffprobeStatic.path);
+  } catch (e) {
+    console.warn("[AudioConverter] Using system ffprobe fallback:", e);
+  }
 }
 
 /**
