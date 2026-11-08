@@ -1,24 +1,52 @@
 import { createClient } from "@supabase/supabase-js";
 
-let supabaseUrl = (
-  import.meta.env.VITE_SUPABASE_URL ||
-  (typeof window !== "undefined" && (window as any).__ENV__?.VITE_SUPABASE_URL) ||
-  "https://xhnxhfhmplstqiavswgo.supabase.co"
-).trim();
+// Default project fallback credentials
+const DEFAULT_URL = "https://xhnxhfhmplstqiavswgo.supabase.co";
+const DEFAULT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhobnhoZmhtcGxzdHFpYXZzd2dvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDI5NjI5OCwiZXhwIjoyMDg5ODcyMjk4fQ.VGyJSSjU_8TF0Vc5ZFCMR0ZMPqprgB472P6zn6Q31rE";
 
-const supabaseAnonKey = (
+// Safely obtain runtime or build-time credentials
+const win = typeof window !== "undefined" ? (window as any) : {};
+const env = win.__ENV__ || {};
+
+let rawUrl = (
+  env.VITE_SUPABASE_URL ||
+  import.meta.env.VITE_SUPABASE_URL ||
+  DEFAULT_URL
+);
+let supabaseUrl = (typeof rawUrl === "string" ? rawUrl : DEFAULT_URL).replace(/^["']|["']$/g, "").trim();
+
+let rawAnon = (
+  env.VITE_SUPABASE_ANON_KEY ||
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  (typeof window !== "undefined" && (window as any).__ENV__?.VITE_SUPABASE_ANON_KEY) ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhobnhoZmhtcGxzdHFpYXZzd2dvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDI5NjI5OCwiZXhwIjoyMDg5ODcyMjk4fQ.VGyJSSjU_8TF0Vc5ZFCMR0ZMPqprgB472P6zn6Q31rE"
-).trim();
+  DEFAULT_KEY
+);
+let supabaseAnonKey = (typeof rawAnon === "string" ? rawAnon : DEFAULT_KEY).replace(/^["']|["']$/g, "").trim();
 
 // Handle case where user only provides the project ref
 if (supabaseUrl && !supabaseUrl.startsWith("http")) {
   supabaseUrl = `https://${supabaseUrl}.supabase.co`;
 }
 
-// Initialize client only if keys are present and valid
-const isValidAnonKey = supabaseAnonKey && supabaseAnonKey.split('.').length === 3;
+// Key validator: ensures it's a real 3-part JWT, not a placeholder
+const isValidKey = (key: string) => Boolean(
+  key && 
+  key.split(".").length === 3 && 
+  !key.includes("COLE_") && 
+  !key.includes("sua_chave") &&
+  !key.includes("SUA_CHAVE")
+);
+
+// Fallback to default credentials if key is missing or is an unreplaced template placeholder
+if (!isValidKey(supabaseAnonKey)) {
+  console.warn("[Supabase] Provided Anon Key was placeholder or invalid. Using default project key.");
+  supabaseAnonKey = DEFAULT_KEY;
+}
+
+if (!supabaseUrl) {
+  supabaseUrl = DEFAULT_URL;
+}
+
+const isValidAnonKey = isValidKey(supabaseAnonKey);
 
 export const supabase = (supabaseUrl && isValidAnonKey) 
   ? createClient(supabaseUrl, supabaseAnonKey)

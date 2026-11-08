@@ -656,19 +656,46 @@ async function startServer() {
     const distPath = path.join(process.cwd(), "dist");
     console.log("[Startup] Serving static files from:", distPath);
     
-    // Serve static files from dist
-    app.use(express.static(distPath));
-    
-    // Fallback route for SPA
-    app.get("*", (req, res) => {
+    // Helper to serve index.html with runtime window.__ENV__ dynamically injected
+    const sendInjectedHtml = (res: express.Response) => {
       const indexPath = path.join(distPath, "index.html");
-      if (fs.existsSync(indexPath)) {
-        res.sendFile(indexPath);
-      } else {
+      if (!fs.existsSync(indexPath)) {
         console.error("[Static] index.html not found at:", indexPath);
-        res.status(404).send("Frontend build not found. Please run 'npm run build'.");
+        return res.status(404).send("Frontend build not found. Please run 'npm run build'.");
       }
-    });
+      
+      try {
+        let html = fs.readFileSync(indexPath, "utf-8");
+        const runtimeEnv = {
+          VITE_SUPABASE_URL: (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "https://xhnxhfhmplstqiavswgo.supabase.co").trim(),
+          VITE_SUPABASE_ANON_KEY: (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim(),
+          VITE_API_URL: (process.env.VITE_API_URL || "").trim()
+        };
+
+        const envScript = `<script>window.__ENV__ = ${JSON.stringify(runtimeEnv)};</script>`;
+        if (html.includes("<head>")) {
+          html = html.replace("<head>", `<head>\n    ${envScript}`);
+        } else {
+          html = `${envScript}\n${html}`;
+        }
+
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.send(html);
+      } catch (err) {
+        console.error("[Static] Error reading/injecting index.html:", err);
+        res.sendFile(indexPath);
+      }
+    };
+
+    // Root path handler
+    app.get("/", (req, res) => sendInjectedHtml(res));
+
+    // Serve static files (assets, css, js) without overriding root index.html
+    app.use(express.static(distPath, { index: false }));
+    
+    // Fallback route for SPA client-side routing
+    app.get("*", (req, res) => sendInjectedHtml(res));
   }
 
   // Global Error Handler
