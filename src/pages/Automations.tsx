@@ -195,6 +195,7 @@ export default function Automations() {
         setLoading(false);
         return;
       }
+      setUserId(userId);
 
       // Initial automations fetch
       const { data: initialAutomations } = await supabase

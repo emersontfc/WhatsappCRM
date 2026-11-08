@@ -93,6 +93,10 @@ export default function App() {
           element={user ? <Layout><Activate key={user?.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
+          path="/upgrade"
+          element={user ? <Layout><Activate key={user?.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
           path="/contacts"
           element={user ? <Layout><Contacts key={user?.id} /></Layout> : <Navigate to="/login" replace />}
         />

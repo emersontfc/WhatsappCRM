@@ -135,12 +135,12 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     console.log(`[AI API] Calling supabaseAdmin for user ${userId}`);
     const [profileResult, subResult] = await Promise.all([
       supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle(),
-      supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).maybeSingle()
+      supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).order("created_at", { ascending: false }).limit(1)
     ]);
     console.log(`[AI API] supabaseAdmin calls completed for user ${userId}`);
 
     let profile = profileResult.data;
-    let subscription = subResult.data;
+    let subscription = subResult.data?.[0] || null;
 
     const adminEmails = (process.env.ADMIN_EMAIL || "alcindacharles@gmail.com,emersontorres42@gmail.com").split(",").map(e => e.trim());
     const userEmail = req.user?.email || "";
@@ -180,7 +180,6 @@ router.get("/subscription", async (req: AuthRequest, res) => {
       
       if (profileError) {
         console.error(`[AI API] Error creating profile for ${userId}:`, profileError);
-        // If insert failed because it already exists (race condition), try fetching again
         if (profileError.code === '23505') {
            const { data: retryProfile } = await supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle();
            profile = retryProfile;
@@ -195,15 +194,17 @@ router.get("/subscription", async (req: AuthRequest, res) => {
       console.log(`[AI API] Initializing subscription for user ${userId}`);
       
       // Fetch plan_id for "Free" plan
-      let { data: planData, error: planError } = await supabaseAdmin
+      let { data: planData } = await supabaseAdmin
         .from("plans")
         .select("id")
         .eq("name", "Free")
-        .single();
+        .limit(1);
 
-      if (planError || !planData) {
+      let planId = planData?.[0]?.id;
+
+      if (!planId) {
         console.log(`[AI API] "Free" plan not found, creating it.`);
-        const { data: newPlan, error: createError } = await supabaseAdmin
+        const { data: newPlan } = await supabaseAdmin
           .from("plans")
           .insert({
             name: "Free",
@@ -217,58 +218,69 @@ router.get("/subscription", async (req: AuthRequest, res) => {
           .select("id")
           .single();
         
-        if (createError) {
-          console.error(`[AI API] Error creating "Free" plan:`, createError);
-          throw new Error("Plano 'Free' não encontrado e falha ao criar.");
-        }
-        planData = newPlan;
+        planId = newPlan?.id;
       }
 
-      const planId = planData.id;
-
-      const { data: newSub, error: subError } = await supabaseAdmin
-        .from("subscriptions")
-        .insert({
-          user_id: userId,
-          plan: "Free",
-          plan_id: planId,
-          status: "active",
-          end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString() // Far future
-        })
-        .select("*, plans(*)")
-        .single();
-      
-      if (subError) {
-        // If it failed because it already exists (race condition), try fetching it
-        if (subError.code === '23505') {
-            const { data: existingSub } = await supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).single();
-            subscription = existingSub;
+      if (planId) {
+        const { data: newSub, error: subError } = await supabaseAdmin
+          .from("subscriptions")
+          .insert({
+            user_id: userId,
+            plan: isInitialAdmin ? "Premium" : "Free",
+            plan_id: planId,
+            status: "active",
+            end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString()
+          })
+          .select("*, plans(*)")
+          .single();
+        
+        if (!subError) {
+          subscription = newSub;
         } else {
-            console.error(`[AI API] Error creating subscription:`, subError);
-            throw new Error(`Erro ao criar assinatura: ${subError.message}`);
+          // If already exists, fetch the existing one
+          const { data: existingSubs } = await supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).order("created_at", { ascending: false }).limit(1);
+          subscription = existingSubs?.[0] || null;
         }
-      } else {
-        subscription = newSub;
       }
     }
 
     // 2. Check plan status
-    const plan = profile?.role === "admin" ? "Admin" : (subscription?.plan || profile?.plan || "Free");
-    const isActive = subscription?.status === "active" || profile?.role === "admin" || true;
+    const isAdmin = profile?.role === "admin" || isInitialAdmin;
+    const plan = isAdmin ? "Admin" : (subscription?.plan || profile?.plan || "Free");
+    const isActive = true;
 
-    if (!isActive) {
-      return res.status(403).json({ success: false, error: "Subscription inactive" });
-    }
+    const adminPlanDetails = {
+      name: "Admin",
+      max_connections: 999,
+      max_contacts: 999999,
+      max_messages_per_day: 999999,
+      ai_enabled: true,
+      automation_level: "advanced",
+      price: 0
+    };
+
+    const resolvedPlanDetails = isAdmin 
+      ? adminPlanDetails 
+      : (subscription?.plans || {
+          name: plan,
+          max_connections: 1,
+          max_contacts: 50,
+          max_messages_per_day: 20,
+          ai_enabled: true,
+          automation_level: "basic",
+          price: 0
+        });
 
     res.json({ 
       success: true, 
       data: {
         ...profile,
         plan,
+        role: isAdmin ? "admin" : (profile?.role || "user"),
         active: isActive,
-        expires_at: subscription?.end_date || null,
+        expires_at: isAdmin ? null : (subscription?.end_date || null),
         subscription: subscription,
-        planDetails: subscription?.plans || null
+        planDetails: resolvedPlanDetails
       }
     });
   } catch (err: any) {

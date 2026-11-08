@@ -650,12 +650,30 @@ export class WhatsAppManager {
       const phoneNo258 = phone.startsWith("258") ? phone.slice(3) : phone;
       const phoneWith258 = phone.startsWith("258") ? phone : `258${phone}`;
 
-      const { data: existingContact } = await supabaseAdmin
+      const { data: contacts } = await supabaseAdmin
         .from("contacts")
         .select("id, name")
         .eq("user_id", userId)
         .or(`phone.eq.${phone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-        .maybeSingle();
+        .limit(1);
+
+      let existingContact = contacts?.[0] || null;
+
+      // Fallback: If received from LID, check if a contact exists by name
+      if (!existingContact && pushName && pushName.length > 2) {
+        const cleanName = pushName.replace(/[^\w\s]/gi, '').trim();
+        if (cleanName.length > 2) {
+          const { data: nameMatch } = await supabaseAdmin
+            .from("contacts")
+            .select("id, name")
+            .eq("user_id", userId)
+            .ilike("name", `%${cleanName}%`)
+            .limit(1);
+          if (nameMatch && nameMatch.length > 0) {
+            existingContact = nameMatch[0];
+          }
+        }
+      }
 
       if (existingContact) {
         if (pushName && (existingContact.name === phone || !existingContact.name)) {

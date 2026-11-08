@@ -49,6 +49,9 @@ export function formatPhoneNumber(phone: string): string {
   if (clean.length === 11 && clean.startsWith("27")) {
     return `+27 ${clean.slice(2, 4)} ${clean.slice(4, 7)} ${clean.slice(7)}`;
   }
+  if (clean.length === 15 && !clean.startsWith("258")) {
+    return `WhatsApp ID: ...${clean.slice(-6)}`;
+  }
   return phone.startsWith("+") ? phone : (clean.length > 5 ? `+${clean}` : phone);
 }
 
@@ -564,8 +567,8 @@ export default function Contacts() {
   const filteredContacts = useMemo(() => {
     return contacts.filter(c => {
       const cleanP = (c.phone || "").replace(/\D/g, "");
-      // Exclude WhatsApp groups and non-contacts (groups belong strictly in /groups)
-      if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || cleanP.length < 7 || cleanP.length > 13) return false;
+      // Exclude WhatsApp groups, newsletters, and broadcast
+      if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanP.length < 7 || cleanP.length > 18) return false;
 
       // 1. Search filter
       const matchesSearch = 
@@ -595,7 +598,7 @@ export default function Contacts() {
     let wa = 0, man = 0, leadCount = 0, validTotal = 0;
     contacts.forEach(c => {
       const cleanP = (c.phone || "").replace(/\D/g, "");
-      if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || cleanP.length < 7 || cleanP.length > 13) return;
+      if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanP.length < 7 || cleanP.length > 18) return;
       validTotal++;
       const tags = Array.isArray(c.tags) ? c.tags : [];
       if (tags.includes("WhatsApp") || !tags.includes("Manual")) wa++;

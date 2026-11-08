@@ -451,7 +451,8 @@ export default function Messages() {
       if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
         clean = `258${clean}`;
       }
-      const targetJid = clean.startsWith("120363") ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
+      const isLid = selectedContact.phone.includes("@lid") || (clean.length === 15 && !clean.startsWith("258"));
+      const targetJid = clean.startsWith("120363") ? `${clean}@g.us` : (isLid ? `${clean}@lid` : `${clean}@s.whatsapp.net`);
 
       const response = await apiFetch(`/api/whatsapp/send`, {
         method: "POST",
@@ -662,7 +663,7 @@ export default function Messages() {
   // Filter Contacts for left column (Direct 1-on-1 Messages only - groups belong strictly in /groups)
   const filteredContacts = contacts.filter((c) => {
     const cleanPhone = (c.phone || "").replace(/\D/g, "");
-    if (cleanPhone.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || cleanPhone.length > 13) {
+    if (cleanPhone.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanPhone.length < 7 || cleanPhone.length > 18) {
       return false;
     }
 
@@ -711,7 +712,7 @@ export default function Messages() {
             >
               Todas ({contacts.filter(c => {
                 const p = (c.phone || "").replace(/\D/g, "");
-                return !p.startsWith("120363") && !c.phone.includes("@g.us") && !c.phone.includes("@broadcast") && p.length <= 13;
+                return !p.startsWith("120363") && !c.phone.includes("@g.us") && !c.phone.includes("@broadcast") && !c.phone.includes("@newsletter") && p.length >= 7 && p.length <= 18;
               }).length})
             </button>
             <button

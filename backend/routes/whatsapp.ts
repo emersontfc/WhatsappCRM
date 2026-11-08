@@ -344,12 +344,14 @@ router.post("/send", async (req: AuthRequest, res) => {
   }
 
   // Enforce max messages per day
-  const { data: sub } = await supabaseAdmin
+  const { data: subs } = await supabaseAdmin
     .from("subscriptions")
     .select("messages_used")
     .eq("user_id", userId)
-    .single();
+    .order("created_at", { ascending: false })
+    .limit(1);
 
+  const sub = subs?.[0];
   const currentUsed = sub?.messages_used || 0;
   const maxMessages = plan.max_messages_per_day || 150;
 
@@ -360,15 +362,18 @@ router.post("/send", async (req: AuthRequest, res) => {
     });
   }
 
-  // Normalize JID: handle Mozambique local 9-digit numbers, groups, and standard formats
-  let cleanDigits = (jid || "").replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@lid/g, "").replace(/\D/g, "");
+  // Normalize JID: handle Mozambique local 9-digit numbers, groups, LIDs, and standard formats
+  let cleanDigits = (jid || "").replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@newsletter|@lid/g, "").replace(/\D/g, "");
   if (cleanDigits.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanDigits.slice(0, 2))) {
     cleanDigits = `258${cleanDigits}`;
   }
 
+  const isLid = jid.includes("@lid") || (cleanDigits.length === 15 && !cleanDigits.startsWith("258"));
   let formattedJid = jid;
   if (cleanDigits.startsWith("120363") || jid.includes("@g.us")) {
     formattedJid = `${cleanDigits}@g.us`;
+  } else if (isLid) {
+    formattedJid = `${cleanDigits}@lid`;
   } else {
     formattedJid = `${cleanDigits}@s.whatsapp.net`;
   }
@@ -393,14 +398,14 @@ router.post("/send", async (req: AuthRequest, res) => {
     let resolvedContactId = contactId;
 
     if (!resolvedContactId) {
-      const { data: contact } = await supabaseAdmin
+      const { data: contacts } = await supabaseAdmin
         .from("contacts")
         .select("id")
         .eq("user_id", userId)
         .or(`phone.eq.${cleanDigits},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-        .maybeSingle();
+        .limit(1);
 
-      resolvedContactId = contact?.id;
+      resolvedContactId = contacts?.[0]?.id;
     }
 
     if (!resolvedContactId && !formattedJid.includes("@g.us")) {

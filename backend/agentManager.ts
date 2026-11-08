@@ -563,11 +563,14 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     // Check subscription if not admin
     let currentUsed = 0;
     if (!isAdmin) {
-      const { data: sub } = await supabaseAdmin
+      const { data: subs } = await supabaseAdmin
         .from("subscriptions")
         .select("*")
         .eq("user_id", userId)
-        .maybeSingle();
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const sub = subs?.[0];
 
       if (!sub) {
         console.log(`[AI Engine] No subscription found for user ${userId}`);

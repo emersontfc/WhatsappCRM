@@ -23,12 +23,17 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
     let contactId: string | null = null;
     if (isValidContact) {
       try {
-        const { data: contact } = await supabaseAdmin
+        const phoneNo258 = cleanPhone.startsWith("258") ? cleanPhone.slice(3) : cleanPhone;
+        const phoneWith258 = cleanPhone.startsWith("258") ? cleanPhone : `258${cleanPhone}`;
+
+        const { data: contacts } = await supabaseAdmin
           .from("contacts")
           .select("id, name, unread_count")
           .eq("user_id", userId)
-          .eq("phone", phone)
-          .maybeSingle();
+          .or(`phone.eq.${phone},phone.eq.${cleanPhone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
+          .limit(1);
+
+        const contact = contacts?.[0] || null;
 
         if (contact) {
           contactId = contact.id;
@@ -133,8 +138,14 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
         if (automation.trigger === "keyword") {
           const keywordStr = automation.keyword || "";
-          const keywords = keywordStr.toLowerCase().split(",").map((k: string) => k.trim()).filter(Boolean);
-          if (keywords.some((k: string) => normalizedText.includes(k))) {
+          const keywords = keywordStr
+            .toLowerCase()
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .split(",")
+            .map((k: string) => k.trim())
+            .filter(Boolean);
+          const cleanText = normalizedText.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          if (keywords.some((k: string) => cleanText.includes(k))) {
             shouldTrigger = true;
             console.log(`[Automation] Matched keyword in automation: ${automation.name}`);
           }
@@ -183,16 +194,22 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
           }
           
           try {
-            const { data: contact } = await supabaseAdmin
+            const rawPhone = jid.split("@")[0].replace(/\D/g, "");
+            const pNo258 = rawPhone.startsWith("258") ? rawPhone.slice(3) : rawPhone;
+            const pWith258 = rawPhone.startsWith("258") ? rawPhone : `258${rawPhone}`;
+
+            const { data: contacts } = await supabaseAdmin
               .from("contacts")
               .select("id")
               .eq("user_id", userId)
-              .eq("phone", jid.split("@")[0])
-              .maybeSingle();
+              .or(`phone.eq.${rawPhone},phone.eq.${pNo258},phone.eq.${pWith258}`)
+              .limit(1);
+
+            const resolvedContactId = contacts?.[0]?.id || contactId || null;
 
             await supabaseAdmin.from("messages").insert({
               user_id: userId,
-              contact_id: contact?.id || null,
+              contact_id: resolvedContactId,
               text: automation.response_type === "menu" ? "Menu Inteligente Enviado" : automation.response,
               type: "outbound",
               timestamp: new Date().toISOString(),

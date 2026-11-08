@@ -40,18 +40,34 @@ export const useActivation = () => {
         
         if (response.success && response.data) {
           const subData = response.data;
-          
-          // Standardized: plan is always present, active is always true
           setPlan(subData.plan);
           setPlanDetails(subData.planDetails);
-          setIsActivated(true); // All users are "activated" now
+          setIsActivated(true);
+        } else {
+          // Graceful fallback for logged-in users
+          setPlan("Free");
+          setPlanDetails({
+            max_connections: 1,
+            max_contacts: 50,
+            max_messages_per_day: 20,
+            ai_enabled: true,
+            automation_level: "basic"
+          });
+          setIsActivated(true);
         }
 
       } catch (err) {
         console.error("Error checking activation:", err);
-        setIsActivated(false);
-        setPlan(null);
-        setPlanDetails(null);
+        // Even on error, do not lock out logged-in user
+        setIsActivated(true);
+        setPlan("Free");
+        setPlanDetails({
+          max_connections: 1,
+          max_contacts: 50,
+          max_messages_per_day: 20,
+          ai_enabled: true,
+          automation_level: "basic"
+        });
       } finally {
         setLoading(false);
       }
