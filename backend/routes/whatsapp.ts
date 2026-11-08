@@ -329,7 +329,7 @@ router.get("/me", (req: AuthRequest, res) => {
 
 router.post("/send", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  let { jid, text, to, mediaUrl, mediaType, duration } = req.body;
+  let { jid, text, to, mediaUrl, mediaType, duration, contactId } = req.body;
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -390,15 +390,20 @@ router.post("/send", async (req: AuthRequest, res) => {
     const phoneNo258 = cleanDigits.startsWith("258") ? cleanDigits.slice(3) : cleanDigits;
     const phoneWith258 = cleanDigits.startsWith("258") ? cleanDigits : `258${cleanDigits}`;
 
-    const { data: contact } = await supabaseAdmin
-      .from("contacts")
-      .select("id")
-      .eq("user_id", userId)
-      .or(`phone.eq.${cleanDigits},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-      .maybeSingle();
+    let resolvedContactId = contactId;
 
-    let contactId = contact?.id;
-    if (!contactId && !formattedJid.includes("@g.us")) {
+    if (!resolvedContactId) {
+      const { data: contact } = await supabaseAdmin
+        .from("contacts")
+        .select("id")
+        .eq("user_id", userId)
+        .or(`phone.eq.${cleanDigits},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
+        .maybeSingle();
+
+      resolvedContactId = contact?.id;
+    }
+
+    if (!resolvedContactId && !formattedJid.includes("@g.us")) {
       const { data: createdContact } = await supabaseAdmin
         .from("contacts")
         .insert({
@@ -410,14 +415,14 @@ router.post("/send", async (req: AuthRequest, res) => {
         })
         .select("id")
         .single();
-      contactId = createdContact?.id;
+      resolvedContactId = createdContact?.id;
     }
 
     let savedMessage = null;
-    if (contactId) {
+    if (resolvedContactId) {
       const { data: newMsg } = await supabaseAdmin.from("messages").insert({
         user_id: userId,
-        contact_id: contactId,
+        contact_id: resolvedContactId,
         text: messageText,
         type: "outbound",
         timestamp: msgTimestamp,
@@ -435,11 +440,11 @@ router.post("/send", async (req: AuthRequest, res) => {
             last_message_at: msgTimestamp,
             last_message_text: messageText.substring(0, 100)
           })
-          .eq("id", contactId);
+          .eq("id", resolvedContactId);
       } catch (e) {}
     }
 
-    res.json({ success: true, result, message: savedMessage, contact_id: contactId });
+    res.json({ success: true, result, message: savedMessage, contact_id: resolvedContactId });
   } catch (err: any) {
     console.error("Failed to send message:", err);
     if (err.message && err.message.includes("WhatsApp session not connected")) {

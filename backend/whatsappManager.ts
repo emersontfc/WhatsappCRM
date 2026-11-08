@@ -467,12 +467,26 @@ export class WhatsAppManager {
           }
         }
 
+        let tsSeconds = 0;
+        if (typeof msg.messageTimestamp === "number") {
+          tsSeconds = msg.messageTimestamp;
+        } else if (msg.messageTimestamp && typeof msg.messageTimestamp === "object") {
+          tsSeconds = (msg.messageTimestamp as any).low || (msg.messageTimestamp as any).seconds || 0;
+        } else if (msg.messageTimestamp) {
+          tsSeconds = parseInt(String(msg.messageTimestamp), 10) || 0;
+        }
+        if (!tsSeconds || isNaN(tsSeconds)) {
+          tsSeconds = Math.floor(Date.now() / 1000);
+        }
+        const msgDate = new Date(tsSeconds * 1000);
+        const validTimestamp = isNaN(msgDate.getTime()) ? new Date().toISOString() : msgDate.toISOString();
+
         await supabaseAdmin.from("messages").insert({
           user_id: userId,
           contact_id: contactId,
           text: text,
           type: msg.key.fromMe ? "outbound" : "inbound",
-          timestamp: new Date((msg.messageTimestamp as number) * 1000).toISOString(),
+          timestamp: validTimestamp,
           msg_id: msg.key.id,
           media_url: mediaUrl,
           media_type: mediaType,
@@ -481,7 +495,20 @@ export class WhatsAppManager {
         });
       }
 
-      const msgDate = new Date((msg.messageTimestamp as number) * 1000);
+      let tsSeconds = 0;
+      if (typeof msg.messageTimestamp === "number") {
+        tsSeconds = msg.messageTimestamp;
+      } else if (msg.messageTimestamp && typeof msg.messageTimestamp === "object") {
+        tsSeconds = (msg.messageTimestamp as any).low || (msg.messageTimestamp as any).seconds || 0;
+      } else if (msg.messageTimestamp) {
+        tsSeconds = parseInt(String(msg.messageTimestamp), 10) || 0;
+      }
+      if (!tsSeconds || isNaN(tsSeconds)) {
+        tsSeconds = Math.floor(Date.now() / 1000);
+      }
+      const msgDate = new Date(tsSeconds * 1000);
+      const validTimestamp = isNaN(msgDate.getTime()) ? new Date().toISOString() : msgDate.toISOString();
+
       const now = new Date();
       if (now.getTime() - msgDate.getTime() < 7 * 24 * 60 * 60 * 1000) {
         // 1. Always update last_message_at and last_message_text (these columns always exist)
@@ -489,7 +516,7 @@ export class WhatsAppManager {
           await supabaseAdmin
             .from("contacts")
             .update({
-              last_message_at: msgDate.toISOString(),
+              last_message_at: validTimestamp,
               last_message_text: text.substring(0, 100)
             })
             .eq("id", contactId);

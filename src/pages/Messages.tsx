@@ -201,7 +201,7 @@ export default function Messages() {
           })
           .subscribe();
 
-        // 🔄 Polling fallback for contacts list every 3.5 seconds
+        // 🔄 Fast polling fallback for contacts list every 2 seconds
         const contactsPoll = setInterval(async () => {
           if (!isMounted) return;
           try {
@@ -222,7 +222,7 @@ export default function Messages() {
               });
             }
           } catch (e) {}
-        }, 3500);
+        }, 2000);
 
         return () => {
           supabase.removeChannel(contactsChannel);
@@ -283,8 +283,9 @@ export default function Messages() {
       markConversationAsRead(selectedContact.id);
 
       // 4. Real-time messages subscription with instant direct state append
+      const channelName = `chat-${selectedContact.id}-${Date.now()}`;
       const messagesChannel = supabase
-        .channel(`chat-${selectedContact.id}`)
+        .channel(channelName)
         .on('postgres_changes', { 
           event: '*', 
           schema: 'public', 
@@ -303,10 +304,30 @@ export default function Messages() {
               return [...clean, incoming];
             });
           }
+          // Also update contact last message in sidebar in real-time
+          setContacts(prev => {
+            return prev.map(c => {
+              if (c.id === incoming.contact_id) {
+                return {
+                  ...c,
+                  last_message_at: incoming.timestamp,
+                  last_message_text: incoming.text,
+                  unread_count: (incoming.type === 'inbound' && incoming.contact_id !== selectedContact.id)
+                    ? (c.unread_count || 0) + 1
+                    : c.unread_count
+                };
+              }
+              return c;
+            }).sort((a, b) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime());
+          });
         })
-        .subscribe();
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log(`[Realtime] Connected to chat channel for contact ${selectedContact.id}`);
+          }
+        });
 
-      // 🔄 Fast polling fallback for open conversation every 2.5 seconds
+      // 🔄 Fast polling fallback for open conversation every 1.0 second (instant feel)
       const chatPoll = setInterval(async () => {
         if (!isMounted || !selectedContact?.id || !userId) return;
         try {
@@ -328,7 +349,7 @@ export default function Messages() {
             });
           }
         } catch (e) {}
-      }, 2500);
+      }, 1000);
 
       return () => {
         supabase.removeChannel(messagesChannel);
@@ -440,7 +461,8 @@ export default function Messages() {
           text: textToSend,
           mediaUrl,
           mediaType,
-          duration
+          duration,
+          contactId: selectedContact.id
         }),
       });
 
