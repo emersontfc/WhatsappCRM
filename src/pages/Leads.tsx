@@ -14,7 +14,13 @@ import {
   List,
   Sparkles,
   X,
-  Check
+  Check,
+  Download,
+  Plus,
+  CheckCircle2,
+  Target,
+  BarChart2,
+  Briefcase
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId } from "../supabase";
@@ -42,6 +48,16 @@ export default function Leads() {
   const [editingValue, setEditingValue] = useState<string>("");
   const [editingNotes, setEditingNotes] = useState<string>("");
   const [savingLead, setSavingLead] = useState(false);
+
+  // New Lead Modal State
+  const [isNewLeadModalOpen, setIsNewLeadModalOpen] = useState(false);
+  const [newLeadName, setNewLeadName] = useState("");
+  const [newLeadPhone, setNewLeadPhone] = useState("");
+  const [newLeadStage, setNewLeadStage] = useState<LeadStage>("novo");
+  const [newLeadValue, setNewLeadValue] = useState("");
+  const [newLeadNotes, setNewLeadNotes] = useState("");
+  const [creatingLead, setCreatingLead] = useState(false);
+  const [stageFilter, setStageFilter] = useState<string>("all");
 
   // Fetch leads and contacts
   const fetchLeadsAndContacts = async () => {
@@ -205,15 +221,125 @@ export default function Leads() {
     }
   };
 
+  // Create new manual lead
+  const handleCreateLead = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const userId = await getUserId();
+    if (!userId) return;
+
+    let cleanPhone = newLeadPhone.replace(/\D/g, "");
+    if (!cleanPhone || cleanPhone.length < 8) {
+      toast.error("Por favor, digite um número de telefone válido (mínimo 8 dígitos).");
+      return;
+    }
+    if (cleanPhone.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanPhone.slice(0, 2))) {
+      cleanPhone = `258${cleanPhone}`;
+    }
+
+    setCreatingLead(true);
+    try {
+      // 1. Get or create contact
+      let contactId: string | null = null;
+      const { data: existingContact } = await supabase
+        .from("contacts")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("phone", cleanPhone)
+        .maybeSingle();
+
+      if (existingContact) {
+        contactId = existingContact.id;
+      } else {
+        const { data: newContact, error: cErr } = await supabase
+          .from("contacts")
+          .insert({
+            user_id: userId,
+            name: newLeadName.trim() || cleanPhone,
+            phone: cleanPhone,
+            tags: ["Lead Manual"]
+          })
+          .select("id")
+          .single();
+        if (!cErr && newContact) contactId = newContact.id;
+      }
+
+      // 2. Insert or update lead
+      const numericVal = newLeadValue ? parseFloat(newLeadValue) : null;
+      const { error: lErr } = await supabase
+        .from("leads")
+        .upsert({
+          user_id: userId,
+          contact_id: contactId,
+          phone: cleanPhone,
+          name: newLeadName.trim() || null,
+          stage: newLeadStage,
+          value: numericVal,
+          notes: newLeadNotes.trim() || null,
+          status: newLeadStage === "venda_fechada" ? "closed" : newLeadStage === "perdido" ? "lost" : "active",
+          source: "manual",
+          updated_at: new Date().toISOString()
+        }, { onConflict: "user_id,phone" });
+
+      if (lErr) throw lErr;
+
+      toast.success("Oportunidade cadastrada com sucesso!");
+      setIsNewLeadModalOpen(false);
+      setNewLeadName("");
+      setNewLeadPhone("");
+      setNewLeadValue("");
+      setNewLeadNotes("");
+      setNewLeadStage("novo");
+      await fetchLeadsAndContacts();
+    } catch (err: any) {
+      console.error("Error creating manual lead:", err);
+      toast.error(err.message || "Erro ao cadastrar lead.");
+    } finally {
+      setCreatingLead(false);
+    }
+  };
+
+  // Export leads to CSV
+  const handleExportCSV = () => {
+    if (filteredLeads.length === 0) {
+      toast.error("Nenhuma oportunidade para exportar.");
+      return;
+    }
+    const headers = ["Nome", "Telefone", "Etapa", "Valor (MZN)", "Origem", "Última Mensagem", "Notas", "Data de Criação"];
+    const rows = filteredLeads.map(l => [
+      `"${(l.name || 'Sem Nome').replace(/"/g, '""')}"`,
+      `"${l.phone || ''}"`,
+      `"${LEAD_STAGES.find(s => s.id === l.stage)?.label || l.stage}"`,
+      `"${l.value || 0}"`,
+      `"${l.source || 'whatsapp'}"`,
+      `"${(l.last_message || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+      `"${(l.notes || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+      `"${new Date(l.created_at).toLocaleDateString('pt-MZ')}"`
+    ]);
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `leads_agentx_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("Planilha de Leads exportada com sucesso!");
+  };
+
   // Filtered leads
   const filteredLeads = useMemo(() => {
-    return leads.filter(lead => 
-      lead.phone?.includes(searchTerm) || 
-      lead.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.intent?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.notes?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [leads, searchTerm]);
+    return leads.filter(lead => {
+      const matchesSearch = 
+        lead.phone?.includes(searchTerm) || 
+        lead.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        lead.intent?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        lead.notes?.toLowerCase().includes(searchTerm.toLowerCase());
+
+      const matchesStage = stageFilter === "all" || lead.stage === stageFilter;
+      return matchesSearch && matchesStage;
+    });
+  }, [leads, searchTerm, stageFilter]);
 
   // Group leads by stage for Kanban
   const kanbanColumns = useMemo(() => {
@@ -228,9 +354,16 @@ export default function Leads() {
     });
   }, [filteredLeads]);
 
-  // Total pipeline value
-  const totalPipelineValue = useMemo(() => {
-    return leads.reduce((acc, curr) => acc + (curr.value || 0), 0);
+  // Total metrics
+  const metrics = useMemo(() => {
+    const total = leads.length;
+    const wonLeads = leads.filter(l => l.stage === "venda_fechada");
+    const wonCount = wonLeads.length;
+    const wonValue = wonLeads.reduce((acc, curr) => acc + (curr.value || 0), 0);
+    const inProgress = leads.filter(l => l.stage !== "venda_fechada" && l.stage !== "perdido");
+    const pipelineValue = inProgress.reduce((acc, curr) => acc + (curr.value || 0), 0);
+    const conversionRate = total > 0 ? Math.round((wonCount / total) * 100) : 0;
+    return { total, wonCount, wonValue, pipelineValue, conversionRate };
   }, [leads]);
 
   if (activationLoading) {
@@ -240,48 +373,40 @@ export default function Leads() {
       </div>
     );
   }
-
-  if (!isActivated || plan === "Free") {
-    return (
-      <div className="max-w-4xl mx-auto space-y-8 p-6">
-        <Card className="bg-amber-50 border-amber-200">
-          <CardContent className="py-12 text-center space-y-4">
-            <UserPlus size={48} className="mx-auto text-amber-400" />
-            <h3 className="text-xl font-bold text-amber-900">Recurso Indisponível</h3>
-            <p className="text-amber-700 max-w-md mx-auto">
-              O Pipeline de Vendas e CRM de Leads está disponível nos planos pagos. Faça um upgrade para gerir as suas oportunidades.
-            </p>
-            <Button onClick={() => navigate("/activate")} className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl">
-              Fazer Upgrade
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto w-full">
+    <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto w-full pb-8">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="space-y-1">
-          <h2 className="text-xl sm:text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2 sm:gap-3">
-            <TrendingUp className="text-emerald-600" />
+          <h2 className="text-xl sm:text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2.5">
+            <div className="p-2 bg-emerald-100 rounded-xl text-emerald-600">
+              <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6" />
+            </div>
             Pipeline de Vendas & Leads
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 font-medium">
-            Acompanhe a jornada comercial de cada cliente desde o primeiro contacto até o fecho.
+            Gerencie o funil comercial, acompanhe o valor negociado e converta conversas em vendas fechadas.
           </p>
         </div>
 
-        {/* Stats & View Mode Switcher */}
-        <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3">
-          <div className="flex flex-col items-end bg-emerald-50 px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-xl border border-emerald-200 shrink-0">
-            <span className="text-[9px] sm:text-[10px] uppercase tracking-wider font-bold text-emerald-800">Pipeline Total</span>
-            <span className="text-xs sm:text-sm font-black text-emerald-700">
-              {totalPipelineValue.toLocaleString()} MZN
-            </span>
-          </div>
+        {/* Action Controls */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <Button
+            onClick={() => setIsNewLeadModalOpen(true)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs sm:text-sm font-bold h-9 sm:h-10 px-3.5 sm:px-4 shadow-sm flex items-center gap-1.5"
+          >
+            <Plus size={16} />
+            <span>Novo Lead</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            onClick={handleExportCSV}
+            className="border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs sm:text-sm font-bold h-9 sm:h-10 px-3 sm:px-3.5 flex items-center gap-1.5"
+          >
+            <Download size={15} />
+            <span className="hidden sm:inline">Exportar CSV</span>
+          </Button>
 
           <div className="flex bg-slate-100 p-1 rounded-xl shrink-0">
             <button
@@ -310,20 +435,123 @@ export default function Leads() {
         </div>
       </div>
 
-      {/* Filter & Search Bar */}
-      <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 items-stretch sm:items-center justify-between bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-200 shadow-sm">
-        <div className="relative flex-1 w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <Input 
-            placeholder="Buscar oportunidades..." 
-            className="pl-9 rounded-xl border-slate-200 text-xs sm:text-sm h-9 bg-slate-50 focus:bg-white"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+      {/* Commercial Metrics Overview Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {/* Pipeline Value */}
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-500">Pipeline Aberto</span>
+            <span className="p-1.5 bg-blue-50 text-blue-600 rounded-lg">
+              <DollarSign size={14} />
+            </span>
+          </div>
+          <div className="mt-2">
+            <span className="text-lg sm:text-2xl font-black text-slate-900">
+              {metrics.pipelineValue.toLocaleString()} <span className="text-xs font-bold text-slate-400">MZN</span>
+            </span>
+            <p className="text-[10px] text-slate-400 mt-0.5">Em negociação ativa</p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-slate-500 font-medium whitespace-nowrap px-1">
-          <span>{filteredLeads.length} oportunidades</span>
+        {/* Won Value */}
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-white to-emerald-50/40 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-emerald-800">Vendas Ganhas</span>
+            <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
+              <CheckCircle2 size={14} />
+            </span>
+          </div>
+          <div className="mt-2">
+            <span className="text-lg sm:text-2xl font-black text-emerald-700">
+              {metrics.wonValue.toLocaleString()} <span className="text-xs font-bold text-emerald-500">MZN</span>
+            </span>
+            <p className="text-[10px] text-emerald-600 font-medium mt-0.5">{metrics.wonCount} negócio(s) fechado(s)</p>
+          </div>
+        </div>
+
+        {/* Total Leads Count */}
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-500">Total Oportunidades</span>
+            <span className="p-1.5 bg-purple-50 text-purple-600 rounded-lg">
+              <UserPlus size={14} />
+            </span>
+          </div>
+          <div className="mt-2">
+            <span className="text-lg sm:text-2xl font-black text-slate-900">
+              {metrics.total}
+            </span>
+            <p className="text-[10px] text-slate-400 mt-0.5">Leads na base comercial</p>
+          </div>
+        </div>
+
+        {/* Conversion Rate */}
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-slate-500">Taxa de Conversão</span>
+            <span className="p-1.5 bg-amber-50 text-amber-600 rounded-lg">
+              <Target size={14} />
+            </span>
+          </div>
+          <div className="mt-2">
+            <span className="text-lg sm:text-2xl font-black text-slate-900">
+              {metrics.conversionRate}%
+            </span>
+            <p className="text-[10px] text-slate-400 mt-0.5">Leads convertidos em ganho</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter & Search Controls */}
+      <div className="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+        <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+          <div className="relative flex-1 w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <Input 
+              placeholder="Buscar por nome, telefone, intenção ou notas..." 
+              className="pl-9 rounded-xl border-slate-200 text-xs sm:text-sm h-9 bg-slate-50 focus:bg-white"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-slate-500 font-medium whitespace-nowrap px-1">
+            <span>{filteredLeads.length} oportunidade(s) filtrada(s)</span>
+          </div>
+        </div>
+
+        {/* Stage Filter Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+          <button
+            onClick={() => setStageFilter("all")}
+            className={cn(
+              "px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0",
+              stageFilter === "all"
+                ? "bg-slate-900 text-white shadow-sm"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            )}
+          >
+            Todas ({leads.length})
+          </button>
+          {LEAD_STAGES.map(stage => {
+            const count = leads.filter(l => l.stage === stage.id).length;
+            const isSelected = stageFilter === stage.id;
+            return (
+              <button
+                key={stage.id}
+                onClick={() => setStageFilter(isSelected ? "all" : stage.id)}
+                className={cn(
+                  "px-2.5 py-1 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5",
+                  isSelected
+                    ? "bg-slate-900 text-white shadow-sm"
+                    : `${stage.bgLight} ${stage.color} hover:opacity-80`
+                )}
+              >
+                <span>{stage.label}</span>
+                <span className="opacity-75 text-[10px]">({count})</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -732,6 +960,130 @@ export default function Leads() {
                 {savingLead ? "A guardar alterações..." : "Guardar Alterações do Lead"}
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Novo Lead Manual */}
+      {isNewLeadModalOpen && (
+        <div 
+          onClick={() => setIsNewLeadModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div 
+            onClick={e => e.stopPropagation()}
+            className="w-full max-w-lg bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-100 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+          >
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-2.5">
+                <div className="h-10 w-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <UserPlus size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">Cadastrar Nova Oportunidade</h3>
+                  <p className="text-xs text-slate-500">Adicione um novo lead ao seu funil comercial</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsNewLeadModalOpen(false)}
+                className="h-8 w-8 rounded-full hover:bg-slate-200/60 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleCreateLead} className="p-5 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Nome do Lead / Cliente
+                </label>
+                <Input
+                  required
+                  placeholder="Ex: Carlos Machel ou Empresa XYZ"
+                  value={newLeadName}
+                  onChange={e => setNewLeadName(e.target.value)}
+                  className="rounded-xl text-xs sm:text-sm h-10 border-slate-200"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Telefone / WhatsApp
+                </label>
+                <Input
+                  required
+                  placeholder="Ex: 841234567 ou 258841234567"
+                  value={newLeadPhone}
+                  onChange={e => setNewLeadPhone(e.target.value)}
+                  className="rounded-xl text-xs sm:text-sm h-10 border-slate-200"
+                />
+                <span className="text-[10px] text-slate-400">Pode digitar com ou sem o prefixo 258</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Etapa Inicial
+                  </label>
+                  <select
+                    value={newLeadStage}
+                    onChange={e => setNewLeadStage(e.target.value as LeadStage)}
+                    className="w-full text-xs h-10 px-3 rounded-xl border border-slate-200 bg-white font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    {LEAD_STAGES.map(s => (
+                      <option key={s.id} value={s.id}>{s.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                    Valor Estimado (MZN)
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="Ex: 5000"
+                    value={newLeadValue}
+                    onChange={e => setNewLeadValue(e.target.value)}
+                    className="rounded-xl text-xs sm:text-sm h-10 border-slate-200"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Observações & Detalhes da Oportunidade
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Interesse em produto X, orçamento enviado, origem anúncio Meta..."
+                  value={newLeadNotes}
+                  onChange={e => setNewLeadNotes(e.target.value)}
+                  className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 resize-none outline-none text-slate-700"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsNewLeadModalOpen(false)}
+                  className="rounded-xl text-xs h-10 px-4"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={creatingLead}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold h-10 px-5 shadow-sm"
+                >
+                  {creatingLead ? "A cadastrar..." : "Cadastrar Lead"}
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

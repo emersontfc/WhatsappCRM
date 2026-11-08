@@ -141,7 +141,7 @@ export default function Layout({ children }: LayoutProps) {
     {
       title: "Audiência",
       items: [
-        { name: "Leads", path: "/leads", icon: UserPlus, premiumOnly: true },
+        { name: "Leads (Funil)", path: "/leads", icon: UserPlus },
         { name: "Contatos", path: "/contacts", icon: Users },
         { name: "Grupos", path: "/groups", icon: Users2, premiumOnly: true },
       ]
