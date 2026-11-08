@@ -25,7 +25,7 @@ ENV PORT=3000
 COPY package*.json ./
 
 # Install all dependencies (including devDependencies required for Vite build and tsx)
-RUN npm install --include=dev
+RUN npm install --include=dev --ignore-scripts
 
 # Copy the rest of the application code
 COPY . .
