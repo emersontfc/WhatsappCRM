@@ -116,3 +116,4 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS financial_limit NUMERIC(12,2) DEFAUL
 
 -- 7. Notificar PostgREST para recarregar o schema cache
 NOTIFY pgrst, 'reload schema';
+

@@ -86,3 +86,4 @@ No separador **Linha Temporal** do menu **Vendas & Pedidos**, o gestor acompanha
 - Alterações em permissões e configurações de agentes.
 
 Cada evento indica o horário, o operador/agente responsável, os detalhes do contacto e o resultado da operação.
+

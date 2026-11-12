@@ -139,3 +139,4 @@ Nenhum agente de IA tem permissão de marcar diretamente um pedido como `paid` o
   - Code-splitting na compilação do Vite (`vendor-react`, `vendor-supabase`, `vendor-ui`).
   - Cache de conexão Supabase com reconnection automática e timeout estrito.
   - Rate limiting e espaçamento mínimo anti-spam (10s) nas ferramentas de marketing.
+

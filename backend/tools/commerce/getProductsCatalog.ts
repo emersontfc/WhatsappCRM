@@ -52,3 +52,4 @@ export const getProductsCatalogTool: ToolDefinition = {
     }
   }
 };
+

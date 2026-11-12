@@ -84,3 +84,4 @@ Todos os endpoints exigem cabeçalho de autenticação Bearer Token (`authentica
 | `POST` | `/api/commerce/orders/:id/reject` | Rejeição do comprovativo com registo do motivo. |
 | `GET` | `/api/commerce/orders/:id/timeline` | Histórico completo de eventos do pedido. |
 | `GET` | `/api/commerce/operations-feed` | Feed unificado de operações recentes de agentes e comércio. |
+

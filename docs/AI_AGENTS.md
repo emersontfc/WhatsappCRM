@@ -81,3 +81,4 @@ Para proteger a integridade operacional e financeira da empresa, o AgentX 2.0 im
 Em caso de reinício do servidor Node.js ou da VPS:
 - Todos os estados dos pedidos e comprovativos estão persistidos no Supabase (`orders.status`, `payment_verifications.status`).
 - Quando uma nova mensagem de um cliente com pedido pendente chega, o agente consulta `getOrderStatus` ou o histórico de interações e retoma exatamente o ponto onde a conversa parou (ex: *"Ainda estamos a aguardar a validação do seu comprovativo de 500 MT para o pedido AGX-492104"*), sem reiniciar o fluxo do zero.
+

@@ -119,3 +119,4 @@ O **Kazix AgentX 2.0** disponibiliza um Registro Central de Ferramentas (`backen
   - `paidOrdersCount`: Quantidade de pedidos liquidados.
   - `pendingVerificationsCount`: Comprovativos à espera de conferência.
   - `conversionRate`: Taxa percentual de conversão de leads em clientes.
+
