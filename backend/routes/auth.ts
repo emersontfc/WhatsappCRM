@@ -44,19 +44,20 @@ router.post("/register", async (req, res) => {
     if (authError) throw authError;
 
     if (authUser.user) {
-      const isAdminEmail = email === "alcindacharles@gmail.com" || email === "emersontorres42@gmail.com";
-      
-      // Create profile in public.users
+      // Create standard user profile in public.users (role defaults safely to 'user')
+      const initialAdminEmail = (process.env.INITIAL_SUPERADMIN_EMAIL || "").trim().toLowerCase();
+      const isInitialSuperadmin = Boolean(initialAdminEmail && email.toLowerCase() === initialAdminEmail);
+
       const { error: profileError } = await supabaseAdmin
         .from("users")
         .insert({
           id: authUser.user.id,
           email: email,
           name: name,
-          role: isAdminEmail ? "admin" : "user",
+          role: isInitialSuperadmin ? "superadmin" : "user",
           created_at: new Date().toISOString(),
-          expires_at: isAdminEmail ? "2099-12-31T23:59:59Z" : null,
-          plan: isAdminEmail ? "Premium" : "Free"
+          expires_at: isInitialSuperadmin ? "2099-12-31T23:59:59Z" : null,
+          plan: isInitialSuperadmin ? "Premium" : "Free"
         });
 
       if (profileError) {

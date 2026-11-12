@@ -142,14 +142,14 @@ router.get("/subscription", async (req: AuthRequest, res) => {
     let profile = profileResult.data;
     let subscription = subResult.data?.[0] || null;
 
-    const adminEmails = (process.env.ADMIN_EMAIL || "alcindacharles@gmail.com,emersontorres42@gmail.com").split(",").map(e => e.trim());
-    const userEmail = req.user?.email || "";
-    const isInitialAdmin = adminEmails.includes(userEmail);
+    const adminEmails = (process.env.ADMIN_EMAIL || process.env.INITIAL_SUPERADMIN_EMAIL || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    const userEmail = (req.user?.email || "").toLowerCase();
+    const isInitialAdmin = Boolean(userEmail && adminEmails.includes(userEmail));
 
-    console.log(`[AI API] User email: ${userEmail}, Admin emails: ${adminEmails.join(", ")}, Is initial admin: ${isInitialAdmin}`);
+    console.log(`[AI API] User email: ${userEmail}, Is configured admin: ${isInitialAdmin}`);
 
-    if (profile && isInitialAdmin && profile.role !== "admin") {
-      console.log(`[AI API] Upgrading user ${userId} (${userEmail}) to admin role`);
+    if (profile && isInitialAdmin && profile.role !== "admin" && profile.role !== "superadmin") {
+      console.log(`[AI API] Setting user ${userId} (${userEmail}) to admin role per environment config`);
       const { data: updatedProfile, error: updateError } = await supabaseAdmin
         .from("users")
         .update({ role: "admin", plan: "Admin" })
@@ -158,7 +158,6 @@ router.get("/subscription", async (req: AuthRequest, res) => {
         .single();
       if (updateError) console.error(`[AI API] Error upgrading profile:`, updateError);
       else {
-        console.log(`[AI API] Successfully upgraded user ${userId} to admin`);
         profile = updatedProfile;
       }
     }

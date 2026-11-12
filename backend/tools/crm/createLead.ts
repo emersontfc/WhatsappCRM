@@ -24,7 +24,7 @@ export const createLeadTool: ToolDefinition = {
       stage: {
         type: "string",
         description: "Etapa inicial do lead (padrão: 'novo').",
-        enum: ["novo", "em_atendimento", "proposta_enviada", "ganho", "perdido"]
+        enum: ["novo", "em_atendimento", "proposta_enviada", "venda_fechada", "ganho", "perdido"]
       }
     }
   },
@@ -45,25 +45,32 @@ export const createLeadTool: ToolDefinition = {
         .maybeSingle();
 
       const leadName = args.name || contact?.name || null;
+      let rawStage = (args.stage || "novo").toLowerCase();
+      if (rawStage === "ganho") rawStage = "venda_fechada";
+      const normalizedStage = ["novo", "em_atendimento", "proposta_enviada", "venda_fechada", "perdido"].includes(rawStage)
+        ? rawStage
+        : "novo";
 
       const { data: lead, error } = await supabaseAdmin
         .from("leads")
         .upsert({
           user_id: ctx.userId,
+          contact_id: contact?.id || null,
           phone: targetPhone,
           name: leadName,
-          status: args.stage || "novo",
+          stage: normalizedStage,
+          status: normalizedStage,
           last_message: args.interest ? `Interesse: ${args.interest}` : null,
           updated_at: new Date().toISOString()
         }, { onConflict: "user_id,phone" })
-        .select("id, name, phone, status")
+        .select("id, name, phone, stage, status")
         .single();
 
       if (error) throw error;
 
       return {
         success: true,
-        message: `Lead ${leadName || targetPhone} cadastrado/qualificado com sucesso no CRM.`,
+        message: `Lead ${leadName || targetPhone} cadastrado/qualificado com sucesso no CRM (Etapa: ${normalizedStage}).`,
         data: lead
       };
     } catch (err: any) {

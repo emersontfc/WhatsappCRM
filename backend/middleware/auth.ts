@@ -5,11 +5,13 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     email?: string;
+    role?: string;
+    companyId?: string;
   };
 }
 
-// Simple token cache to prevent hitting Supabase Auth API on every request
-const tokenCache = new Map<string, { user: { id: string; email?: string }; expiresAt: number }>();
+// Token cache to prevent hitting Supabase Auth API on every request (60s TTL)
+const tokenCache = new Map<string, { user: { id: string; email?: string; role?: string; companyId?: string }; expiresAt: number }>();
 
 export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -34,9 +36,19 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
+    // Retrieve role and company profile
+    const { data: profile } = await supabaseAdmin
+      .from("users")
+      .select("role, id")
+      .eq("id", user.id)
+      .limit(1)
+      .maybeSingle();
+
     req.user = {
       id: user.id,
       email: user.email,
+      role: profile?.role || "user",
+      companyId: user.id
     };
 
     // Cache the result for 60 seconds
@@ -67,14 +79,9 @@ export const authorizeAdmin = async (req: AuthRequest, res: Response, next: Next
   }
 
   try {
-    const { data: profile } = await supabaseAdmin
-      .from("users")
-      .select("role")
-      .eq("id", req.user.id)
-      .maybeSingle();
-
-    if (profile?.role !== "admin") {
-      console.warn(`Admin access denied for user: ${req.user?.email}, role: ${profile?.role}`);
+    const role = req.user.role;
+    if (role !== "admin" && role !== "superadmin") {
+      console.warn(`Admin access denied for user: ${req.user?.email}, role: ${role}`);
       return res.status(403).json({ success: false, error: "Admin access required" });
     }
     next();
@@ -82,5 +89,21 @@ export const authorizeAdmin = async (req: AuthRequest, res: Response, next: Next
     console.error("[Auth] Admin check error:", err);
     return res.status(500).json({ success: false, error: "Internal server error" });
   }
+};
+
+export const authorizeRoles = (allowedRoles: string[]) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user?.id) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+
+    const userRole = req.user.role || "user";
+    if (userRole === "superadmin" || allowedRoles.includes(userRole)) {
+      return next();
+    }
+
+    console.warn(`Role access denied for user: ${req.user?.email}, role: ${userRole}, required: [${allowedRoles.join(", ")}]`);
+    return res.status(403).json({ success: false, error: "Permissões insuficientes para esta operação." });
+  };
 };
 

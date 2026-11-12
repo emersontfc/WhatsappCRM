@@ -447,7 +447,7 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
 export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false) {
   try {
     console.log(`[AI Engine] Checking agents for ${userId}, text: "${text}" (isSelfMessage: ${isSelfMessage})`);
-    let { data: agents, error } = await supabaseAdmin
+    const { data: agents, error } = await supabaseAdmin
       .from("agents")
       .select("*")
       .eq("user_id", userId)
@@ -460,22 +460,9 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       return;
     }
 
-    if (!agents || agents.length === 0) {
-      const { data: anyAgents } = await supabaseAdmin
-        .from("agents")
-        .select("*")
-        .eq("user_id", userId)
-        .not("api_key", "is", null)
-        .order("created_at", { ascending: false })
-        .limit(1);
-      if (anyAgents && anyAgents.length > 0) {
-        agents = anyAgents;
-      }
-    }
-
     const agent = agents && agents.length > 0 ? agents[0] : null;
     if (!agent) {
-      console.log(`[AI Engine] No active or configured agent found for user ${userId}`);
+      console.log(`[AI Engine] Agent is inactive or not found for user ${userId}. Skipping AI response.`);
       return;
     }
     
@@ -530,22 +517,16 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       ...(userData?.admin_phones ? userData.admin_phones.split(/[\n,;]+/) : [])
     ].filter(Boolean);
 
-    const isContactAdmin = contactData && (
-      /emerson/i.test(contactData.name || "") ||
-      (Array.isArray(contactData.tags) && contactData.tags.some((t: string) => /admin|gerente|proprietario|dono/i.test(t)))
-    );
-
+    // Authorized administration is STRICTLY based on verified telephone identity, NEVER on contact text/names/tags
     const isOwner = isSelfMessage || 
                     rawList.some(adminNum => matchesNumber(cleanSenderPhone, String(adminNum))) ||
                     (Boolean(myLid) && cleanSenderPhone === myLid) ||
-                    (Boolean(myPhone) && cleanSenderPhone === myPhone) ||
-                    Boolean(isContactAdmin);
+                    (Boolean(myPhone) && cleanSenderPhone === myPhone);
 
     const role: UserRole = isOwner ? "admin" : "lead";
 
     console.log(`[AI Engine] Message evaluation for ${jid}:`);
     console.log(`  - cleanSenderPhone: ${cleanSenderPhone}, isSelf: ${isSelfMessage}`);
-    console.log(`  - contactName: "${contactData?.name || ''}"`);
     console.log(`  - isOwner: ${isOwner}, role: ${role}`);
 
     if (isOwner) {
@@ -612,7 +593,34 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     }
 
     const contextKey = `${userId}:${jid}`;
-    let context = contextCache.get(contextKey) || [];
+    let context = contextCache.get(contextKey);
+
+    // Persistent Memory: If in-memory cache is empty (e.g. after restart), rebuild from database messages
+    if (!context || context.length === 0) {
+      context = [];
+      try {
+        if (contactData?.id) {
+          const { data: recentMsgs } = await supabaseAdmin
+            .from("messages")
+            .select("text, type")
+            .eq("user_id", userId)
+            .eq("contact_id", contactData.id)
+            .order("timestamp", { ascending: false })
+            .limit(8);
+
+          if (recentMsgs && recentMsgs.length > 0) {
+            const chronoSorted = [...recentMsgs].reverse();
+            for (const m of chronoSorted) {
+              const prefix = m.type === "outbound" ? "Agent: " : "User: ";
+              context.push(`${prefix}${m.text}`);
+            }
+            console.log(`[AI Engine] Restored ${context.length} persistent conversation turns from database for ${jid}`);
+          }
+        }
+      } catch (memErr) {
+        console.warn("[AI Engine] Failed to load persistent conversation context:", memErr);
+      }
+    }
     
     await whatsappManager.sendPresenceUpdate(userId, jid, "composing");
     

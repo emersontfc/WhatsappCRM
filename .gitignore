@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+!.env.production.example
+
+# Sensitive user media and WhatsApp session credentials
+uploads/
+whatsapp_sessions_data/
+scratch/
+*.session
+*.key
+*.bak

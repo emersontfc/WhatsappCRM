@@ -598,12 +598,29 @@ async function startServer() {
   app.use("/api/menus", authenticate, menuRoutes);
   app.use("/api/appointments", appointmentRoutes);
 
-  // Serve uploads directory
+  // Secure uploads access with strict Path Traversal sanitization
   const uploadsDir = path.join(process.cwd(), "uploads");
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
-  app.use("/uploads", express.static(uploadsDir));
+
+  app.get("/uploads/:filename", (req, res) => {
+    const rawFilename = req.params.filename;
+    // Strict basename extraction to completely block path traversal attacks
+    const safeFilename = path.basename(rawFilename);
+    const filePath = path.join(uploadsDir, safeFilename);
+
+    if (!filePath.startsWith(uploadsDir)) {
+      return res.status(403).json({ success: false, error: "Access denied." });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, error: "Arquivo não encontrado." });
+    }
+
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(filePath);
+  });
 
   // Ensure whatsapp_sessions_data directory exists
   const sessionsDir = path.join(process.cwd(), "whatsapp_sessions_data");

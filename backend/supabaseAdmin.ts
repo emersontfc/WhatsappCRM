@@ -1,30 +1,32 @@
 import "./loadEnv.ts";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = (
-  process.env.SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL ||
-  "https://xhnxhfhmplstqiavswgo.supabase.co"
-).trim();
-const supabaseServiceRoleKey = (
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhobnhoZmhtcGxzdHFpYXZzd2dvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDI5NjI5OCwiZXhwIjoyMDg5ODcyMjk4fQ.VGyJSSjU_8TF0Vc5ZFCMR0ZMPqprgB472P6zn6Q31rE"
-).trim();
+const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
+const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "").trim();
 
 if (!supabaseUrl || !supabaseServiceRoleKey) {
-  console.warn("[Supabase] WARNING: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing in environment variables.");
+  const missing = [];
+  if (!supabaseUrl) missing.push("SUPABASE_URL");
+  if (!supabaseServiceRoleKey) missing.push("SUPABASE_SERVICE_ROLE_KEY");
+  console.error(`[Supabase Admin] CRITICAL CONFIGURATION ERROR: Mandatory environment variable(s) missing: ${missing.join(", ")}`);
+  console.error("[Supabase Admin] Please provide these credentials in your .env or environment configuration.");
 }
 
-// Admin client for backend operations (service role key)
+// Admin client for backend operations (service role key exclusively from environment)
 export const supabaseAdmin = createClient(
   supabaseUrl || "https://placeholder.supabase.co",
-  supabaseServiceRoleKey || "placeholder"
+  supabaseServiceRoleKey || "placeholder",
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    }
+  }
 );
 
 // Alias for convenience
 export const supabase = supabaseAdmin;
 
 if (supabaseUrl && supabaseServiceRoleKey) {
-  console.log(`[Supabase Admin] Initialized successfully.`);
+  console.log(`[Supabase Admin] Initialized successfully with target: ${supabaseUrl.split("@")[0].slice(0, 20)}...`);
 }

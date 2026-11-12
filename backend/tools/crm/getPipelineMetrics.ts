@@ -19,14 +19,16 @@ export const getPipelineMetricsTool: ToolDefinition = {
     try {
       let query = supabaseAdmin
         .from("leads")
-        .select("id, name, phone, status, last_message, updated_at")
+        .select("id, name, phone, stage, status, last_message, updated_at")
         .eq("user_id", ctx.userId);
 
       if (args.stage) {
-        query = query.eq("status", args.stage);
+        let filterStage = args.stage.toLowerCase();
+        if (filterStage === "ganho") filterStage = "venda_fechada";
+        query = query.or(`stage.eq.${filterStage},status.eq.${filterStage}`);
       }
 
-      const { data: leads, error } = await query.order("updated_at", { ascending: false }).limit(50);
+      const { data: leads, error } = await query.order("updated_at", { ascending: false }).limit(100);
 
       if (error) throw error;
 
@@ -36,19 +38,30 @@ export const getPipelineMetricsTool: ToolDefinition = {
         .eq("user_id", ctx.userId);
 
       const total = leads?.length || 0;
-      const byStage: Record<string, number> = {};
+      const byStage: Record<string, number> = {
+        novo: 0,
+        em_atendimento: 0,
+        proposta_enviada: 0,
+        venda_fechada: 0,
+        perdido: 0
+      };
       
       leads?.forEach(l => {
-        const st = l.status || "novo";
+        let st = (l.stage || l.status || "novo").toLowerCase();
+        if (st === "ganho") st = "venda_fechada";
         byStage[st] = (byStage[st] || 0) + 1;
       });
 
-      const topOpportunities = leads?.slice(0, 5).map(l => ({
-        nome: l.name || "Lead sem nome",
-        telefone: l.phone,
-        etapa: l.status || "novo",
-        ultimaInteracao: l.last_message ? l.last_message.substring(0, 80) : ""
-      }));
+      const topOpportunities = leads?.slice(0, 5).map(l => {
+        let st = (l.stage || l.status || "novo").toLowerCase();
+        if (st === "ganho") st = "venda_fechada";
+        return {
+          nome: l.name || "Lead sem nome",
+          telefone: l.phone,
+          etapa: st,
+          ultimaInteracao: l.last_message ? l.last_message.substring(0, 80) : ""
+        };
+      });
 
       const summaryMsg = total > 0
         ? `Métricas do CRM obtidas: ${total} oportunidade(s) no funil e ${contactsCount || 0} contacto(s) na base.`

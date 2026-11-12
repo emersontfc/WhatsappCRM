@@ -15,8 +15,8 @@ export const moveLeadStageTool: ToolDefinition = {
       },
       stage: {
         type: "string",
-        description: "Nova etapa do lead: 'novo', 'em_atendimento', 'proposta_enviada', 'ganho', 'perdido'.",
-        enum: ["novo", "em_atendimento", "proposta_enviada", "ganho", "perdido"]
+        description: "Nova etapa do lead: 'novo', 'em_atendimento', 'proposta_enviada', 'venda_fechada', 'perdido'.",
+        enum: ["novo", "em_atendimento", "proposta_enviada", "venda_fechada", "ganho", "perdido"]
       },
       notes: {
         type: "string",
@@ -29,12 +29,18 @@ export const moveLeadStageTool: ToolDefinition = {
     try {
       const cleanPhone = args.phoneOrName.replace(/\D/g, "");
 
+      let rawStage = (args.stage || "novo").toLowerCase();
+      if (rawStage === "ganho") rawStage = "venda_fechada";
+      const normalizedStage = ["novo", "em_atendimento", "proposta_enviada", "venda_fechada", "perdido"].includes(rawStage)
+        ? rawStage
+        : "novo";
+
       // 1. Find lead
       let lead = null;
       if (cleanPhone.length >= 7) {
         const { data } = await supabaseAdmin
           .from("leads")
-          .select("id, name, phone, status")
+          .select("id, name, phone, stage, status")
           .eq("user_id", ctx.userId)
           .ilike("phone", `%${cleanPhone}%`)
           .maybeSingle();
@@ -44,7 +50,7 @@ export const moveLeadStageTool: ToolDefinition = {
       if (!lead) {
         const { data } = await supabaseAdmin
           .from("leads")
-          .select("id, name, phone, status")
+          .select("id, name, phone, stage, status")
           .eq("user_id", ctx.userId)
           .ilike("name", `%${args.phoneOrName.trim()}%`)
           .limit(1)
@@ -59,9 +65,10 @@ export const moveLeadStageTool: ToolDefinition = {
         };
       }
 
-      // 2. Update lead stage
+      // 2. Update lead stage & status simultaneously
       const updatePayload: any = {
-        status: args.stage,
+        stage: normalizedStage,
+        status: normalizedStage,
         updated_at: new Date().toISOString()
       };
 
@@ -79,12 +86,12 @@ export const moveLeadStageTool: ToolDefinition = {
 
       return {
         success: true,
-        message: `Lead ${lead.name || lead.phone} movido com sucesso para a etapa "${args.stage}".`,
+        message: `Lead ${lead.name || lead.phone} movido com sucesso para a etapa "${normalizedStage}".`,
         data: {
           leadId: lead.id,
           nome: lead.name,
           telefone: lead.phone,
-          novaEtapa: args.stage
+          novaEtapa: normalizedStage
         }
       };
     } catch (err: any) {
