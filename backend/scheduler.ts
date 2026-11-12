@@ -30,6 +30,24 @@ export function startScheduler() {
       
       console.log(`[Scheduler] Checking for pending tasks at ${nowISO} (Local: ${now.toLocaleString()})`);
 
+      // Recover orphaned tasks stuck in "processing" for more than 15 minutes
+      const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      try {
+        await supabaseAdmin
+          .from("scheduled_messages")
+          .update({ status: "pending" })
+          .eq("status", "processing")
+          .lte("scheduled_at", fifteenMinsAgo);
+      } catch (e) {}
+
+      try {
+        await supabaseAdmin
+          .from("scheduled_status")
+          .update({ status: "pending" })
+          .eq("status", "processing")
+          .lte("scheduled_at", fifteenMinsAgo);
+      } catch (e) {}
+
       // 1. Process Scheduled Messages
       const { data: pendingMessages, error } = await supabaseAdmin
         .from("scheduled_messages")
@@ -56,6 +74,13 @@ export function startScheduler() {
 
       if (pendingStatus && pendingStatus.length > 0) {
         console.log(`[Scheduler] Found ${pendingStatus.length} pending status updates.`);
+        // Mark as processing immediately to prevent duplicate runs
+        const statusIds = pendingStatus.map(s => s.id);
+        await supabaseAdmin
+          .from("scheduled_status")
+          .update({ status: "processing" })
+          .in("id", statusIds);
+
         for (const statusMsg of pendingStatus) {
           try {
             console.log(`[Scheduler] Posting status ${statusMsg.id} for user ${statusMsg.user_id}`);
@@ -75,13 +100,29 @@ export function startScheduler() {
               .eq("id", statusMsg.id);
           } catch (err: any) {
             console.error(`[Scheduler] Failed to post status ${statusMsg.id}:`, err.message);
-            await supabaseAdmin
-              .from("scheduled_status")
-              .update({ 
-                status: "failed",
-                error: err.message || "Unknown error"
-              })
-              .eq("id", statusMsg.id);
+            const currentAttempts = (statusMsg.attempts || 0) + 1;
+            const maxAttempts = 3;
+            if (currentAttempts < maxAttempts) {
+              const retryAt = new Date(Date.now() + 5 * 60 * 1000 * currentAttempts).toISOString();
+              await supabaseAdmin
+                .from("scheduled_status")
+                .update({ 
+                  status: "pending",
+                  attempts: currentAttempts,
+                  scheduled_at: retryAt,
+                  error: `Tentativa ${currentAttempts} falhou: ${err.message}`
+                })
+                .eq("id", statusMsg.id);
+            } else {
+              await supabaseAdmin
+                .from("scheduled_status")
+                .update({ 
+                  status: "failed",
+                  attempts: currentAttempts,
+                  error: `Esgotado após ${maxAttempts} tentativas: ${err.message}`
+                })
+                .eq("id", statusMsg.id);
+            }
           }
         }
       }
@@ -210,59 +251,83 @@ export function startScheduler() {
         }
       }
 
-      console.log(`[Scheduler] Found ${pendingMessages.length} pending messages.`);
+      if (pendingMessages && pendingMessages.length > 0) {
+        console.log(`[Scheduler] Found ${pendingMessages.length} pending messages.`);
+        // Mark as processing immediately to prevent duplicate runs
+        const msgIds = pendingMessages.map(m => m.id);
+        await supabaseAdmin
+          .from("scheduled_messages")
+          .update({ status: "processing" })
+          .in("id", msgIds);
 
-      for (const msg of pendingMessages) {
-        try {
-          let jid = "";
-          if (msg.target_type === 'status') {
-            jid = "status@broadcast";
-          } else {
-            // Fetch contact phone separately
-            const { data: contactData, error: contactError } = await supabaseAdmin
-              .from("contacts")
-              .select("phone")
-              .eq("id", msg.contact_id)
-              .single();
+        for (const msg of pendingMessages) {
+          try {
+            let jid = "";
+            if (msg.target_type === 'status') {
+              jid = "status@broadcast";
+            } else {
+              // Fetch contact phone separately
+              const { data: contactData, error: contactError } = await supabaseAdmin
+                .from("contacts")
+                .select("phone")
+                .eq("id", msg.contact_id)
+                .single();
 
-            if (contactError || !contactData?.phone) {
-              throw new Error(`Contact phone not found for contact_id: ${msg.contact_id}`);
+              if (contactError || !contactData?.phone) {
+                throw new Error(`Contact phone not found for contact_id: ${msg.contact_id}`);
+              }
+
+              jid = `${contactData.phone}@s.whatsapp.net`;
             }
 
-            jid = `${contactData.phone}@s.whatsapp.net`;
+            console.log(`[Scheduler] Sending message ${msg.id} to ${jid}`);
+            
+            const result = await whatsappManager.sendMessage(
+              msg.user_id, 
+              jid, 
+              msg.message,
+              msg.media_url,
+              msg.media_type,
+              undefined,
+              msg.media_mimetype,
+              msg.media_filename
+            );
+
+            console.log(`[Scheduler] Message ${msg.id} sent successfully:`, result?.key?.id || "OK");
+
+            await supabaseAdmin
+              .from("scheduled_messages")
+              .update({ 
+                status: "sent"
+              })
+              .eq("id", msg.id);
+            
+          } catch (err: any) {
+            console.error(`[Scheduler] Failed to send message ${msg.id}:`, err.message);
+            const currentAttempts = (msg.attempts || 0) + 1;
+            const maxAttempts = 3;
+            if (currentAttempts < maxAttempts) {
+              const retryAt = new Date(Date.now() + 5 * 60 * 1000 * currentAttempts).toISOString();
+              await supabaseAdmin
+                .from("scheduled_messages")
+                .update({ 
+                  status: "pending",
+                  attempts: currentAttempts,
+                  scheduled_at: retryAt,
+                  error: `Tentativa ${currentAttempts} falhou: ${err.message}`
+                })
+                .eq("id", msg.id);
+            } else {
+              await supabaseAdmin
+                .from("scheduled_messages")
+                .update({ 
+                  status: "failed",
+                  attempts: currentAttempts,
+                  error: `Esgotado após ${maxAttempts} tentativas: ${err.message}`
+                })
+                .eq("id", msg.id);
+            }
           }
-
-          console.log(`[Scheduler] Sending message ${msg.id} to ${jid}`);
-          
-          const result = await whatsappManager.sendMessage(
-            msg.user_id, 
-            jid, 
-            msg.message,
-            msg.media_url,
-            msg.media_type,
-            undefined,
-            msg.media_mimetype,
-            msg.media_filename
-          );
-
-          console.log(`[Scheduler] Message ${msg.id} sent successfully:`, result?.key?.id || "OK");
-
-          await supabaseAdmin
-            .from("scheduled_messages")
-            .update({ 
-              status: "sent"
-            })
-            .eq("id", msg.id);
-          
-        } catch (err: any) {
-          console.error(`[Scheduler] Failed to send message ${msg.id}:`, err.message);
-          await supabaseAdmin
-            .from("scheduled_messages")
-            .update({ 
-              status: "failed",
-              error: err.message || "Unknown error"
-            })
-            .eq("id", msg.id);
         }
       }
     } catch (err: any) {

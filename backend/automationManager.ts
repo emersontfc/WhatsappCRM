@@ -49,11 +49,20 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
         // Upsert lead if it's a real phone number
         if (cleanPhone.length <= 15) {
+          const { data: existingLead } = await supabaseAdmin
+            .from("leads")
+            .select("id, stage, status")
+            .eq("user_id", userId)
+            .eq("phone", phone)
+            .maybeSingle();
+
           await supabaseAdmin.from("leads").upsert({
             user_id: userId,
             contact_id: contactId,
             phone,
             name: contact?.name || null,
+            stage: existingLead?.stage || "novo",
+            status: existingLead?.status || "novo",
             last_message: text,
             updated_at: new Date().toISOString()
           }, { onConflict: "user_id,phone" });

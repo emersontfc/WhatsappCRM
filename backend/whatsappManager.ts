@@ -15,14 +15,32 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { convertToOpus } from "./utils/audioConverter.ts";
+import { IWhatsAppTransport } from "./lib/whatsappTransport.ts";
 
 const logger = pino({ level: "silent" });
 
-export class WhatsAppManager {
+export class WhatsAppManager implements IWhatsAppTransport {
   private sessions: Map<string, { socket: any; status: string; qr?: string; pairingCode?: string; createdAt?: number }> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
   private restartRequiredAttempts: Map<string, number> = new Map();
   private maxReconnectAttempts = 5;
+  private recentMessageIds: Map<string, number> = new Map();
+
+  private isDuplicateMessage(msgId: string): boolean {
+    if (!msgId) return false;
+    const now = Date.now();
+    const seenAt = this.recentMessageIds.get(msgId);
+    if (seenAt && (now - seenAt) < 600000) { // 10 minutes dedup window
+      return true;
+    }
+    this.recentMessageIds.set(msgId, now);
+    if (this.recentMessageIds.size > 5000) {
+      for (const [k, v] of this.recentMessageIds.entries()) {
+        if (now - v > 600000) this.recentMessageIds.delete(k);
+      }
+    }
+    return false;
+  }
 
   private async log(userId: string, type: "info" | "success" | "error" | "warn", message: string, metadata?: any) {
     try {
@@ -292,6 +310,12 @@ export class WhatsAppManager {
         if (type !== "notify" && type !== "append") return;
         for (const msg of messages) {
           try {
+            const msgKeyId = msg.key?.id;
+            if (msgKeyId && this.isDuplicateMessage(msgKeyId)) {
+              console.log(`[WhatsApp] Duplicate message ignored (in-memory dedup): ${msgKeyId}`);
+              continue;
+            }
+
             let text = "";
             if (msg.message?.conversation) text = msg.message.conversation;
             else if (msg.message?.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;

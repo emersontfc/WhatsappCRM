@@ -6,7 +6,16 @@ services:
     container_name: agentx-crm
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Bound strictly to localhost so internet traffic must pass through Nginx reverse proxy
+      - "127.0.0.1:3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 1800M
+        reservations:
+          memory: 512M
+    mem_limit: 1800m
+    mem_reservation: 512m
     env_file:
       - .env
     environment:
