@@ -72,3 +72,4 @@ Este documento detalha o estado de segurança da plataforma, as vulnerabilidades
 * **Vulnerabilidade Anterior:** A rota `/uploads` servia diretamente os ficheiros estáticos via Express sem conferir se o visitante pertencia à mesma empresa ou se estava logado.
 * **Ação Corretiva:**
   - Implementação de middleware com verificação de autenticação e higienização estrita de nomes de arquivos (`path.basename`), impedindo ataques de travessia de diretório (`../`).
+

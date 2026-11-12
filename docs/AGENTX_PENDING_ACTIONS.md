@@ -20,3 +20,4 @@ Este documento regista bloqueios externos, dependências de fornecedores e açõ
 |---|---|---|---|
 | **Pagamentos M-Pesa / eMola** | API Oficial dos Provedores (Vodacom / Movitel) | Fluxo manual funcional com M-Pesa (`84 885 8288`), eMola (`87 620 0662`) e validação via senhas de licença. | Preparar arquitetura de webhook para quando o cliente obtiver credenciais corporativas de API M-Pesa. |
 | **Meta WhatsApp Cloud API** | Conta Meta Business Verificada e Token de Produção | Baileys multi-device 100% ativo e funcional. | Interface de transporte abstrata `IWhatsAppTransport` implementada para permitir virada de chave no futuro. |
+

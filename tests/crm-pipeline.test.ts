@@ -54,3 +54,4 @@ describe("CRM Pipeline & Stage Normalization", () => {
     expect(() => normalizeStage("invalid_stage_xyz")).toThrow("Estágio inválido");
   });
 });
+

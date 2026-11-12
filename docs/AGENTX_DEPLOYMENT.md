@@ -72,3 +72,4 @@ git log --oneline -n 5
 git checkout <commit-anterior-estavel>
 sudo docker compose up -d --build
 ```
+

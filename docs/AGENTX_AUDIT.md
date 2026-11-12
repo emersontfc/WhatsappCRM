@@ -74,3 +74,4 @@ A auditoria exaustiva ao código-fonte, configurações e base de dados revelou 
    - Instalação e configuração do `vitest`.
    - Criação de testes unitários e de integração com mocks.
    - Ajuste de portas e limites de memória no `docker-compose.yml`.
+

@@ -52,3 +52,4 @@ export interface IWhatsAppTransport {
     presence: "composing" | "recording" | "paused"
   ): Promise<void>;
 }
+

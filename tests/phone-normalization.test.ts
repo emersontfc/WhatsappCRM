@@ -56,3 +56,4 @@ describe("Phone & JID Normalization", () => {
     expect(result.jid).toBe("258841234567@s.whatsapp.net");
   });
 });
+
