@@ -1,4 +1,4 @@
-# RELATÓRIO DE TESTES AUTOMATIZADOS — KAZIX AGENTX
+# RELATÓRIO DE TESTES AUTOMATIZADOS — KAZIX AGENTX 2.0
 
 **Data:** 13 de Novembro de 2026  
 **Responsável:** Equipa de Engenharia de Qualidade Kazix  
@@ -7,54 +7,64 @@
 
 ---
 
-## 1. RESUMO DA COBERTURA
+## 1. RESUMO DA COBERTURA GLOBAL
 
 | Categoria | Ficheiro de Teste | Testes Executados | Aprovados | Falhados | Taxa de Sucesso | Estado |
 |---|---|---|---|---|---|---|
 | **TypeScript Typecheck** | Global (`tsc --noEmit`) | 1 | 1 | 0 | 100% | ✅ Aprovado |
 | **Vite Production Build** | Frontend (`vite build`) | 1 | 1 | 0 | 100% | ✅ Aprovado |
+| **AgentX 2.0 Comércio & Fluxos** | `tests/agentx-commerce-flow.test.ts` | 10 | 10 | 0 | 100% | ✅ Aprovado |
 | **RBAC & Permissões** | `tests/auth-rbac.test.ts` | 5 | 5 | 0 | 100% | ✅ Aprovado |
 | **Normalização Telefónica & JIDs** | `tests/phone-normalization.test.ts` | 5 | 5 | 0 | 100% | ✅ Aprovado |
 | **Pipeline CRM & Estágios** | `tests/crm-pipeline.test.ts` | 5 | 5 | 0 | 100% | ✅ Aprovado |
 | **Deduplicação & Estado WhatsApp** | `tests/whatsapp-dedup.test.ts` | 4 | 4 | 0 | 100% | ✅ Aprovado |
-| **TOTAL GERAL** | 4 ficheiros de teste unitário | **21** | **21** | **0** | **100%** | **PRONTO PARA PRODUÇÃO** |
+| **TOTAL GERAL** | 5 ficheiros de teste automatizado | **31** | **31** | **0** | **100%** | **PRONTO PARA PRODUÇÃO** |
 
 ---
 
-## 2. DETALHES DAS EXECUÇÕES
+## 2. DETALHES DOS CENÁRIOS DO AGENTX 2.0 (`agentx-commerce-flow.test.ts`)
 
-### 2.1 Compilação Estática TypeScript
-* **Comando:** `npm run lint` (`tsc --noEmit`)
-* **Resultado:** 0 erros de compilação. Tipagem estrita mantida em 100% dos ficheiros do backend e frontend.
+O teste ponta a ponta cobre integralmente os requisitos de automação comercial autónoma estipulados no prompt mestre:
 
-### 2.2 Build de Produção do Frontend
-* **Comando:** `npm run build` (`vite build`)
-* **Resultado:** 2.174 módulos transformados com sucesso em `dist/`. Chunks minificados e ativos gerados em 9.32s.
+### Cenário A — Atendimento & Histórico
+- ✅ **Sequencialidade de Conversa:** Mantém histórico contextual com alternância de papéis (`user` / `model`), alimentando o raciocínio sem perda de mensagens anteriores.
 
-### 2.3 Suíte de Testes Automatizados (Vitest)
-* **Comando:** `npm test` (`vitest run`)
-* **Duração Total:** 669ms
-* **Resultados por Módulo:**
-  1. `tests/auth-rbac.test.ts`:
-     - ✅ Validação da hierarquia de papéis (`superadmin` > `admin` > `manager` > `operator` > `user`).
-     - ✅ Validação de herança de permissões administrativas.
-     - ✅ Bloqueio de operadores/utilizadores em rotas restritas de admin.
-     - ✅ Extração e validação do token JWT Bearer.
-     - ✅ Rejeição de cabeçalhos de autenticação forjados ou vazios.
-  2. `tests/phone-normalization.test.ts`:
-     - ✅ Normalização de números de Moçambique com 9 dígitos (prefixo 258 automático para Vodacom 84/85, Movitel 86/87, Tmcel 82/83).
-     - ✅ Preservação de números com código internacional já presente.
-     - ✅ Roteamento automático de identificadores WhatsApp Multi-Device LID (15 dígitos) para sufixo `@lid`.
-     - ✅ Identificação de IDs de grupos WhatsApp (`@g.us`) e canais de transmissão.
-     - ✅ Sanitização de caracteres sujos (`+`, `-`, espaços, parênteses).
-  3. `tests/crm-pipeline.test.ts`:
-     - ✅ Aceitação e persistência dos 5 estágios canónicos (`novo`, `em_atendimento`, `proposta_enviada`, `venda_fechada`, `perdido`).
-     - ✅ Mapeamento e normalização de termos legados (`ganho` e `fechado` convertidos em `venda_fechada`).
-     - ✅ Mapeamento de `atendimento` e `in_progress` para `em_atendimento`.
-     - ✅ Mapeamento de `proposta` para `proposta_enviada`.
-     - ✅ Rejeição de estágios desconhecidos com mensagem de erro descritiva.
-  4. `tests/whatsapp-dedup.test.ts`:
-     - ✅ Ingestão imediata de mensagens com identificador único (`msg_id`).
-     - ✅ Rejeição e deduplicação atómica de entregas repetidas dentro da janela de 10 minutos.
-     - ✅ Expiração e limpeza automática de cache de deduplicação após TTL.
-     - ✅ Validação da máquina de estados do transporte WhatsApp (`disconnected` → `connecting` → `qr_ready` → `connected` → `reconnecting`).
+### Cenário B — Venda & Criação de Pedidos
+- ✅ **Cálculo de Totais & Prefixo Canónico:** Calcula subtotais e totais monetários com precisão; gera identificador único com prefixo canónico `AGX-XXXXXX`.
+
+### Cenário C — Pagamento & Extração de Comprovativos
+- ✅ **Comprovativo M-Pesa Vodacom:** Extrai com precisão montante (500 MT), número de transação (`2K3J4H5G`), telefone remetente (`841234567`) e atribui pontuação de confiança `>= 0.95`.
+- ✅ **Comprovativo e-Mola Movitel:** Extrai com precisão montante (1.200 MT), transação com prefixo oficial `EM99887766` e identifica provedor `emola`.
+- ✅ **Rejeição de Falsos Comprovativos:** Textos genéricos sem sintaxe de transação são rejeitados com `null`, prevenindo fraudes.
+
+### Cenário D — Entrega Digital & Prevenção de Duplicatas
+- ✅ **Entrega Idempotente:** Ao acionar `fulfillOrder`, a entrega do produto digital é realizada uma única vez; invocações subsequentes para o mesmo pedido são protegidas e retornam `status: already_fulfilled`.
+
+### Cenário E — CRM & Pontuação de Leads
+- ✅ **Lead Scoring & Tags Comerciais:** Atribui etiquetas (`#orçamento`, `#moçambique`, `#lead-quente`), incrementa a pontuação em +30 pontos e calcula nível de interesse como `"quente"`.
+
+### Cenário F — Marketing & Espaçamento Anti-Spam
+- ✅ **Proteção Anti-Bloqueio WhatsApp:** Força intervalo mínimo de segurança de 10 segundos entre envios em massa agendados.
+
+### Cenário G — Segurança & Rejeição de Privilégios por Texto
+- ✅ **Bloqueio de Prompts Maliciosos:** Garante que ferramentas sensíveis (`getFinancialMetrics`) sejam estritamente bloqueadas quando solicitadas por contatos externos via chat.
+
+### Cenário H — Recuperação & Retomada de Estado
+- ✅ **Resiliência a Reinícios:** Pedidos com status `verification_pending` persistem no banco de dados e são retomados no mesmo ponto após reinício ou nova mensagem do cliente.
+
+---
+
+## 3. COMPILAÇÃO E BUILDS DE PRODUÇÃO
+
+1. **TypeScript Typecheck (`tsc --noEmit`):**
+   - 0 erros em todos os arquivos TypeScript (`backend/`, `src/`, `tests/`).
+   - Todos os tipos estritos respeitados (`ExtractedPaymentData`, `ToolDefinition`, `CommerceService`).
+
+2. **Vite Production Build (`vite build`):**
+   - 2.176 módulos transformados com sucesso.
+   - Code-splitting otimizado em bundles separados:
+     - `vendor-react` (~67 kB)
+     - `vendor-supabase` (~193 kB)
+     - `vendor-ui` (~200 kB)
+     - `index.js` (~1.28 MB)
+   - Tempo de compilação: ~13.8 segundos.

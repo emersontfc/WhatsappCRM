@@ -282,8 +282,32 @@ Você tem total poder e acesso às ferramentas do sistema para executar o que el
 Seja ágil, prestativo e direto.`;
     baseInstruction = "Seja extremamente eficiente e execute os comandos solicitados através das ferramentas apropriadas.";
   } else {
-    roleHeader = "VOCÊ É O AGENTEX ATENDENTE, assistente virtual de atendimento ao cliente. Ajude o cliente com cordialidade, tire dúvidas e qualifique o interesse do lead.";
-    baseInstruction = agent.instructions || "Você é um assistente útil e inteligente.";
+    const specialization = agent.specialization || "multifuncional";
+    let specGuide = "";
+    if (specialization === "vendas") {
+      specGuide = `\nESPECIALIZAÇÃO: AGENTE DE VENDAS.
+1. Se o cliente perguntar sobre produtos ou preços, use 'getProductsCatalog' para obter informações reais e precisas.
+2. Quando o cliente demonstrar intenção clara de compra, use 'createOrder' para registrar o pedido no sistema e gerar as instruções de pagamento (M-Pesa/e-Mola/Banco).
+3. Se o cliente enviar comprovativo ou código de transação, use 'submitPaymentProof'.
+4. NUNCA invente preços ou produtos que não constem no catálogo real.`;
+    } else if (specialization === "pagamentos") {
+      specGuide = `\nESPECIALIZAÇÃO: AGENTE DE PAGAMENTOS.
+1. Use 'submitPaymentProof' quando o cliente fornecer dados de transferência ou comprovativo.
+2. Use 'getOrderStatus' para verificar a situação de um pedido.
+3. Deixe claro que a liberação final de produtos digitais depende da conferência da transação pelo setor financeiro.`;
+    } else if (specialization === "leads") {
+      specGuide = `\nESPECIALIZAÇÃO: GESTÃO DE LEADS E PROSPECÇÃO.
+Use 'qualifyLead' para adicionar tags e registrar notas de interesse, e 'moveLeadStage' para avançar a etapa no funil de vendas.`;
+    } else if (specialization === "marketing") {
+      specGuide = `\nESPECIALIZAÇÃO: AGENTE DE MARKETING.
+Use 'createMarketingCampaign' quando solicitado para preparar disparos direcionados para públicos com tags específicas.`;
+    } else {
+      specGuide = `\nESPECIALIZAÇÃO: AGENTE UNIVERSAL MULTIFUNCIONAL.
+Você possui autonomia comercial: pode consultar o catálogo com 'getProductsCatalog', criar pedidos com 'createOrder', receber comprovativos com 'submitPaymentProof', consultar status com 'getOrderStatus' e qualificar leads com 'qualifyLead'.`;
+    }
+
+    roleHeader = `VOCÊ É O AGENTEX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nAjude o cliente com cordialidade, precisão e integridade.`;
+    baseInstruction = agent.instructions || "Você é um assistente útil, ágil e inteligente.";
   }
 
   const toolsInstruction = getToolsPromptDescription(role);
@@ -439,6 +463,21 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
     formatted += `\n\n📅 *Agendado para*: ${result.data.dataAgendada || ''}\n👤 *Destinatário*: ${result.data.contacto || ''}`;
   } else if (toolName === "schedule_status" && result.data) {
     formatted += `\n\n📅 *Status agendado para*: ${result.data.dataAgendada || ''}`;
+  } else if (toolName === "getProductsCatalog" && Array.isArray(result.data)) {
+    const list = result.data.map((p: any, i: number) => `*${i + 1}. ${p.name}* — ${p.price}\n   _${p.description || "Disponível"}_`).join("\n\n");
+    formatted = `📦 *Catálogo de Produtos & Serviços:*\n\n${list || "Nenhum produto cadastrado no momento."}`;
+  } else if (toolName === "createOrder" && result.data) {
+    formatted = `🛍️ *Pedido ${result.data.orderNumber} Criado com Sucesso!*\n\n💰 *Total:* ${result.data.total}\n💳 *Método:* ${result.data.paymentMethod.toUpperCase()}\n\nℹ️ *Instruções:* ${result.data.instructions}`;
+  } else if (toolName === "getOrderStatus" && result.data) {
+    formatted = `🔍 *Situação do Pedido ${result.data.orderNumber}:*\n\n📋 *Status:* ${result.data.statusLabel}\n💰 *Valor:* ${result.data.total}`;
+  } else if (toolName === "submitPaymentProof" && result.data) {
+    formatted = `🧾 *Comprovativo Registrado com Sucesso!*\n\n📌 *Referência:* ${result.data.reference}\n💰 *Valor Informado:* ${result.data.amount} MT\n💳 *Provedor:* ${result.data.provider.toUpperCase()}\n\n⏳ O pagamento foi enviado para validação pelo financeiro e seu pedido será liberado logo após confirmação!`;
+  } else if (toolName === "getFinancialMetrics" && result.data) {
+    formatted = `📊 *Métricas Financeiras (${result.data.period}):*\n\n💰 *Faturamento Aprovado:* ${Number(result.data.totalRevenue).toLocaleString("pt-MZ")} MT\n✅ *Vendas Concluídas:* ${result.data.paidOrdersCount} pedidos\n⏳ *Comprovativos Pendentes:* ${result.data.pendingVerificationsCount}\n🛒 *Pedidos em Aberto:* ${result.data.awaitingPaymentCount}`;
+  } else if (toolName === "qualifyLead" && result.data) {
+    formatted += `\n\n🏷️ *Lead Qualificado*: Nível de interesse ${result.data.interestLevel || "médio"}.`;
+  } else if (toolName === "createMarketingCampaign" && result.data) {
+    formatted = `📢 *Campanha "${result.data.campaignName}" Agendada!*\n\n👥 *Público-Alvo:* ${result.data.targetCount} contatos\n⏰ *Início dos Envios:* ${new Date(result.data.firstSendAt).toLocaleString("pt-MZ")}`;
   }
 
   return formatted;

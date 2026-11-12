@@ -13,6 +13,7 @@ import packRoutes from "./backend/routes/packs.ts";
 import mediaRoutes from "./backend/routes/media.ts";
 import menuRoutes from "./backend/routes/menus.ts";
 import appointmentRoutes from "./backend/routes/appointments.ts";
+import commerceRoutes from "./backend/routes/commerce.ts";
 import { startScheduler } from "./backend/scheduler.ts";
 import { authenticate } from "./backend/middleware/auth.ts";
 import fs from "fs";
@@ -597,6 +598,7 @@ async function startServer() {
   app.use("/api/media", authenticate, mediaRoutes);
   app.use("/api/menus", authenticate, menuRoutes);
   app.use("/api/appointments", appointmentRoutes);
+  app.use("/api/commerce", authenticate, commerceRoutes);
 
   // Secure uploads access with strict Path Traversal sanitization
   const uploadsDir = path.join(process.cwd(), "uploads");

@@ -14,6 +14,13 @@ import { createKeywordAutomationTool } from "./automations/createKeywordAutomati
 import { createReminderFollowupTool } from "./automations/createReminderFollowup.ts";
 import { scheduleMessageTool } from "./automations/scheduleMessage.ts";
 import { scheduleStatusTool } from "./automations/scheduleStatus.ts";
+import { getProductsCatalogTool } from "./commerce/getProductsCatalog.ts";
+import { createOrderTool } from "./commerce/createOrder.ts";
+import { getOrderStatusTool } from "./commerce/getOrderStatus.ts";
+import { submitPaymentProofTool } from "./commerce/submitPaymentProof.ts";
+import { getFinancialMetricsTool } from "./admin/getFinancialMetrics.ts";
+import { qualifyLeadTool } from "./crm/qualifyLead.ts";
+import { createMarketingCampaignTool } from "./marketing/createMarketingCampaign.ts";
 
 export * from "./types.ts";
 
@@ -23,6 +30,7 @@ export const ALL_TOOLS: ToolDefinition[] = [
   searchContactTool,
   moveLeadStageTool,
   createLeadTool,
+  qualifyLeadTool,
   sendDirectMessageTool,
   pauseAITool,
   resumeAITool,
@@ -30,6 +38,12 @@ export const ALL_TOOLS: ToolDefinition[] = [
   createReminderFollowupTool,
   scheduleMessageTool,
   scheduleStatusTool,
+  getProductsCatalogTool,
+  createOrderTool,
+  getOrderStatusTool,
+  submitPaymentProofTool,
+  getFinancialMetricsTool,
+  createMarketingCampaignTool,
 ];
 
 /**

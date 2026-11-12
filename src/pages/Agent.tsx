@@ -1,6 +1,23 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, Zap, Key, Globe, Save, Power, AlertCircle, Info } from "lucide-react";
+import { 
+  Bot, 
+  Zap, 
+  Key, 
+  Globe, 
+  Save, 
+  Power, 
+  AlertCircle, 
+  Info,
+  ShoppingCart,
+  DollarSign,
+  Target,
+  Megaphone,
+  ShieldCheck,
+  CheckSquare,
+  Sparkles,
+  Users
+} from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
 import { Button } from "../components/ui/Button";
@@ -17,6 +34,11 @@ interface AgentConfig {
   api_url: string;
   model: string;
   instructions: string;
+  specialization?: "atendimento" | "vendas" | "pagamentos" | "marketing" | "leads" | "agendamentos" | "suporte" | "administracao" | "multifuncional";
+  autonomy_level?: "reply_only" | "low_risk" | "hybrid" | "full_autonomous";
+  risk_tolerance?: "low" | "moderate" | "high";
+  enabled_tools?: string[];
+  financial_limit?: number;
 }
 
 export default function Agent() {
@@ -34,7 +56,12 @@ export default function Agent() {
     api_key: "",
     api_url: "",
     model: "gemini-3-flash-preview",
-    instructions: "Você é um assistente de vendas prestativo para o Agentex. Responda de forma educada e profissional."
+    specialization: "multifuncional",
+    autonomy_level: "hybrid",
+    risk_tolerance: "moderate",
+    enabled_tools: ["crm", "sales", "payments", "marketing", "scheduling"],
+    financial_limit: 5000,
+    instructions: "Você é o AgentX, assistente autônomo e prestativo. Consulte o catálogo, forneça instruções de pagamento (M-Pesa/e-Mola) e registre pedidos reais."
   });
 
   useEffect(() => {
@@ -64,7 +91,12 @@ export default function Agent() {
           api_key: response.data.api_key || "",
           api_url: response.data.api_url || "",
           model: response.data.model || "",
-          instructions: response.data.instructions || ""
+          instructions: response.data.instructions || "",
+          specialization: response.data.specialization || "multifuncional",
+          autonomy_level: response.data.autonomy_level || "hybrid",
+          risk_tolerance: response.data.risk_tolerance || "moderate",
+          enabled_tools: response.data.enabled_tools || ["crm", "sales", "payments", "marketing", "scheduling"],
+          financial_limit: response.data.financial_limit || 5000
         });
       }
     } catch (err: any) {
@@ -433,6 +465,105 @@ export default function Agent() {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          {/* Especialização do Agente */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Sparkles className="text-emerald-600" size={20} />
+                Especialização do Agente
+              </CardTitle>
+              <CardDescription>Selecione a função principal e habilidades comerciais ativas do agente.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {[
+                  { id: "multifuncional", name: "Multifuncional", desc: "Universal: Vendas, pagamentos, suporte e CRM", icon: Sparkles },
+                  { id: "vendas", name: "Agente de Vendas", desc: "Catálogo, pedidos e fechamento comercial", icon: ShoppingCart },
+                  { id: "pagamentos", name: "Agente de Pagamentos", desc: "Leitura de comprovativos M-Pesa/e-Mola", icon: DollarSign },
+                  { id: "leads", name: "Gestão de Leads", desc: "Qualificação, pontuação e funil CRM", icon: Target },
+                  { id: "marketing", name: "Agente de Marketing", desc: "Disparos e campanhas segmentadas", icon: Megaphone },
+                  { id: "atendimento", name: "Atendimento & SAC", desc: "Dúvidas frequentes e suporte ao cliente", icon: Bot },
+                ].map(spec => (
+                  <button
+                    key={spec.id}
+                    type="button"
+                    onClick={() => setConfig({ ...config, specialization: spec.id as any })}
+                    className={cn(
+                      "p-3.5 rounded-xl border-2 text-left transition-all hover:border-emerald-300",
+                      config.specialization === spec.id ? "border-emerald-500 bg-emerald-50/50" : "border-slate-100 bg-white"
+                    )}
+                  >
+                    <spec.icon className={cn("mb-1.5", config.specialization === spec.id ? "text-emerald-600" : "text-slate-400")} size={20} />
+                    <p className="font-bold text-xs text-slate-900">{spec.name}</p>
+                    <p className="text-[10px] text-slate-500 leading-tight mt-0.5">{spec.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Autonomia & Limites de Segurança */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <ShieldCheck className="text-emerald-600" size={20} />
+                Autonomia e Governança Comercial
+              </CardTitle>
+              <CardDescription>Defina o nível de liberdade operacional e regras financeiras da IA.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700">Nível de Autonomia</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {[
+                    { id: "reply_only", label: "Apenas Responder", desc: "Responde dúvidas sem acionar ações" },
+                    { id: "hybrid", label: "Híbrido (Recomendado)", desc: "Cria pedidos e exige aprovação humana para entrega" },
+                    { id: "full_autonomous", label: "Autônomo Total", desc: "Executa e entrega pedidos automaticamente" }
+                  ].map(lvl => (
+                    <button
+                      key={lvl.id}
+                      type="button"
+                      onClick={() => setConfig({ ...config, autonomy_level: lvl.id as any })}
+                      className={cn(
+                        "p-3 rounded-xl border text-left transition-all",
+                        config.autonomy_level === lvl.id ? "border-emerald-500 bg-emerald-50 font-bold" : "border-slate-200 text-slate-600"
+                      )}
+                    >
+                      <p className="text-xs text-slate-900">{lvl.label}</p>
+                      <p className="text-[10px] text-slate-400 leading-tight mt-0.5">{lvl.desc}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Limite Financeiro por Pedido (MT)</label>
+                  <Input
+                    type="number"
+                    value={config.financial_limit || 5000}
+                    onChange={e => setConfig({ ...config, financial_limit: Number(e.target.value) || 0 })}
+                    className="mt-1"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Transações acima deste valor exigem sempre validação humana.</p>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Tolerância a Risco</label>
+                  <select
+                    className="flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm mt-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    value={config.risk_tolerance || "moderate"}
+                    onChange={e => setConfig({ ...config, risk_tolerance: e.target.value as any })}
+                  >
+                    <option value="low">Baixa — Confirmação estrita em cada passo</option>
+                    <option value="moderate">Moderada — Equilíbrio entre agilidade e segurança</option>
+                    <option value="high">Alta — Máxima autonomia comercial</option>
+                  </select>
+                </div>
+              </div>
             </CardContent>
           </Card>
 

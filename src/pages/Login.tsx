@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { apiFetch } from "../lib/api";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
+import AgentXLogo from "../components/AgentXLogo";
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
@@ -107,10 +108,7 @@ export default function Login() {
           className="relative z-10 space-y-8 max-w-lg"
         >
           <Link to="/" className="flex items-center gap-4 group mb-12">
-            <div className="bg-emerald-500 p-3 rounded-2xl group-hover:rotate-12 transition-transform duration-300 shadow-lg shadow-emerald-500/20">
-              <Rocket className="w-8 h-8 text-white" />
-            </div>
-            <span className="font-black text-4xl tracking-tighter uppercase italic text-slate-900">Agentex</span>
+            <AgentXLogo size="lg" />
           </Link>
           
           <h2 className="text-6xl font-black uppercase italic tracking-tighter leading-none text-slate-900">
@@ -161,10 +159,7 @@ export default function Login() {
       <div className="flex-1 flex flex-col bg-slate-50 relative">
         <div className="lg:hidden p-6">
           <Link to="/" className="flex items-center gap-3">
-            <div className="bg-emerald-500 p-2 rounded-xl shadow-lg shadow-emerald-500/20">
-              <Rocket className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-black text-2xl tracking-tighter uppercase italic text-slate-900">Agentex</span>
+            <AgentXLogo size="md" />
           </Link>
         </div>
 

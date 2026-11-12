@@ -61,7 +61,19 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
-  const { provider, api_key, api_url, model, instructions, is_active } = req.body;
+  const { 
+    provider, 
+    api_key, 
+    api_url, 
+    model, 
+    instructions, 
+    is_active,
+    specialization,
+    autonomy_level,
+    risk_tolerance,
+    enabled_tools,
+    financial_limit
+  } = req.body;
   
   console.log(`[Agent API] Saving config for user ${userId}, provider: ${provider}`);
   
@@ -118,6 +130,11 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
       model: model || (validatedProvider === 'gemini' ? 'gemini-3-flash-preview' : ''),
       instructions,
       is_active: is_active ?? existingAgent?.is_active ?? false,
+      specialization: specialization || existingAgent?.specialization || 'multifuncional',
+      autonomy_level: autonomy_level || existingAgent?.autonomy_level || 'hybrid',
+      risk_tolerance: risk_tolerance || existingAgent?.risk_tolerance || 'moderate',
+      enabled_tools: enabled_tools || existingAgent?.enabled_tools || ['crm', 'sales', 'payments', 'marketing', 'scheduling'],
+      financial_limit: financial_limit !== undefined ? Number(financial_limit) : (existingAgent?.financial_limit || 5000),
       created_at: existingAgent ? existingAgent.created_at : new Date().toISOString(),
     };
 

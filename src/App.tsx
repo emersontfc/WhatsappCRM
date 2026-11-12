@@ -22,6 +22,7 @@ import MenuBuilderPage from "./pages/MenuBuilderPage";
 import Leads from "./pages/Leads";
 import ActivityLog from "./pages/ActivityLog";
 import Appointments from "./pages/Appointments";
+import Orders from "./pages/Orders";
 import PublicBooking from "./pages/PublicBooking";
 import Docs from "./pages/Docs";
 import Layout from "./components/Layout";
@@ -87,6 +88,10 @@ export default function App() {
         <Route
           path="/appointments"
           element={user ? <Layout><Appointments key={user?.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/orders"
+          element={user ? <Layout><Orders key={user?.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/activate"

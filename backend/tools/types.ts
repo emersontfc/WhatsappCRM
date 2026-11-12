@@ -31,8 +31,10 @@ export interface ToolResult {
 export interface ToolDefinition {
   name: string;
   description: string;
-  category: "crm" | "messaging" | "automations" | "scheduling" | "dashboard";
+  category: "crm" | "messaging" | "automations" | "scheduling" | "dashboard" | "commerce" | "payments" | "marketing" | "admin";
   allowedRoles: UserRole[]; // Who can trigger this tool: admin only or both admin and lead
+  riskLevel?: "low" | "medium" | "high" | "critical";
+  requiresApproval?: boolean;
   parameters: ToolParametersSchema;
   execute: (args: any, ctx: ToolContext) => Promise<ToolResult>;
 }

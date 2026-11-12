@@ -25,8 +25,10 @@ import {
   Hash,
   UserPlus,
   CalendarCheck,
-  BookOpen
+  BookOpen,
+  ShoppingCart
 } from "lucide-react";
+import AgentXLogo from "./AgentXLogo";
 import { supabase, getUser } from "../supabase";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/Badge";
@@ -134,6 +136,7 @@ export default function Layout({ children }: LayoutProps) {
       items: [
         { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
         { name: "Mensagens", path: "/messages", icon: MessageCircle },
+        { name: "Vendas & Pedidos", path: "/orders", icon: ShoppingCart },
         { name: "Agenda & Consultas", path: "/appointments", icon: CalendarCheck },
         { name: "Disparos Programados", path: "/schedule", icon: Clock, premiumOnly: true },
       ]
@@ -217,15 +220,9 @@ export default function Layout({ children }: LayoutProps) {
         "fixed inset-y-0 left-0 z-50 w-72 border-r-2 border-slate-100 bg-white flex flex-col transition-all duration-500 lg:relative lg:translate-x-0 shadow-2xl lg:shadow-none",
         isSidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
-        <div className="p-10 flex items-center justify-between">
-          <div className="flex items-center gap-4 group cursor-pointer" onClick={() => navigate("/dashboard")}>
-            <div className="h-12 w-12 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-emerald-600/20 group-hover:rotate-6 transition-all duration-300">
-              <Rocket size={24} />
-            </div>
-            <div className="flex flex-col">
-              <span className="font-bold text-2xl tracking-tight text-slate-900 leading-none">Agentex</span>
-              <span className="text-[10px] uppercase tracking-widest text-emerald-600 font-bold mt-1">CRM Pro</span>
-            </div>
+        <div className="p-8 flex items-center justify-between">
+          <div className="cursor-pointer" onClick={() => navigate("/dashboard")}>
+            <AgentXLogo size="md" />
           </div>
           <Button 
             variant="ghost" 
