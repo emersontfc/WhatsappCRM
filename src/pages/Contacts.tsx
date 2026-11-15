@@ -1,20 +1,20 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { 
-  Plus, 
-  Search, 
-  Tag, 
-  Trash2, 
-  Phone, 
-  User, 
-  Users, 
-  Send, 
-  Upload, 
-  X, 
-  Check, 
-  MessageSquare, 
-  TrendingUp, 
-  Bot, 
+import {
+  Plus,
+  Search,
+  Tag,
+  Trash2,
+  Phone,
+  User,
+  Users,
+  Send,
+  Upload,
+  X,
+  Check,
+  MessageSquare,
+  TrendingUp,
+  Bot,
   BotOff,
   RefreshCw,
   BookOpen
@@ -59,7 +59,7 @@ export function getContactDisplay(contact: { name?: string | null; phone?: strin
   const cleanPhone = (contact.phone || "").replace(/\D/g, "");
   const formattedPhone = contact.phone ? formatPhoneNumber(contact.phone) : "";
   const cleanLid = (contact.lid || "").replace(/\D/g, "");
-  
+
   const rawName = (contact.name || "").trim();
   const isNumericOnly = !rawName || /^[\d\s+()\-#]+$/.test(rawName);
   const isSameAsPhone = Boolean(cleanPhone) && rawName.replace(/\D/g, "") === cleanPhone && rawName.replace(/\D/g, "").length > 5;
@@ -210,9 +210,9 @@ export default function Contacts() {
       if (!userId) return;
       subscription = supabase
         .channel('public:contacts_crm')
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
           table: 'contacts',
           filter: `user_id=eq.${userId}`
         }, () => {
@@ -232,8 +232,8 @@ export default function Contacts() {
     const idParam = searchParams.get("id") || searchParams.get("contactId");
 
     if (contacts.length > 0 && (phoneParam || idParam)) {
-      const target = contacts.find(c => 
-        (idParam && c.id === idParam) || 
+      const target = contacts.find(c =>
+        (idParam && c.id === idParam) ||
         (phoneParam && c.phone === phoneParam.replace(/\D/g, ""))
       );
       if (target) {
@@ -274,7 +274,7 @@ export default function Contacts() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paused: newPaused })
-      }).catch(() => {});
+      }).catch(() => { });
 
       toast.success(newPaused ? "Modo Humano ativado (IA pausada)" : "IA Ativada para este contacto");
     } catch (err) {
@@ -502,12 +502,12 @@ export default function Contacts() {
         const csv = event.target?.result as string;
         const lines = csv.split('\n');
         const userId = await getUserId();
-        
+
         const contactsToInsert = [];
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i].trim();
           if (!line) continue;
-          
+
           const parts = line.split(',');
           if (parts.length >= 2) {
             const name = parts[0].trim();
@@ -591,8 +591,8 @@ export default function Contacts() {
       if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanP.length < 7 || cleanP.length > 18) return false;
 
       // 1. Search filter
-      const matchesSearch = 
-        c.name.toLowerCase().includes(search.toLowerCase()) || 
+      const matchesSearch =
+        c.name.toLowerCase().includes(search.toLowerCase()) ||
         c.phone.includes(search);
       if (!matchesSearch) return false;
 
@@ -633,7 +633,7 @@ export default function Contacts() {
   return (
     <div className="space-y-4 sm:space-y-6 max-w-7xl mx-auto w-full">
       {planDetails && contacts.length >= planDetails.max_contacts && (
-        <UpgradePrompt 
+        <UpgradePrompt
           title="Limite de Contatos Atingido"
           description={`Você atingiu o limite de ${planDetails.max_contacts} contatos do seu plano atual.`}
         />
@@ -652,16 +652,16 @@ export default function Contacts() {
         </div>
 
         <div className="flex w-full md:w-auto gap-2 flex-wrap sm:flex-nowrap">
-          <input 
-            type="file" 
-            accept=".csv" 
-            className="hidden" 
+          <input
+            type="file"
+            accept=".csv"
+            className="hidden"
             ref={fileInputRef}
             onChange={handleImportCSV}
           />
-          <Button 
+          <Button
             variant="outline"
-            className="flex-1 md:flex-none gap-2 rounded-xl border-emerald-200 text-emerald-700 hover:bg-emerald-50" 
+            className="flex-1 md:flex-none gap-2 rounded-xl border-emerald-200 text-emerald-700 hover:bg-emerald-50"
             onClick={handleSyncCurrentWhatsApp}
             disabled={syncingWhatsApp}
             title="Sincroniza apenas contactos gravados na agenda e conversas ativas da conexão atual"
@@ -669,17 +669,17 @@ export default function Contacts() {
             <RefreshCw size={16} className={syncingWhatsApp ? "animate-spin text-emerald-600" : "text-emerald-600"} />
             {syncingWhatsApp ? "A sincronizar..." : "Sincronizar WhatsApp"}
           </Button>
-          <Button 
+          <Button
             variant="outline"
-            className="flex-1 md:flex-none gap-2 rounded-xl" 
+            className="flex-1 md:flex-none gap-2 rounded-xl"
             onClick={() => isActivated ? fileInputRef.current?.click() : toast.error("Ative a sua conta para importar contactos.")}
             disabled={!isActivated}
           >
             <Upload size={16} />
             Importar CSV
           </Button>
-          <Button 
-            className="flex-1 md:flex-none gap-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-sm" 
+          <Button
+            className="flex-1 md:flex-none gap-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-sm"
             onClick={() => isActivated ? setIsAdding(true) : toast.error("Ative a sua conta para adicionar contactos.")}
             disabled={!isActivated}
           >
@@ -695,11 +695,10 @@ export default function Contacts() {
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
           <button
             onClick={() => setActiveTab("todos")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
-              activeTab === "todos" 
-                ? "bg-slate-900 text-white shadow-sm" 
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === "todos"
+              ? "bg-slate-900 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+              }`}
           >
             Todos
             <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === "todos" ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700"}`}>
@@ -709,11 +708,10 @@ export default function Contacts() {
 
           <button
             onClick={() => setActiveTab("whatsapp")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
-              activeTab === "whatsapp" 
-                ? "bg-emerald-600 text-white shadow-sm" 
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === "whatsapp"
+              ? "bg-emerald-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+              }`}
           >
             WhatsApp
             <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === "whatsapp" ? "bg-emerald-700 text-white" : "bg-emerald-100 text-emerald-800"}`}>
@@ -723,11 +721,10 @@ export default function Contacts() {
 
           <button
             onClick={() => setActiveTab("com_lead")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
-              activeTab === "com_lead" 
-                ? "bg-purple-600 text-white shadow-sm" 
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === "com_lead"
+              ? "bg-purple-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+              }`}
           >
             Com Lead
             <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === "com_lead" ? "bg-purple-700 text-white" : "bg-purple-100 text-purple-800"}`}>
@@ -737,11 +734,10 @@ export default function Contacts() {
 
           <button
             onClick={() => setActiveTab("manuais")}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${
-              activeTab === "manuais" 
-                ? "bg-blue-600 text-white shadow-sm" 
-                : "text-slate-600 hover:bg-slate-100"
-            }`}
+            className={`px-3.5 py-1.5 text-xs font-semibold rounded-xl transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === "manuais"
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+              }`}
           >
             Manuais / CSV
             <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeTab === "manuais" ? "bg-blue-700 text-white" : "bg-blue-100 text-blue-800"}`}>
@@ -753,8 +749,8 @@ export default function Contacts() {
         {/* Search */}
         <div className="relative w-full sm:w-72">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <Input 
-            placeholder="Buscar por nome ou número..." 
+          <Input
+            placeholder="Buscar por nome ou número..."
             className="pl-9 rounded-xl border-slate-200 text-sm h-9 bg-slate-50/50 focus:bg-white transition-all"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -773,10 +769,10 @@ export default function Contacts() {
             <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-600">Nome</label>
-                <Input 
-                  placeholder="Nome do cliente" 
+                <Input
+                  placeholder="Nome do cliente"
                   value={newContact.name}
-                  onChange={e => setNewContact({...newContact, name: e.target.value})}
+                  onChange={e => setNewContact({ ...newContact, name: e.target.value })}
                   className="rounded-xl bg-white"
                   required
                 />
@@ -785,17 +781,17 @@ export default function Contacts() {
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-600">Telefone WhatsApp</label>
                 <div className="flex gap-2">
                   <div className="w-20 shrink-0">
-                    <Input 
-                      placeholder="+258" 
+                    <Input
+                      placeholder="+258"
                       value={newContact.countryCode}
-                      onChange={e => setNewContact({...newContact, countryCode: e.target.value.replace(/\D/g, "")})}
+                      onChange={e => setNewContact({ ...newContact, countryCode: e.target.value.replace(/\D/g, "") })}
                       className="text-center rounded-xl bg-white"
                     />
                   </div>
-                  <Input 
-                    placeholder="84 88 5828 8" 
+                  <Input
+                    placeholder="84 88 5828 8"
                     value={newContact.phone}
-                    onChange={e => setNewContact({...newContact, phone: e.target.value})}
+                    onChange={e => setNewContact({ ...newContact, phone: e.target.value })}
                     className="rounded-xl bg-white"
                     required
                   />
@@ -803,10 +799,10 @@ export default function Contacts() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-600">Tags (vírgula)</label>
-                <Input 
-                  placeholder="Interessado, VIP, Proposta" 
+                <Input
+                  placeholder="Interessado, VIP, Proposta"
                   value={newContact.tags}
-                  onChange={e => setNewContact({...newContact, tags: e.target.value})}
+                  onChange={e => setNewContact({ ...newContact, tags: e.target.value })}
                   className="rounded-xl bg-white"
                 />
               </div>
@@ -836,8 +832,8 @@ export default function Contacts() {
             const display = getContactDisplay(contact);
 
             return (
-              <Card 
-                key={contact.id} 
+              <Card
+                key={contact.id}
                 onClick={() => openContactDrawer(contact)}
                 className="hover:border-emerald-300 hover:shadow-md transition-all cursor-pointer group rounded-2xl border-slate-200/80 bg-white"
               >
@@ -874,18 +870,18 @@ export default function Contacts() {
                           </span>
                         ) : null}
 
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 rounded-lg"
                           title="Abrir Conversa"
                           onClick={() => navigate(`/messages?phone=${contact.phone}`)}
                         >
                           <Send size={15} />
                         </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg"
                           title="Excluir Contacto"
                           onClick={(e) => handleDelete(contact.id, e)}
@@ -997,11 +993,11 @@ export default function Contacts() {
 
       {/* Slide-Over Drawer: Contact Profile */}
       {selectedContact && (
-        <div 
+        <div
           className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
           onClick={closeContactDrawer}
         >
-          <div 
+          <div
             className="w-full sm:max-w-md bg-white h-full shadow-2xl flex flex-col overflow-y-auto animate-in slide-in-from-right duration-300"
             onClick={e => e.stopPropagation()}
           >
@@ -1026,7 +1022,7 @@ export default function Contacts() {
                       )}
                     </div>
                   </div>
-                  <button 
+                  <button
                     onClick={closeContactDrawer}
                     className="h-8 w-8 rounded-full hover:bg-slate-200/60 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
                   >
@@ -1075,8 +1071,8 @@ export default function Contacts() {
                   <div className="space-y-0.5">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Controlo de IA</span>
                     <p className="text-xs text-slate-600">
-                      {selectedContact.ai_paused 
-                        ? "Modo Humano ativo. O bot não responde a este cliente." 
+                      {selectedContact.ai_paused
+                        ? "Modo Humano ativo. O bot não responde a este cliente."
                         : "IA Ativa. O agente responde às mensagens deste cliente."}
                     </p>
                   </div>
@@ -1085,11 +1081,10 @@ export default function Contacts() {
                 <Button
                   variant={selectedContact.ai_paused ? "outline" : "default"}
                   onClick={() => handleToggleAi(selectedContact)}
-                  className={`w-full rounded-xl gap-2 font-bold text-xs h-9 ${
-                    selectedContact.ai_paused 
-                      ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50" 
-                      : "bg-amber-500 hover:bg-amber-600 text-white shadow-sm"
-                  }`}
+                  className={`w-full rounded-xl gap-2 font-bold text-xs h-9 ${selectedContact.ai_paused
+                    ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                    : "bg-amber-500 hover:bg-amber-600 text-white shadow-sm"
+                    }`}
                 >
                   {selectedContact.ai_paused ? (
                     <>
@@ -1123,11 +1118,10 @@ export default function Contacts() {
                       <button
                         key={stage.id}
                         onClick={() => handleCreateOrUpdateLeadStage(stage.id)}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between border ${
-                          isCurrent 
-                            ? `${stage.bgLight} ${stage.color} ${stage.borderColor} shadow-xs` 
-                            : "bg-white text-slate-600 border-slate-200/70 hover:bg-slate-50"
-                        }`}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between border ${isCurrent
+                          ? `${stage.bgLight} ${stage.color} ${stage.borderColor} shadow-xs`
+                          : "bg-white text-slate-600 border-slate-200/70 hover:bg-slate-50"
+                          }`}
                       >
                         <span>{stage.label}</span>
                         {isCurrent && <Check size={14} className={stage.color} />}
@@ -1142,12 +1136,12 @@ export default function Contacts() {
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Tags do Cliente</label>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {(selectedContact.tags || []).map(tag => (
-                    <span 
-                      key={tag} 
+                    <span
+                      key={tag}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium"
                     >
                       {tag}
-                      <button 
+                      <button
                         onClick={() => handleRemoveTag(tag)}
                         className="hover:text-red-500 text-slate-400"
                       >
@@ -1158,17 +1152,17 @@ export default function Contacts() {
                 </div>
 
                 <div className="flex gap-2">
-                  <Input 
+                  <Input
                     placeholder="Adicionar nova tag..."
                     value={newTagInput}
                     onChange={e => setNewTagInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleAddTag(); }}}
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); handleAddTag(); } }}
                     className="text-xs rounded-xl h-9"
                   />
-                  <Button 
-                    type="button" 
+                  <Button
+                    type="button"
                     size="sm"
-                    variant="outline" 
+                    variant="outline"
                     onClick={handleAddTag}
                     className="rounded-xl px-3 h-9"
                   >
@@ -1183,9 +1177,9 @@ export default function Contacts() {
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     Notas Internas
                   </label>
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     onClick={handleSaveNotes}
                     disabled={savingNotes}
                     className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 h-7 text-xs font-bold px-2"
@@ -1193,7 +1187,7 @@ export default function Contacts() {
                     {savingNotes ? "A guardar..." : "Guardar Nota"}
                   </Button>
                 </div>
-                <textarea 
+                <textarea
                   rows={4}
                   value={editingNotes}
                   onChange={e => setEditingNotes(e.target.value)}

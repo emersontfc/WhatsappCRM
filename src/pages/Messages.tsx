@@ -1,22 +1,22 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { 
-  Send, 
-  User, 
-  Phone, 
-  Search, 
-  Sparkles, 
-  MessageSquare, 
-  ChevronLeft, 
-  Zap, 
-  List, 
-  X, 
-  Mic, 
-  Bot, 
-  UserCheck, 
-  PanelRightClose, 
-  PanelRightOpen, 
-  Tag, 
+import {
+  Send,
+  User,
+  Phone,
+  Search,
+  Sparkles,
+  MessageSquare,
+  ChevronLeft,
+  Zap,
+  List,
+  X,
+  Mic,
+  Bot,
+  UserCheck,
+  PanelRightClose,
+  PanelRightOpen,
+  Tag,
   Plus,
   ExternalLink,
   FileText,
@@ -202,7 +202,7 @@ export default function Messages() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { isActivated, loading: activationLoading } = useActivation();
-  
+
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -213,13 +213,13 @@ export default function Messages() {
   const [userId, setUserId] = useState<string | null>(null);
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const [showCrmPanel, setShowCrmPanel] = useState(true);
-  
+
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [isRecording, setIsRecording] = useState(false);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
-  
+
   // CRM Panel State for current contact
   const [currentLead, setCurrentLead] = useState<Lead | null>(null);
   const [leadLoading, setLeadLoading] = useState(false);
@@ -261,7 +261,7 @@ export default function Messages() {
           .select("*")
           .eq("user_id", uId)
           .eq("is_active", true);
-        
+
         if (isMounted && agentsData) {
           setAgents(agentsData);
           if (agentsData.length > 0) {
@@ -275,16 +275,16 @@ export default function Messages() {
           .select("*")
           .eq("user_id", uId)
           .order("last_message_at", { ascending: false, nullsFirst: false });
-        
+
         if (contactsError) throw contactsError;
-        
+
         if (isMounted && initialContacts) {
           setContacts(initialContacts);
-          
+
           // Deep link support: check for phone or contactId in query params
           const phoneParam = searchParams.get("phone");
           const contactIdParam = searchParams.get("contactId");
-          
+
           let targetContact: Contact | undefined;
           if (contactIdParam) {
             targetContact = initialContacts.find(c => c.id === contactIdParam);
@@ -302,9 +302,9 @@ export default function Messages() {
         // Real-time contacts subscription
         const contactsChannel = supabase
           .channel('messages-contacts-sync')
-          .on('postgres_changes', { 
-            event: '*', 
-            schema: 'public', 
+          .on('postgres_changes', {
+            event: '*',
+            schema: 'public',
             table: 'contacts',
             filter: `user_id=eq.${uId}`
           }, async (payload) => {
@@ -338,16 +338,16 @@ export default function Messages() {
               .order("last_message_at", { ascending: false, nullsFirst: false });
             if (isMounted && refreshed) {
               setContacts(prev => {
-                if (refreshed.length !== prev.length || 
-                    refreshed[0]?.last_message_at !== prev[0]?.last_message_at ||
-                    refreshed[0]?.id !== prev[0]?.id ||
-                    refreshed[0]?.unread_count !== prev[0]?.unread_count) {
+                if (refreshed.length !== prev.length ||
+                  refreshed[0]?.last_message_at !== prev[0]?.last_message_at ||
+                  refreshed[0]?.id !== prev[0]?.id ||
+                  refreshed[0]?.unread_count !== prev[0]?.unread_count) {
                   return refreshed;
                 }
                 return prev;
               });
             }
-          } catch (e) {}
+          } catch (e) { }
         }, 2000);
 
         return () => {
@@ -381,7 +381,7 @@ export default function Messages() {
         .eq("user_id", userId)
         .eq("contact_id", selectedContact.id)
         .order("timestamp", { ascending: true });
-      
+
       if (isMounted && initialMessages) {
         setMessages(initialMessages);
       }
@@ -395,7 +395,7 @@ export default function Messages() {
           .eq("user_id", userId)
           .or(`contact_id.eq.${selectedContact.id},phone.eq.${selectedContact.phone}`)
           .maybeSingle();
-        
+
         if (isMounted) {
           setCurrentLead(leadData || null);
         }
@@ -412,9 +412,9 @@ export default function Messages() {
       const channelName = `chat-${selectedContact.id}-${Date.now()}`;
       const messagesChannel = supabase
         .channel(channelName)
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
           table: 'messages',
           filter: `user_id=eq.${userId}`
         }, (payload) => {
@@ -463,18 +463,18 @@ export default function Messages() {
             .eq("user_id", userId)
             .eq("contact_id", selectedContact.id)
             .order("timestamp", { ascending: true });
-          
+
           if (isMounted && latestMessages && latestMessages.length > 0) {
             setMessages(prev => {
-              if (latestMessages.length !== prev.length || 
-                  latestMessages[latestMessages.length - 1]?.id !== prev[prev.length - 1]?.id) {
+              if (latestMessages.length !== prev.length ||
+                latestMessages[latestMessages.length - 1]?.id !== prev[prev.length - 1]?.id) {
                 const pendingTemps = prev.filter(p => p.id.startsWith("temp-") && !latestMessages.some(l => l.text === p.text));
                 return [...latestMessages, ...pendingTemps];
               }
               return prev;
             });
           }
-        } catch (e) {}
+        } catch (e) { }
       }, 1000);
 
       return () => {
@@ -579,10 +579,10 @@ export default function Messages() {
   };
 
   const handleSend = async (
-    e?: React.FormEvent, 
-    mediaUrl?: string, 
-    mediaType?: string, 
-    textOverride?: string, 
+    e?: React.FormEvent,
+    mediaUrl?: string,
+    mediaType?: string,
+    textOverride?: string,
     duration?: number,
     fileName?: string,
     mimetype?: string
@@ -699,7 +699,7 @@ export default function Messages() {
           agentId: selectedAgentId
         }),
       });
-      
+
       if (response.reply) {
         setNewMessage(response.reply);
         toast.info("Sugestão de resposta gerada pela IA!");
@@ -720,9 +720,9 @@ export default function Messages() {
         .from("contacts")
         .update({ name: contactNameInput.trim() })
         .eq("id", selectedContact.id);
-      
+
       if (error) throw error;
-      
+
       setSelectedContact(prev => prev ? { ...prev, name: contactNameInput.trim() } : null);
       setContacts(prev => prev.map(c => c.id === selectedContact.id ? { ...c, name: contactNameInput.trim() } : c));
       setIsEditingName(false);
@@ -742,7 +742,7 @@ export default function Messages() {
         .from("contacts")
         .update({ notes: contactNotes })
         .eq("id", selectedContact.id);
-      
+
       if (error) throw error;
       setSelectedContact(prev => prev ? { ...prev, notes: contactNotes } : null);
       toast.success("Notas guardadas com sucesso!");
@@ -767,7 +767,7 @@ export default function Messages() {
         .from("contacts")
         .update({ tags: updated })
         .eq("id", selectedContact.id);
-      
+
       if (error) throw error;
       setContactTags(updated);
       setSelectedContact(prev => prev ? { ...prev, tags: updated } : null);
@@ -789,7 +789,7 @@ export default function Messages() {
         .from("contacts")
         .update({ tags: updated })
         .eq("id", selectedContact.id);
-      
+
       if (error) throw error;
       setContactTags(updated);
       setSelectedContact(prev => prev ? { ...prev, tags: updated } : null);
@@ -809,7 +809,7 @@ export default function Messages() {
           .eq("id", currentLead.id)
           .select()
           .single();
-        
+
         if (error) throw error;
         setCurrentLead(data);
       } else {
@@ -827,7 +827,7 @@ export default function Messages() {
           })
           .select()
           .single();
-        
+
         if (error) throw error;
         setCurrentLead(data);
       }
@@ -846,7 +846,7 @@ export default function Messages() {
         .eq("id", currentLead.id)
         .select()
         .single();
-      
+
       if (error) throw error;
       setCurrentLead(data);
       toast.success("Valor do negócio atualizado!");
@@ -907,9 +907,9 @@ export default function Messages() {
         <div className="p-3 border-b border-slate-100 space-y-2.5">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
-            <Input 
-              placeholder="Buscar conversa..." 
-              className="pl-9 h-9 text-xs rounded-xl bg-slate-50 border-slate-100 focus:bg-white transition-all" 
+            <Input
+              placeholder="Buscar conversa..."
+              className="pl-9 h-9 text-xs rounded-xl bg-slate-50 border-slate-100 focus:bg-white transition-all"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -1011,7 +1011,7 @@ export default function Messages() {
                       <p className="text-[11px] text-slate-500 truncate line-clamp-1 flex-1">
                         {contact.last_message_text || (display.subtitle ? display.subtitle : "Toque para conversar...")}
                       </p>
-                      
+
                       <div className="flex items-center gap-1 shrink-0">
                         {/* Status Humano vs IA */}
                         {isHuman ? (
@@ -1062,15 +1062,15 @@ export default function Messages() {
             {/* Header com Modo Humano / IA */}
             <div className="p-2 sm:p-4 border-b border-slate-100 flex items-center justify-between bg-white z-10 shrink-0 gap-1.5 sm:gap-2">
               <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="lg:hidden -ml-1 h-8 w-8 rounded-xl shrink-0" 
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="lg:hidden -ml-1 h-8 w-8 rounded-xl shrink-0"
                   onClick={() => setShowChatOnMobile(false)}
                 >
                   <ChevronLeft size={18} />
                 </Button>
-                
+
                 {(() => {
                   const activeDisplay = getContactDisplay(selectedContact);
                   return (
@@ -1145,9 +1145,9 @@ export default function Messages() {
                 </Button>
 
                 {/* Sugestão de IA */}
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className="h-8 w-8 sm:h-9 sm:w-9 text-amber-500 hover:text-amber-600 hover:bg-amber-50 rounded-xl shrink-0"
                   onClick={getAiSuggestion}
                   disabled={loading || messages.length === 0 || !isActivated}
@@ -1173,7 +1173,7 @@ export default function Messages() {
             </div>
 
             {/* Mensagens Body */}
-            <div 
+            <div
               ref={messagesContainerRef}
               onScroll={handleMessagesScroll}
               className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
@@ -1230,7 +1230,7 @@ export default function Messages() {
                         {msg.media_url && (
                           <div className="mb-2 rounded-xl overflow-hidden">
                             {msg.media_type === "image" ? (
-                              <div 
+                              <div
                                 className="relative cursor-pointer group rounded-xl overflow-hidden max-w-[280px]"
                                 onClick={() => setPreviewMedia({ url: msg.media_url!, type: "image", title: msg.media_filename || "foto.jpg" })}
                               >
@@ -1356,16 +1356,16 @@ export default function Messages() {
                 accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
               />
               {isRecording ? (
-                <VoiceRecorder 
-                  onSend={(url, duration) => handleSend(undefined, url, "audio", undefined, duration)} 
-                  onCancel={() => setIsRecording(false)} 
+                <VoiceRecorder
+                  onSend={(url, duration) => handleSend(undefined, url, "audio", undefined, duration)}
+                  onCancel={() => setIsRecording(false)}
                 />
               ) : (
                 <form onSubmit={handleSend} className="flex gap-1.5 sm:gap-2 items-center">
-                  <Button 
+                  <Button
                     type="button"
-                    variant="ghost" 
-                    size="icon" 
+                    variant="ghost"
+                    size="icon"
                     className={cn(
                       "h-8 w-8 sm:h-10 sm:w-10 shrink-0 rounded-xl transition-colors",
                       showQuickReplies ? "text-emerald-600 bg-emerald-50" : "text-slate-400 hover:text-emerald-600"
@@ -1376,10 +1376,10 @@ export default function Messages() {
                   >
                     <List size={18} />
                   </Button>
-                  <Button 
+                  <Button
                     type="button"
-                    variant="ghost" 
-                    size="icon" 
+                    variant="ghost"
+                    size="icon"
                     className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 text-slate-400 hover:text-emerald-600 rounded-xl"
                     onClick={handleAttachmentClick}
                     disabled={!isActivated || isUploadingAttachment}
@@ -1387,10 +1387,10 @@ export default function Messages() {
                   >
                     <Paperclip size={18} />
                   </Button>
-                  <Button 
+                  <Button
                     type="button"
-                    variant="ghost" 
-                    size="icon" 
+                    variant="ghost"
+                    size="icon"
                     className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 text-slate-400 hover:text-emerald-600 rounded-xl"
                     onClick={() => setIsRecording(true)}
                     disabled={!isActivated}
@@ -1405,10 +1405,10 @@ export default function Messages() {
                     className="flex-1 h-9 sm:h-10 text-xs sm:text-sm rounded-xl border-slate-200 focus:ring-emerald-500/20"
                     disabled={loading || !isActivated}
                   />
-                  <Button 
-                    type="submit" 
-                    size="icon" 
-                    className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md shadow-emerald-600/20" 
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md shadow-emerald-600/20"
                     disabled={loading || !newMessage.trim() || !isActivated}
                   >
                     <Send size={16} />
@@ -1444,9 +1444,9 @@ export default function Messages() {
                 <User size={16} className="text-emerald-600" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">Perfil CRM</h3>
               </div>
-              <Button 
-                variant="ghost" 
-                size="icon" 
+              <Button
+                variant="ghost"
+                size="icon"
                 className="h-7 w-7 text-slate-400 hover:bg-slate-50 rounded-lg"
                 onClick={() => setShowCrmPanel(false)}
               >
@@ -1459,9 +1459,9 @@ export default function Messages() {
               <div className="space-y-3 bg-slate-50/50 p-3.5 rounded-2xl border border-slate-100">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Contacto</span>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     className="h-6 text-[10px] text-emerald-600 font-bold px-2 hover:bg-emerald-50 rounded-lg"
                     onClick={() => setIsEditingName(!isEditingName)}
                   >
@@ -1471,8 +1471,8 @@ export default function Messages() {
 
                 {isEditingName ? (
                   <div className="flex gap-1.5">
-                    <Input 
-                      value={contactNameInput} 
+                    <Input
+                      value={contactNameInput}
                       onChange={e => setContactNameInput(e.target.value)}
                       className="h-7 text-xs bg-white"
                     />
@@ -1505,9 +1505,9 @@ export default function Messages() {
                     <TrendingUp size={12} className="text-emerald-600" /> Lead / Oportunidade
                   </span>
                   {currentLead && (
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-6 text-[10px] text-emerald-600 font-bold px-2 hover:bg-emerald-50 rounded-lg"
                       onClick={() => navigate(`/leads?phone=${selectedContact.phone}`)}
                     >
@@ -1535,9 +1535,9 @@ export default function Messages() {
                 {/* Valor do Negócio */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Valor Estimado (MT)</label>
-                  <Input 
-                    type="number" 
-                    placeholder="0.00" 
+                  <Input
+                    type="number"
+                    placeholder="0.00"
                     className="h-8 text-xs bg-white font-mono"
                     defaultValue={currentLead?.value || 0}
                     onBlur={(e) => handleUpdateLeadValue(Number(e.target.value))}
@@ -1566,13 +1566,13 @@ export default function Messages() {
                 <div className="flex flex-wrap gap-1.5 min-h-[28px]">
                   {contactTags.length > 0 ? (
                     contactTags.map(tag => (
-                      <span 
-                        key={tag} 
+                      <span
+                        key={tag}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-[10px] font-bold group"
                       >
                         {tag}
-                        <button 
-                          onClick={() => handleRemoveTag(tag)} 
+                        <button
+                          onClick={() => handleRemoveTag(tag)}
                           className="text-slate-400 hover:text-red-500 ml-0.5"
                         >
                           <X size={10} />
@@ -1585,9 +1585,9 @@ export default function Messages() {
                 </div>
 
                 <div className="flex gap-1.5 pt-1">
-                  <Input 
-                    placeholder="Nova tag..." 
-                    value={newTagInput} 
+                  <Input
+                    placeholder="Nova tag..."
+                    value={newTagInput}
                     onChange={e => setNewTagInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); } }}
                     className="h-7 text-xs bg-white"
@@ -1604,9 +1604,9 @@ export default function Messages() {
                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
                     <FileText size={12} className="text-emerald-600" /> Notas Internas
                   </span>
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
+                  <Button
+                    size="sm"
+                    variant="ghost"
                     className="h-6 text-[10px] text-emerald-600 font-bold px-2 hover:bg-emerald-50 rounded-lg"
                     onClick={handleSaveNotes}
                     disabled={savingCrm}
@@ -1625,11 +1625,11 @@ export default function Messages() {
           </Card>
 
           {/* Mobile e Tablet: Slide-Over Drawer (< xl) */}
-          <div 
+          <div
             className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-xs xl:hidden animate-in fade-in duration-200"
             onClick={() => setShowCrmPanel(false)}
           >
-            <div 
+            <div
               className="w-full max-w-sm bg-white h-full shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right duration-300"
               onClick={e => e.stopPropagation()}
             >
@@ -1638,9 +1638,9 @@ export default function Messages() {
                   <User size={16} className="text-emerald-600" />
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">Perfil CRM do Contacto</h3>
                 </div>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className="h-8 w-8 text-slate-400 hover:bg-slate-100 rounded-xl"
                   onClick={() => setShowCrmPanel(false)}
                 >
@@ -1653,9 +1653,9 @@ export default function Messages() {
                 <div className="space-y-3 bg-slate-50/60 p-3.5 rounded-2xl border border-slate-100">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Contacto</span>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="h-6 text-[10px] text-emerald-600 font-bold px-2 hover:bg-emerald-50 rounded-lg"
                       onClick={() => setIsEditingName(!isEditingName)}
                     >
@@ -1665,8 +1665,8 @@ export default function Messages() {
 
                   {isEditingName ? (
                     <div className="flex gap-1.5">
-                      <Input 
-                        value={contactNameInput} 
+                      <Input
+                        value={contactNameInput}
                         onChange={e => setContactNameInput(e.target.value)}
                         className="h-8 text-xs bg-white"
                       />
@@ -1702,9 +1702,9 @@ export default function Messages() {
                       <TrendingUp size={12} className="text-emerald-600" /> Lead / Oportunidade
                     </span>
                     {currentLead && (
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         className="h-6 text-[10px] text-emerald-600 font-bold px-2 hover:bg-emerald-50 rounded-lg"
                         onClick={() => {
                           setShowCrmPanel(false);
@@ -1735,9 +1735,9 @@ export default function Messages() {
                   {/* Valor do Negócio */}
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Valor Estimado (MT)</label>
-                    <Input 
-                      type="number" 
-                      placeholder="0.00" 
+                    <Input
+                      type="number"
+                      placeholder="0.00"
                       className="h-8 text-xs bg-white font-mono"
                       defaultValue={currentLead?.value || 0}
                       onBlur={(e) => handleUpdateLeadValue(Number(e.target.value))}
@@ -1766,13 +1766,13 @@ export default function Messages() {
                   <div className="flex flex-wrap gap-1.5 min-h-[28px]">
                     {contactTags.length > 0 ? (
                       contactTags.map(tag => (
-                        <span 
-                          key={tag} 
+                        <span
+                          key={tag}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-[10px] font-bold group"
                         >
                           {tag}
-                          <button 
-                            onClick={() => handleRemoveTag(tag)} 
+                          <button
+                            onClick={() => handleRemoveTag(tag)}
                             className="text-slate-400 hover:text-red-500 ml-0.5"
                           >
                             <X size={10} />
@@ -1785,9 +1785,9 @@ export default function Messages() {
                   </div>
 
                   <div className="flex gap-1.5 pt-1">
-                    <Input 
-                      placeholder="Nova tag..." 
-                      value={newTagInput} 
+                    <Input
+                      placeholder="Nova tag..."
+                      value={newTagInput}
                       onChange={e => setNewTagInput(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); } }}
                       className="h-8 text-xs bg-white"
@@ -1804,9 +1804,9 @@ export default function Messages() {
                     <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
                       <FileText size={12} className="text-emerald-600" /> Notas Internas
                     </span>
-                    <Button 
-                      size="sm" 
-                      variant="ghost" 
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       className="h-6 text-[10px] text-emerald-600 font-bold px-2 hover:bg-emerald-50 rounded-lg"
                       onClick={handleSaveNotes}
                       disabled={savingCrm}
@@ -1829,23 +1829,23 @@ export default function Messages() {
 
       {/* Lightbox Modal para Mídia (Imagens e Vídeos) */}
       {previewMedia && (
-        <div 
+        <div
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-4 animate-in fade-in duration-200"
           onClick={() => setPreviewMedia(null)}
         >
           <div className="absolute top-4 right-4 flex items-center gap-2 z-10" onClick={(e) => e.stopPropagation()}>
-            <a 
-              href={previewMedia.url} 
-              download={previewMedia.title || "whatsapp-media"} 
-              target="_blank" 
+            <a
+              href={previewMedia.url}
+              download={previewMedia.title || "whatsapp-media"}
+              target="_blank"
               rel="noopener noreferrer"
               className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
               title="Baixar arquivo"
             >
               <Download size={18} />
             </a>
-            <button 
-              onClick={() => setPreviewMedia(null)} 
+            <button
+              onClick={() => setPreviewMedia(null)}
               className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
               title="Fechar visualizador"
             >
