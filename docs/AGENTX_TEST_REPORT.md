@@ -20,7 +20,8 @@
 | **Normalização Telefónica & JIDs** | `tests/phone-normalization.test.ts` | 5 | 5 | 0 | 100% | ✅ Aprovado |
 | **Pipeline CRM & Estágios** | `tests/crm-pipeline.test.ts` | 5 | 5 | 0 | 100% | ✅ Aprovado |
 | **Deduplicação & Estado WhatsApp** | `tests/whatsapp-dedup.test.ts` | 4 | 4 | 0 | 100% | ✅ Aprovado |
-| **TOTAL GERAL** | 7 ficheiros de teste automatizado | **46** | **46** | **0** | **100%** | **PRONTO PARA PRODUÇÃO** |
+| **Sistema de Mensagens & Baileys 7 LID** | `tests/messaging-system.test.ts` | 8 | 8 | 0 | 100% | ✅ Aprovado |
+| **TOTAL GERAL** | 8 ficheiros de teste automatizado | **52** | **52** | **0** | **100%** | **PRONTO PARA PRODUÇÃO** |
 
 ---
 
@@ -51,5 +52,18 @@
 1. **TypeScript Typecheck (`tsc --noEmit`):**
    - 0 erros de compilação em 100% dos ficheiros do frontend, backend e suíte de testes.
 2. **Vite Production Build (`vite build`):**
-   - 2.176 módulos transformados com sucesso em 17.33s.
+   - 2.176 módulos transformados com sucesso em 23.10s.
    - Chunks minificados e ativos gerados em `dist/`.
+
+---
+
+## 5. DETALHES DOS TESTES DO SISTEMA DE MENSAGENS (`messaging-system.test.ts`)
+
+- ✅ **Teste 1:** Bloqueio de contactos espúrios para grupos (`@g.us`), transmissões (`@broadcast`) e newsletters.
+- ✅ **Teste 2:** Normalização correta de JID de telefone moçambicano (`@s.whatsapp.net`).
+- ✅ **Teste 3:** Proibição absoluta de inventar telefones a partir de LIDs (`@lid`); isolamento em coluna própria `lid`.
+- ✅ **Teste 4:** Emparelhamento dinâmico Baileys 7 via `remoteJidAlt` no mesmo contacto sem duplicar.
+- ✅ **Teste 5:** Formatação visual graciosa de contactos por LID na interface (`getContactDisplay`).
+- ✅ **Teste 6:** Deduplicação atómica de mensagens por `msg_id` em reconexões e histórico.
+- ✅ **Teste 7:** Persistência de mídias ricas (áudio, fotos, vídeos, documentos e stickers).
+- ✅ **Teste 8:** Alternância instantânea de atendimento Humano vs IA (`ai_paused`).

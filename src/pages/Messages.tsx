@@ -23,7 +23,12 @@ import {
   TrendingUp,
   Save,
   Clock,
-  CheckCheck
+  CheckCheck,
+  Play,
+  Pause,
+  Download,
+  Paperclip,
+  ChevronDown
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId } from "../supabase";
@@ -78,6 +83,121 @@ const getColorClass = (name: string) => {
   return colors[index % colors.length];
 };
 
+function VoiceMessagePlayer({ src, isOut }: { src: string; isOut: boolean }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const onLoadedMetadata = () => {
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        setDuration(audio.duration);
+      }
+    };
+    const onEnded = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    audio.addEventListener("ended", onEnded);
+
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+      audio.removeEventListener("ended", onEnded);
+    };
+  }, [src]);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const target = Number(e.target.value);
+    if (audioRef.current) {
+      audioRef.current.currentTime = target;
+      setCurrentTime(target);
+    }
+  };
+
+  const cyclePlaybackRate = () => {
+    if (!audioRef.current) return;
+    const rates = [1, 1.5, 2];
+    const nextIdx = (rates.indexOf(playbackRate) + 1) % rates.length;
+    const nextRate = rates[nextIdx];
+    audioRef.current.playbackRate = nextRate;
+    setPlaybackRate(nextRate);
+  };
+
+  const formatSec = (sec: number) => {
+    if (isNaN(sec) || !isFinite(sec)) return "0:00";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
+  return (
+    <div className={cn(
+      "flex items-center gap-2 p-2 rounded-xl my-1 min-w-[200px] max-w-[280px]",
+      isOut ? "bg-emerald-700/50 text-white" : "bg-slate-100 text-slate-800"
+    )}>
+      <audio ref={audioRef} src={src} preload="metadata" />
+      <button
+        type="button"
+        onClick={togglePlay}
+        className={cn(
+          "w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow-sm",
+          isOut ? "bg-white text-emerald-700 hover:bg-slate-100" : "bg-emerald-600 text-white hover:bg-emerald-700"
+        )}
+      >
+        {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
+      </button>
+
+      <div className="flex-1 min-w-0 flex flex-col justify-center gap-1">
+        <input
+          type="range"
+          min={0}
+          max={duration || 100}
+          value={currentTime}
+          onChange={handleSeek}
+          className={cn(
+            "w-full h-1.5 rounded-lg appearance-none cursor-pointer focus:outline-none accent-emerald-500",
+            isOut ? "bg-white/30" : "bg-slate-300"
+          )}
+        />
+        <div className="flex justify-between items-center text-[10px] font-mono leading-none opacity-80">
+          <span>{formatSec(currentTime > 0 ? currentTime : duration)}</span>
+          <button
+            type="button"
+            onClick={cyclePlaybackRate}
+            className={cn(
+              "text-[9px] font-bold px-1.5 py-0.5 rounded transition-all",
+              isOut ? "bg-white/20 hover:bg-white/30" : "bg-slate-200 hover:bg-slate-300"
+            )}
+            title="Velocidade"
+          >
+            {playbackRate}x
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Messages() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -111,6 +231,12 @@ export default function Messages() {
   const [savingCrm, setSavingCrm] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [previewMedia, setPreviewMedia] = useState<{ url: string; type: 'image' | 'video'; title?: string } | null>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
 
   // Initial Load
   useEffect(() => {
@@ -361,8 +487,23 @@ export default function Messages() {
     return () => { isMounted = false; };
   }, [selectedContact?.id, userId]);
 
+  const handleMessagesScroll = () => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    const near = scrollHeight - scrollTop - clientHeight < 120;
+    setIsNearBottom(near);
+  };
+
+  const scrollToBottom = (smooth = true) => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+    }
+  };
+
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (isNearBottom) {
+      scrollToBottom(true);
+    }
   }, [messages]);
 
   const markConversationAsRead = async (contactId: string) => {
@@ -377,7 +518,45 @@ export default function Messages() {
   const handleSelectContact = (contact: Contact) => {
     setSelectedContact(contact);
     setShowChatOnMobile(true);
-    setSearchParams({ phone: contact.phone });
+    setSearchParams(contact.phone ? { phone: contact.phone } : { contactId: contact.id });
+  };
+
+  const handleAttachmentClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedContact || !userId) return;
+
+    setIsUploadingAttachment(true);
+    const toastId = toast.loading("Enviando anexo...");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const uploadRes = await apiFetch("/api/media/upload", {
+        method: "POST",
+        body: formData
+      });
+
+      if (!uploadRes.success || !uploadRes.url) {
+        throw new Error(uploadRes.error || "Falha no envio do anexo");
+      }
+
+      let mType = "document";
+      if (file.type.startsWith("image/")) mType = "image";
+      else if (file.type.startsWith("video/")) mType = "video";
+      else if (file.type.startsWith("audio/")) mType = "audio";
+
+      await handleSend(undefined, uploadRes.url, mType, undefined, undefined, file.name, file.type);
+      toast.success("Anexo enviado com sucesso!", { id: toastId });
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao enviar anexo", { id: toastId });
+    } finally {
+      setIsUploadingAttachment(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const toggleAiMode = async () => {
@@ -399,7 +578,15 @@ export default function Messages() {
     }
   };
 
-  const handleSend = async (e?: React.FormEvent, mediaUrl?: string, mediaType?: string, textOverride?: string, duration?: number) => {
+  const handleSend = async (
+    e?: React.FormEvent, 
+    mediaUrl?: string, 
+    mediaType?: string, 
+    textOverride?: string, 
+    duration?: number,
+    fileName?: string,
+    mimetype?: string
+  ) => {
     if (e) e.preventDefault();
     const textToSend = (textOverride !== undefined ? textOverride : newMessage).trim();
     if ((!textToSend && !mediaUrl) || !selectedContact || !userId) return;
@@ -413,11 +600,13 @@ export default function Messages() {
       id: tempId,
       user_id: userId,
       contact_id: selectedContact.id,
-      text: textToSend || (mediaType === "audio" ? "🎵 Áudio" : "Mídia"),
+      text: textToSend || (mediaType === "audio" ? "🎵 Áudio" : mediaType === "image" ? "📷 Foto" : mediaType === "video" ? "🎥 Vídeo" : "📄 Documento"),
       type: "outbound",
       timestamp: new Date().toISOString(),
       media_url: mediaUrl,
       media_type: mediaType,
+      media_mimetype: mimetype,
+      media_filename: fileName,
       is_automated: false,
       is_sending: true,
     };
@@ -447,23 +636,29 @@ export default function Messages() {
 
     // 🚀 3. Send over network in background
     try {
-      let clean = selectedContact.phone.replace(/\D/g, "");
-      if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
-        clean = `258${clean}`;
+      let targetJid = "";
+      if (selectedContact.lid && (!selectedContact.phone || selectedContact.phone === selectedContact.lid)) {
+        const cleanLid = selectedContact.lid.replace("@lid", "").replace(/\D/g, "");
+        targetJid = `${cleanLid}@lid`;
+      } else if (selectedContact.phone) {
+        let clean = selectedContact.phone.replace(/\D/g, "");
+        if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
+          clean = `258${clean}`;
+        }
+        targetJid = clean.startsWith("120363") ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
       }
-      const isLid = selectedContact.phone.includes("@lid") || (clean.length === 15 && !clean.startsWith("258"));
-      const targetJid = clean.startsWith("120363") ? `${clean}@g.us` : (isLid ? `${clean}@lid` : `${clean}@s.whatsapp.net`);
 
       const response = await apiFetch(`/api/whatsapp/send`, {
         method: "POST",
         body: JSON.stringify({
           jid: targetJid,
-          to: clean,
+          contactId: selectedContact.id,
           text: textToSend,
           mediaUrl,
           mediaType,
           duration,
-          contactId: selectedContact.id
+          fileName,
+          mimetype
         }),
       });
 
@@ -663,11 +858,30 @@ export default function Messages() {
   // Filter Contacts for left column (Direct 1-on-1 Messages only - groups belong strictly in /groups)
   const filteredContacts = contacts.filter((c) => {
     const cleanPhone = (c.phone || "").replace(/\D/g, "");
-    if (cleanPhone.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanPhone.length < 7 || cleanPhone.length > 18) {
+    const cleanLid = (c.lid || "").replace(/\D/g, "");
+
+    // Exclude group/broadcast
+    if (
+      (c.phone && (c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanPhone.startsWith("120363"))) ||
+      (c.lid && (c.lid.includes("@g.us") || c.lid.includes("@broadcast") || cleanLid.startsWith("120363")))
+    ) {
       return false;
     }
 
-    const matchesSearch = c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search);
+    // Must have either a valid phone (>= 7 digits) or a valid LID (>= 5 digits)
+    const hasValidPhone = cleanPhone.length >= 7 && cleanPhone.length <= 18;
+    const hasValidLid = cleanLid.length >= 5;
+    if (!hasValidPhone && !hasValidLid) {
+      return false;
+    }
+
+    const term = search.toLowerCase().trim();
+    const matchesSearch = !term ||
+      (c.name && c.name.toLowerCase().includes(term)) ||
+      (c.phone && c.phone.includes(term)) ||
+      (c.lid && c.lid.includes(term)) ||
+      (c.last_message_text && c.last_message_text.toLowerCase().includes(term));
+
     if (!matchesSearch) return false;
 
     if (activeFilter === "unread") return (c.unread_count || 0) > 0;
@@ -959,10 +1173,43 @@ export default function Messages() {
             </div>
 
             {/* Mensagens Body */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar">
+            <div 
+              ref={messagesContainerRef}
+              onScroll={handleMessagesScroll}
+              className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
+            >
               {messages.length > 0 ? (
                 messages.map((msg) => {
                   const isOut = msg.type === "outbound";
+                  const isSticker = msg.media_type === "sticker";
+
+                  if (isSticker && msg.media_url) {
+                    return (
+                      <div
+                        key={msg.id}
+                        className={cn(
+                          "flex flex-col max-w-[85%] sm:max-w-[70%]",
+                          isOut ? "ml-auto items-end" : "mr-auto items-start"
+                        )}
+                      >
+                        <div className="my-1 cursor-pointer hover:scale-105 transition-transform" onClick={() => setPreviewMedia({ url: msg.media_url!, type: "image", title: "sticker.webp" })}>
+                          <img src={msg.media_url} alt="Sticker" className="w-32 h-32 object-contain" />
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5 px-1 font-mono">
+                          {msg.is_automated && <span className="text-emerald-600 font-bold uppercase mr-1">[Auto]</span>}
+                          <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          {isOut && (
+                            (msg as any).is_sending ? (
+                              <Clock size={11} className="text-slate-400 animate-pulse ml-0.5" />
+                            ) : (
+                              <CheckCheck size={13} className="text-emerald-500 ml-0.5" />
+                            )
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
                   return (
                     <div
                       key={msg.id}
@@ -979,13 +1226,53 @@ export default function Messages() {
                             : "bg-white text-slate-900 border border-slate-100 rounded-tl-none"
                         )}
                       >
-                        {/* Media display if present */}
+                        {/* Rich Media Renderers */}
                         {msg.media_url && (
-                          <div className="mb-2 rounded-xl overflow-hidden bg-black/10">
+                          <div className="mb-2 rounded-xl overflow-hidden">
                             {msg.media_type === "image" ? (
-                              <img src={msg.media_url} alt="Anexo" className="max-h-60 w-auto object-cover rounded-xl" />
+                              <div 
+                                className="relative cursor-pointer group rounded-xl overflow-hidden max-w-[280px]"
+                                onClick={() => setPreviewMedia({ url: msg.media_url!, type: "image", title: msg.media_filename || "foto.jpg" })}
+                              >
+                                <img src={msg.media_url} alt="Foto" className="max-h-64 w-auto object-cover rounded-xl group-hover:scale-102 transition-transform duration-200" />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                                  <span className="opacity-0 group-hover:opacity-100 bg-black/60 text-white text-[10px] font-bold px-2 py-1 rounded-lg backdrop-blur-xs transition-opacity">
+                                    Ampliar
+                                  </span>
+                                </div>
+                              </div>
                             ) : msg.media_type === "audio" ? (
-                              <audio controls src={msg.media_url} className="w-full max-w-[240px] my-1" />
+                              <VoiceMessagePlayer src={msg.media_url} isOut={isOut} />
+                            ) : msg.media_type === "video" ? (
+                              <div className="max-w-[280px] bg-black/20 rounded-xl overflow-hidden">
+                                <video controls src={msg.media_url} className="max-h-60 w-full rounded-xl bg-black" />
+                              </div>
+                            ) : msg.media_type === "document" ? (
+                              <div className={cn(
+                                "flex items-center gap-3 p-2.5 rounded-xl border transition-all max-w-[280px]",
+                                isOut ? "bg-emerald-700/40 border-emerald-500/30 text-white" : "bg-slate-50 border-slate-200 text-slate-800"
+                              )}>
+                                <div className={cn("p-2 rounded-lg shrink-0", isOut ? "bg-white/20 text-white" : "bg-emerald-100 text-emerald-700")}>
+                                  <FileText size={18} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-bold truncate">{msg.media_filename || "Documento"}</p>
+                                  <p className="text-[10px] opacity-75 uppercase font-mono">{msg.media_mimetype ? msg.media_mimetype.split("/")[1] : "Arquivo"}</p>
+                                </div>
+                                <a
+                                  href={msg.media_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download={msg.media_filename || "documento"}
+                                  className={cn(
+                                    "p-1.5 rounded-lg transition-transform active:scale-95 shrink-0",
+                                    isOut ? "hover:bg-white/20 text-white" : "hover:bg-slate-200 text-slate-600"
+                                  )}
+                                  title="Baixar arquivo"
+                                >
+                                  <Download size={15} />
+                                </a>
+                              </div>
                             ) : (
                               <div className="p-2 flex items-center gap-2 text-xs font-medium">
                                 <FileText size={16} /> Anexo recebido
@@ -1018,6 +1305,18 @@ export default function Messages() {
               )}
               <div ref={scrollRef} />
 
+              {/* Botão Flutuante de Scroll para o Fim */}
+              {!isNearBottom && (
+                <button
+                  type="button"
+                  onClick={() => scrollToBottom(true)}
+                  className="sticky bottom-2 ml-auto z-20 bg-emerald-600 text-white rounded-full p-2.5 shadow-xl hover:bg-emerald-700 transition-all animate-in fade-in zoom-in-75 flex items-center justify-center"
+                  title="Rolar para as mensagens mais recentes"
+                >
+                  <ChevronDown size={16} />
+                </button>
+              )}
+
               {/* Quick Replies Drawer */}
               {showQuickReplies && quickReplies.length > 0 && (
                 <div className="absolute bottom-4 left-4 right-4 bg-white border border-slate-200 rounded-2xl shadow-2xl p-4 z-20 animate-in slide-in-from-bottom-4">
@@ -1049,6 +1348,13 @@ export default function Messages() {
 
             {/* Input Bar */}
             <div className="p-2 sm:p-3 bg-white border-t border-slate-100 shrink-0">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileSelected}
+                className="hidden"
+                accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+              />
               {isRecording ? (
                 <VoiceRecorder 
                   onSend={(url, duration) => handleSend(undefined, url, "audio", undefined, duration)} 
@@ -1069,6 +1375,17 @@ export default function Messages() {
                     title="Respostas Rápidas"
                   >
                     <List size={18} />
+                  </Button>
+                  <Button 
+                    type="button"
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 text-slate-400 hover:text-emerald-600 rounded-xl"
+                    onClick={handleAttachmentClick}
+                    disabled={!isActivated || isUploadingAttachment}
+                    title="Anexar arquivo, foto ou documento"
+                  >
+                    <Paperclip size={18} />
                   </Button>
                   <Button 
                     type="button"
@@ -1508,6 +1825,41 @@ export default function Messages() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Lightbox Modal para Mídia (Imagens e Vídeos) */}
+      {previewMedia && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setPreviewMedia(null)}
+        >
+          <div className="absolute top-4 right-4 flex items-center gap-2 z-10" onClick={(e) => e.stopPropagation()}>
+            <a 
+              href={previewMedia.url} 
+              download={previewMedia.title || "whatsapp-media"} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
+              title="Baixar arquivo"
+            >
+              <Download size={18} />
+            </a>
+            <button 
+              onClick={() => setPreviewMedia(null)} 
+              className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
+              title="Fechar visualizador"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <div className="max-w-4xl max-h-[85vh] overflow-hidden flex items-center justify-center rounded-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            {previewMedia.type === "image" ? (
+              <img src={previewMedia.url} alt="Visualização" className="max-h-[85vh] max-w-full object-contain rounded-2xl" />
+            ) : (
+              <video controls autoPlay src={previewMedia.url} className="max-h-[85vh] max-w-full rounded-2xl bg-black" />
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

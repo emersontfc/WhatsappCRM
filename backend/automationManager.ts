@@ -37,14 +37,6 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
 
         if (contact) {
           contactId = contact.id;
-          await supabaseAdmin
-            .from("contacts")
-            .update({
-              unread_count: (contact.unread_count || 0) + 1,
-              last_message_at: new Date().toISOString(),
-              last_message_text: text.substring(0, 100)
-            })
-            .eq("id", contact.id);
         }
 
         // Upsert lead if it's a real phone number
@@ -96,33 +88,11 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
         await new Promise(resolve => setTimeout(resolve, 1500));
         await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
 
-        // Send response
+        // Send response (automatically persisted and deduplicated by whatsappManager)
         await whatsappManager.sendMessage(userId, jid, selectedOption.response, selectedOption.media_url, selectedOption.response_type);
         await whatsappManager.log(userId, "success", `Opção de menu "${selectedOption.label}" disparada para ${jid}`);
         
-        // Log to messages table
-        try {
-          const { data: contact } = await supabaseAdmin
-            .from("contacts")
-            .select("id")
-            .eq("user_id", userId)
-            .eq("phone", jid.split("@")[0])
-            .maybeSingle();
-
-          await supabaseAdmin.from("messages").insert({
-            user_id: userId,
-            contact_id: contact?.id || null,
-            text: selectedOption.response,
-            type: "outbound",
-            timestamp: new Date().toISOString(),
-            is_automated: true
-          });
-        } catch (e) {
-          console.error("Error logging menu response to database:", e);
-        }
-        
-        // We don't clear the state so they can choose another option if they want,
-        // or we could clear it. Let's clear it to avoid getting stuck.
+        // Clear state to avoid getting stuck
         menuStateCache.delete(stateKey);
         return true; // Stop processing other automations
       }
@@ -202,33 +172,6 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             await whatsappManager.log(userId, "success", `Bot "${automation.name}" disparado para ${jid}`, { trigger: normalizedText, response: automation.response, media_type: finalMediaType });
           }
           
-          try {
-            const rawPhone = jid.split("@")[0].replace(/\D/g, "");
-            const pNo258 = rawPhone.startsWith("258") ? rawPhone.slice(3) : rawPhone;
-            const pWith258 = rawPhone.startsWith("258") ? rawPhone : `258${rawPhone}`;
-
-            const { data: contacts } = await supabaseAdmin
-              .from("contacts")
-              .select("id")
-              .eq("user_id", userId)
-              .or(`phone.eq.${rawPhone},phone.eq.${pNo258},phone.eq.${pWith258}`)
-              .limit(1);
-
-            const resolvedContactId = contacts?.[0]?.id || contactId || null;
-
-            await supabaseAdmin.from("messages").insert({
-              user_id: userId,
-              contact_id: resolvedContactId,
-              text: automation.response_type === "menu" ? "Menu Inteligente Enviado" : automation.response,
-              type: "outbound",
-              timestamp: new Date().toISOString(),
-              is_automated: true,
-              automation_id: automation.id
-            });
-          } catch (e) {
-            console.error("Error logging automated message to database:", e);
-          }
-          
           break; // Stop processing other automations if one triggered
         }
       }
@@ -262,27 +205,6 @@ export async function handleIncomingMessage(whatsappManager: any, userId: string
             triggered = true;
             await whatsappManager.sendMessage(userId, jid, qr.response_text);
             await whatsappManager.log(userId, "success", `Quick reply "${qr.trigger}" disparado para ${jid}`);
-            
-            // Log to messages table
-            try {
-              const { data: contact } = await supabaseAdmin
-                .from("contacts")
-                .select("id")
-                .eq("user_id", userId)
-                .eq("phone", jid.split("@")[0])
-                .maybeSingle();
-
-              await supabaseAdmin.from("messages").insert({
-                user_id: userId,
-                contact_id: contact?.id || null,
-                text: qr.response_text,
-                type: "outbound",
-                timestamp: new Date().toISOString(),
-                is_automated: true
-              });
-            } catch (e) {
-              console.error("Error logging quick reply message to database:", e);
-            }
             break; // Stop after first match
           }
         }

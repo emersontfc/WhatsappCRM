@@ -55,14 +55,16 @@ export function formatPhoneNumber(phone: string): string {
   return phone.startsWith("+") ? phone : (clean.length > 5 ? `+${clean}` : phone);
 }
 
-export function getContactDisplay(contact: { name?: string | null; phone: string }) {
+export function getContactDisplay(contact: { name?: string | null; phone?: string | null; lid?: string | null }) {
   const cleanPhone = (contact.phone || "").replace(/\D/g, "");
-  const formattedPhone = formatPhoneNumber(contact.phone);
+  const formattedPhone = contact.phone ? formatPhoneNumber(contact.phone) : "";
+  const cleanLid = (contact.lid || "").replace(/\D/g, "");
   
   const rawName = (contact.name || "").trim();
   const isNumericOnly = !rawName || /^[\d\s+()\-#]+$/.test(rawName);
-  const isSameAsPhone = rawName.replace(/\D/g, "") === cleanPhone && rawName.replace(/\D/g, "").length > 5;
-  const isBogusName = rawName === "</>" || rawName === "Sem Nome" || isNumericOnly || isSameAsPhone;
+  const isSameAsPhone = Boolean(cleanPhone) && rawName.replace(/\D/g, "") === cleanPhone && rawName.replace(/\D/g, "").length > 5;
+  const isSameAsLid = Boolean(cleanLid) && rawName.replace(/\D/g, "") === cleanLid;
+  const isBogusName = rawName === "</>" || rawName === "Sem Nome" || isNumericOnly || isSameAsPhone || isSameAsLid;
 
   if (!isBogusName) {
     const words = rawName.split(/\s+/).filter(Boolean);
@@ -78,14 +80,32 @@ export function getContactDisplay(contact: { name?: string | null; phone: string
 
     return {
       title: rawName,
-      subtitle: formattedPhone,
+      subtitle: formattedPhone || (cleanLid ? `LID: ${cleanLid}` : null),
       initials: initials || null,
       isRealName: true,
     };
   }
 
+  if (formattedPhone) {
+    return {
+      title: formattedPhone,
+      subtitle: cleanLid ? `LID: ${cleanLid}` : null,
+      initials: null,
+      isRealName: false,
+    };
+  }
+
+  if (cleanLid) {
+    return {
+      title: `WhatsApp (${cleanLid.slice(-4)})`,
+      subtitle: `LID: ${cleanLid}`,
+      initials: "WA",
+      isRealName: false,
+    };
+  }
+
   return {
-    title: formattedPhone || "Contacto WhatsApp",
+    title: "Contacto WhatsApp",
     subtitle: null,
     initials: null,
     isRealName: false,

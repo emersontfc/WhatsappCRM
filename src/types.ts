@@ -36,6 +36,7 @@ export interface Contact {
   id: string;
   user_id: string;
   phone: string;
+  lid?: string;
   name: string;
   tags?: string[];
   notes?: string;

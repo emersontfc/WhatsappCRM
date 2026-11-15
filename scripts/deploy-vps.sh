@@ -106,3 +106,4 @@ echo "🎉 DEPLOY CONCLUÍDO COM SUCESSO NO VPS!"
 echo "Domínio: https://agentx.kazix.site (ou http://149.56.44.236)"
 echo "Logs em tempo real: sudo docker compose logs -f (ou pm2 logs)"
 echo "=========================================================="
+

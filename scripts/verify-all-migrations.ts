@@ -26,6 +26,9 @@ const CHECKS: CheckItem[] = [
   { migration: "08_agentx_2_0_commerce_operations", table: "payment_verifications", columns: ["id", "order_id", "provider", "transaction_reference", "amount", "status"] },
   { migration: "08_agentx_2_0_commerce_operations", table: "agent_operations", columns: ["id", "user_id", "phone", "step", "description"] },
   { migration: "08_agentx_2_0_commerce_operations", table: "agents", columns: ["specialization", "autonomy_level", "risk_tolerance", "enabled_tools", "financial_limit"] },
+  { migration: "09_business_profile_canonical", table: "company_profile", columns: ["id", "user_id", "name", "type", "timezone", "settings"] },
+  { migration: "10_contacts_lid_support", table: "contacts", columns: ["id", "user_id", "name", "phone", "lid"] },
+  { migration: "10_contacts_lid_support", table: "messages", columns: ["id", "user_id", "contact_id", "msg_id", "is_read", "media_url", "media_type"] },
 ];
 
 async function runAudit() {
@@ -51,7 +54,7 @@ async function runAudit() {
   console.log("\n------------------------------------------------------------------");
   console.log(`Resultado do Diagnóstico: ${passedCount}/${totalCount} itens verificados.`);
   if (passedCount === totalCount) {
-    console.log("🎉 TODAS AS 9 MIGRAÇÕES (00 a 08) ESTÃO 100% INSTALADAS E OPERACIONAIS NO SUPABASE!");
+    console.log("🎉 TODAS AS 11 MIGRAÇÕES (00 a 10) ESTÃO 100% INSTALADAS E OPERACIONAIS NO SUPABASE!");
   } else {
     console.log(`⚠️ Existem ${totalCount - passedCount} itens com pendências.`);
   }

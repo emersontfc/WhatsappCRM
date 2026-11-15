@@ -36,9 +36,10 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || ".webm";
+    const ext = path.extname(file.originalname) || "";
+    const prefix = file.mimetype?.startsWith("audio") ? "audio" : file.mimetype?.startsWith("image") ? "img" : file.mimetype?.startsWith("video") ? "vid" : "doc";
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `audio-${uniqueSuffix}${ext}`);
+    cb(null, `${prefix}-${uniqueSuffix}${ext}`);
   },
 });
 

@@ -340,7 +340,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
             console.log(`[WhatsApp] Message from ${jid} (isMe: ${isMe}): "${text}"`);
 
-            await this.syncMessage(userId, msg);
+            const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
+            await this.syncMessage(userId, msg, altJid);
 
             // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
             const myInfo = this.getMe(userId);
@@ -381,29 +382,31 @@ export class WhatsAppManager implements IWhatsAppTransport {
     }
   }
 
-  private async syncMessage(
+  public async syncMessage(
     userId: string, 
     msg: any, 
+    altJid?: string,
     explicitMediaUrl?: string, 
     explicitMediaType?: string, 
     explicitMimetype?: string, 
     explicitFilename?: string
-  ) {
+  ): Promise<any> {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(userId)) return;
+      if (!uuidRegex.test(userId)) return null;
 
-      if (!msg.message) return;
+      if (!msg.message) return null;
       
       const jid = msg.key.remoteJid;
-      if (!jid) return;
+      if (!jid) return null;
 
-      if (jid === "status@broadcast") return;
+      if (jid === "status@broadcast") return null;
 
       let text = msg.message.conversation || 
                    msg.message.extendedTextMessage?.text || 
                    msg.message.imageMessage?.caption || 
                    msg.message.videoMessage?.caption ||
+                   msg.message.documentMessage?.caption ||
                    "";
 
       if (!text) {
@@ -412,9 +415,18 @@ export class WhatsAppManager implements IWhatsAppTransport {
         else if (msg.message.audioMessage) text = "🎵 Áudio";
         else if (msg.message.documentMessage) text = "📄 Documento";
         else if (msg.message.stickerMessage) text = "🎨 Sticker";
+        else if (msg.message.buttonsResponseMessage?.selectedButtonId) text = msg.message.buttonsResponseMessage.selectedButtonId;
+        else if (msg.message.templateButtonReplyMessage?.selectedId) text = msg.message.templateButtonReplyMessage.selectedId;
+        else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+        else if (msg.message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+          try {
+            const p = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+            text = p.id || p.selectedId || "";
+          } catch (e) {}
+        }
       }
 
-      if (!text && !explicitMediaUrl) return;
+      if (!text && !explicitMediaUrl) return null;
 
       const isGroupOrBroadcast = jid.includes("@g.us") || 
                                  jid.includes("@broadcast") || 
@@ -422,101 +434,88 @@ export class WhatsAppManager implements IWhatsAppTransport {
                                  jid.startsWith("120363");
 
       const pushName = msg.pushName || "";
+      const effectiveAltJid = altJid || msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
+
       let contactId: string | null = null;
       if (!isGroupOrBroadcast) {
-        const cId = await this.getOrCreateContact(userId, jid, pushName);
+        const cId = await this.getOrCreateContact(userId, jid, pushName, effectiveAltJid);
         if (cId && cId !== "unknown") {
           contactId = cId;
         }
       }
       
-      const { data: existingMsg } = await supabaseAdmin
-        .from("messages")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("msg_id", msg.key.id)
-        .maybeSingle();
+      // Strict deduplication: check if message with (user_id, msg_id) already exists
+      const msgId = msg.key?.id;
+      if (msgId) {
+        const { data: existingMsg } = await supabaseAdmin
+          .from("messages")
+          .select("*")
+          .eq("user_id", userId)
+          .eq("msg_id", msgId)
+          .maybeSingle();
 
-      if (!existingMsg) {
-        let mediaUrl = explicitMediaUrl || "";
-        let mediaType = explicitMediaType || "";
-        let mediaMimetype = explicitMimetype || "";
-        let mediaFilename = explicitFilename || "";
-
-        if (!mediaType) {
-          if (msg.message.imageMessage) {
-            mediaType = "image";
-            mediaMimetype = msg.message.imageMessage.mimetype || "image/jpeg";
-            mediaFilename = "image.jpg";
-          } else if (msg.message.videoMessage) {
-            mediaType = "video";
-            mediaMimetype = msg.message.videoMessage.mimetype || "video/mp4";
-            mediaFilename = "video.mp4";
-          } else if (msg.message.audioMessage) {
-            mediaType = "audio";
-            mediaMimetype = msg.message.audioMessage.mimetype || "audio/ogg";
-            mediaFilename = "audio.ogg";
-          } else if (msg.message.documentMessage) {
-            mediaType = "document";
-            mediaMimetype = msg.message.documentMessage.mimetype || "application/pdf";
-            mediaFilename = msg.message.documentMessage.fileName || "document";
-          }
+        if (existingMsg) {
+          return existingMsg;
         }
+      }
 
-        // 📥 Download incoming media from WhatsApp if not already provided
-        if (!msg.key.fromMe && !mediaUrl && (msg.message.audioMessage || msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage)) {
-          try {
-            const session = this.sessions.get(userId);
-            if (session?.socket) {
-              const buffer = await downloadMediaMessage(
-                msg,
-                'buffer',
-                {},
-                {
-                  logger: pino({ level: 'silent' }),
-                  reuploadRequest: (m: any) => session.socket.updateMediaMessage(m)
-                }
-              );
-              if (buffer && buffer.length > 0) {
-                const ext = mediaType === "audio" ? "ogg" : mediaType === "image" ? "jpg" : mediaType === "video" ? "mp4" : "pdf";
-                const filename = `received-${Date.now()}-${Math.round(Math.random() * 1e4)}.${ext}`;
-                const uploadsPath = path.join(process.cwd(), "uploads", filename);
-                fs.writeFileSync(uploadsPath, buffer);
-                mediaUrl = `/uploads/${filename}`;
-                console.log(`[WhatsApp] Downloaded and saved incoming media to: ${mediaUrl}`);
+      let mediaUrl = explicitMediaUrl || "";
+      let mediaType = explicitMediaType || "";
+      let mediaMimetype = explicitMimetype || "";
+      let mediaFilename = explicitFilename || "";
+
+      if (!mediaType) {
+        if (msg.message.imageMessage) {
+          mediaType = "image";
+          mediaMimetype = msg.message.imageMessage.mimetype || "image/jpeg";
+          mediaFilename = "image.jpg";
+        } else if (msg.message.videoMessage) {
+          mediaType = "video";
+          mediaMimetype = msg.message.videoMessage.mimetype || "video/mp4";
+          mediaFilename = "video.mp4";
+        } else if (msg.message.audioMessage) {
+          mediaType = "audio";
+          mediaMimetype = msg.message.audioMessage.mimetype || "audio/ogg";
+          mediaFilename = "audio.ogg";
+        } else if (msg.message.documentMessage) {
+          mediaType = "document";
+          mediaMimetype = msg.message.documentMessage.mimetype || "application/pdf";
+          mediaFilename = msg.message.documentMessage.fileName || "document";
+        } else if (msg.message.stickerMessage) {
+          mediaType = "sticker";
+          mediaMimetype = msg.message.stickerMessage.mimetype || "image/webp";
+          mediaFilename = "sticker.webp";
+        }
+      }
+
+      // Download incoming media from WhatsApp if not already provided
+      if (!msg.key.fromMe && !mediaUrl && (msg.message.audioMessage || msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage || msg.message.stickerMessage)) {
+        try {
+          const session = this.sessions.get(userId);
+          if (session?.socket) {
+            const buffer = await downloadMediaMessage(
+              msg,
+              'buffer',
+              {},
+              {
+                logger: pino({ level: 'silent' }),
+                reuploadRequest: (m: any) => session.socket.updateMediaMessage(m)
               }
+            );
+            if (buffer && buffer.length > 0) {
+              const ext = mediaType === "audio" ? "ogg" : mediaType === "image" ? "jpg" : mediaType === "video" ? "mp4" : mediaType === "sticker" ? "webp" : "pdf";
+              const filename = `received-${Date.now()}-${Math.round(Math.random() * 1e4)}.${ext}`;
+              const uploadsDir = path.join(process.cwd(), "uploads");
+              if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+              const uploadsPath = path.join(uploadsDir, filename);
+              fs.writeFileSync(uploadsPath, buffer);
+              mediaUrl = `/uploads/${filename}`;
+              console.log(`[WhatsApp] Downloaded incoming media (${mediaType}) to: ${mediaUrl}`);
             }
-          } catch (dlErr: any) {
-            console.error("[WhatsApp] Error downloading incoming media:", dlErr.message);
           }
+        } catch (dlErr: any) {
+          console.error("[WhatsApp] Error downloading incoming media:", dlErr.message);
         }
-
-        let tsSeconds = 0;
-        if (typeof msg.messageTimestamp === "number") {
-          tsSeconds = msg.messageTimestamp;
-        } else if (msg.messageTimestamp && typeof msg.messageTimestamp === "object") {
-          tsSeconds = (msg.messageTimestamp as any).low || (msg.messageTimestamp as any).seconds || 0;
-        } else if (msg.messageTimestamp) {
-          tsSeconds = parseInt(String(msg.messageTimestamp), 10) || 0;
-        }
-        if (!tsSeconds || isNaN(tsSeconds)) {
-          tsSeconds = Math.floor(Date.now() / 1000);
-        }
-        const msgDate = new Date(tsSeconds * 1000);
-        const validTimestamp = isNaN(msgDate.getTime()) ? new Date().toISOString() : msgDate.toISOString();
-
-        await supabaseAdmin.from("messages").insert({
-          user_id: userId,
-          contact_id: contactId,
-          text: text,
-          type: msg.key.fromMe ? "outbound" : "inbound",
-          timestamp: validTimestamp,
-          msg_id: msg.key.id,
-          media_url: mediaUrl,
-          media_type: mediaType,
-          media_mimetype: mediaMimetype,
-          media_filename: mediaFilename
-        });
       }
 
       let tsSeconds = 0;
@@ -533,9 +532,33 @@ export class WhatsAppManager implements IWhatsAppTransport {
       const msgDate = new Date(tsSeconds * 1000);
       const validTimestamp = isNaN(msgDate.getTime()) ? new Date().toISOString() : msgDate.toISOString();
 
-      const now = new Date();
-      if (now.getTime() - msgDate.getTime() < 7 * 24 * 60 * 60 * 1000) {
-        // 1. Always update last_message_at and last_message_text (these columns always exist)
+      let savedMsg = null;
+      try {
+        const { data: inserted, error: insertError } = await supabaseAdmin.from("messages").insert({
+          user_id: userId,
+          contact_id: contactId,
+          text: text,
+          type: msg.key.fromMe ? "outbound" : "inbound",
+          timestamp: validTimestamp,
+          msg_id: msgId || `gen-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+          media_url: mediaUrl || null,
+          media_type: mediaType || null,
+          media_mimetype: mediaMimetype || null,
+          media_filename: mediaFilename || null,
+          is_read: msg.key.fromMe ? true : false
+        }).select().maybeSingle();
+
+        if (insertError) {
+          console.error(`[WhatsApp] Error persisting message for user ${userId}, msg_id ${msgId}:`, insertError.message);
+        } else {
+          savedMsg = inserted;
+        }
+      } catch (err: any) {
+        console.error(`[WhatsApp] Database insert exception for msg ${msgId}:`, err.message);
+      }
+
+      // Update contact metadata
+      if (contactId) {
         try {
           await supabaseAdmin
             .from("contacts")
@@ -548,7 +571,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
           console.warn("[WhatsApp] Could not update contact last_message:", updateErr.message);
         }
 
-        // 2. Try incrementing unread_count safely for incoming messages
+        // Increment unread_count safely for incoming messages
         if (!msg.key.fromMe) {
           try {
             const { data: currentContact } = await supabaseAdmin
@@ -557,19 +580,20 @@ export class WhatsAppManager implements IWhatsAppTransport {
               .eq("id", contactId)
               .maybeSingle();
             
-            if (currentContact && currentContact.unread_count !== undefined) {
-              await supabaseAdmin
-                .from("contacts")
-                .update({ unread_count: (currentContact.unread_count || 0) + 1 })
-                .eq("id", contactId);
-            }
-          } catch (unreadErr) {
-            // unread_count column might not exist yet; safe to ignore
+            await supabaseAdmin
+              .from("contacts")
+              .update({ unread_count: (currentContact?.unread_count || 0) + 1 })
+              .eq("id", contactId);
+          } catch (unreadErr: any) {
+            console.warn("[WhatsApp] Could not increment unread_count:", unreadErr.message);
           }
         }
       }
-    } catch (err) {
-      console.error("Sync message error:", err);
+
+      return savedMsg;
+    } catch (err: any) {
+      console.error("[WhatsApp] Sync message fatal error:", err.message);
+      return null;
     }
   }
 
@@ -648,73 +672,187 @@ export class WhatsAppManager implements IWhatsAppTransport {
     }
   }
 
-  private async getOrCreateContact(userId: string, jid: string, pushName?: string): Promise<string> {
+  public async getOrCreateContact(
+    userId: string, 
+    jid: string, 
+    pushName?: string,
+    altJid?: string
+  ): Promise<string> {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(userId)) return "unknown";
 
-      // Do NOT create contacts for groups or broadcasts
-      if (jid.includes("@g.us") || jid.includes("@broadcast") || jid.includes("@newsletter") || jid.startsWith("120363")) {
+      // Do NOT create contacts for groups, broadcast, or newsletters
+      if (
+        !jid || 
+        jid === "status@broadcast" || 
+        jid.includes("@g.us") || 
+        jid.includes("@broadcast") || 
+        jid.includes("@newsletter") || 
+        jid.startsWith("120363")
+      ) {
         return "unknown";
       }
 
-      const phone = jid.split("@")[0].replace(/\D/g, "");
-      if (!phone || phone.startsWith("120363") || phone.length < 7) {
-        return "unknown";
-      }
-
-      // Do not create contact for the user's own account (self-messages)
+      // Check self-messages
       const myInfo = this.getMe(userId);
       const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
       const myLid = myInfo?.lid ? myInfo.lid.split(":")[0].replace(/\D/g, "") : "";
-      if ((Boolean(myPhone) && phone === myPhone) || (Boolean(myLid) && phone === myLid)) {
+      const currentDigits = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
+
+      if ((Boolean(myPhone) && currentDigits === myPhone) || (Boolean(myLid) && currentDigits === myLid)) {
         return "unknown";
       }
 
-      const phoneNo258 = phone.startsWith("258") ? phone.slice(3) : phone;
-      const phoneWith258 = phone.startsWith("258") ? phone : `258${phone}`;
+      const isLid = jid.includes("@lid");
+      const isPn = jid.includes("@s.whatsapp.net");
 
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id, name")
-        .eq("user_id", userId)
-        .or(`phone.eq.${phone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-        .limit(1);
+      let resolvedPhone = "";
+      let resolvedLid = "";
 
-      let existingContact = contacts?.[0] || null;
+      if (isLid) {
+        resolvedLid = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
+      } else if (isPn) {
+        resolvedPhone = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
+      }
 
-      // Fallback: If received from LID, check if a contact exists by name
-      if (!existingContact && pushName && pushName.length > 2) {
-        const cleanName = pushName.replace(/[^\w\s]/gi, '').trim();
-        if (cleanName.length > 2) {
-          const { data: nameMatch } = await supabaseAdmin
-            .from("contacts")
-            .select("id, name")
-            .eq("user_id", userId)
-            .ilike("name", `%${cleanName}%`)
-            .limit(1);
-          if (nameMatch && nameMatch.length > 0) {
-            existingContact = nameMatch[0];
-          }
+      // Baileys 7 remoteJidAlt / participantAlt pairing
+      if (altJid && typeof altJid === "string") {
+        if (altJid.includes("@s.whatsapp.net") && !resolvedPhone) {
+          resolvedPhone = altJid.split("@")[0].split(":")[0].replace(/\D/g, "");
+        } else if (altJid.includes("@lid") && !resolvedLid) {
+          resolvedLid = altJid.split("@")[0].split(":")[0].replace(/\D/g, "");
         }
       }
 
+      // Baileys 7 Signal repository LID-PN store query
+      const session = this.sessions.get(userId);
+      if (session?.socket?.signalRepository?.lidMapping) {
+        try {
+          if (isLid && resolvedLid && !resolvedPhone) {
+            const pnResult = await session.socket.signalRepository.lidMapping.getPNForLID(jid);
+            if (pnResult && typeof pnResult === "string") {
+              resolvedPhone = pnResult.split("@")[0].split(":")[0].replace(/\D/g, "");
+            }
+          } else if (isPn && resolvedPhone && !resolvedLid) {
+            const lidResult = await session.socket.signalRepository.lidMapping.getLIDForPN(jid);
+            if (lidResult && typeof lidResult === "string") {
+              resolvedLid = lidResult.split("@")[0].split(":")[0].replace(/\D/g, "");
+            }
+          }
+        } catch (signalErr) {
+          // non-blocking
+        }
+      }
+
+      // Normalize Mozambique phone numbers (9 digits starting with 82-87)
+      if (resolvedPhone) {
+        if (resolvedPhone.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(resolvedPhone.slice(0, 2))) {
+          resolvedPhone = `258${resolvedPhone}`;
+        }
+      }
+
+      const phoneNo258 = resolvedPhone.startsWith("258") ? resolvedPhone.slice(3) : resolvedPhone;
+      const phoneWith258 = resolvedPhone.startsWith("258") ? resolvedPhone : `258${resolvedPhone}`;
+
+      let existingContact: any = null;
+
+      // 1. Search by real phone number if known
+      if (resolvedPhone && resolvedPhone.length >= 8) {
+        const { data: contactsByPhone } = await supabaseAdmin
+          .from("contacts")
+          .select("id, name, phone, lid, tags")
+          .eq("user_id", userId)
+          .or(`phone.eq.${resolvedPhone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
+          .limit(1);
+
+        if (contactsByPhone && contactsByPhone.length > 0) {
+          existingContact = contactsByPhone[0];
+        }
+      }
+
+      // 2. Search by LID if known
+      if (!existingContact && resolvedLid) {
+        const { data: contactsByLid } = await supabaseAdmin
+          .from("contacts")
+          .select("id, name, phone, lid, tags")
+          .eq("user_id", userId)
+          .eq("lid", resolvedLid)
+          .limit(1);
+
+        if (contactsByLid && contactsByLid.length > 0) {
+          existingContact = contactsByLid[0];
+        }
+      }
+
+      // 3. Fallback: check if contact historically had LID saved in phone column
+      if (!existingContact && resolvedLid) {
+        const { data: legacyContacts } = await supabaseAdmin
+          .from("contacts")
+          .select("id, name, phone, lid, tags")
+          .eq("user_id", userId)
+          .or(`phone.eq.${resolvedLid},phone.eq.${resolvedLid}@lid`)
+          .limit(1);
+
+        if (legacyContacts && legacyContacts.length > 0) {
+          existingContact = legacyContacts[0];
+        }
+      }
+
+      // If contact already exists, safely enrich attributes without false merges
       if (existingContact) {
-        if (pushName && (existingContact.name === phone || !existingContact.name)) {
+        const updates: any = {};
+
+        if (resolvedLid && (!existingContact.lid || existingContact.lid !== resolvedLid)) {
+          updates.lid = resolvedLid;
+        }
+
+        if (resolvedPhone && (!existingContact.phone || existingContact.phone === existingContact.lid || existingContact.phone === resolvedLid)) {
+          updates.phone = resolvedPhone;
+        }
+
+        // Clean bogus phone if it was the raw LID
+        if (!resolvedPhone && existingContact.phone && (existingContact.phone === resolvedLid || existingContact.phone === `${resolvedLid}@lid`)) {
+          updates.phone = "";
+        }
+
+        const rawName = (existingContact.name || "").trim();
+        const isNumericOnly = !rawName || /^[\d\s+()\-#]+$/.test(rawName);
+        if (pushName && pushName.trim().length > 1 && (isNumericOnly || rawName === "Contacto WhatsApp")) {
+          updates.name = pushName.trim();
+        }
+
+        if (Object.keys(updates).length > 0) {
           await supabaseAdmin
             .from("contacts")
-            .update({ name: pushName })
+            .update(updates)
             .eq("id", existingContact.id);
         }
+
         return existingContact.id;
+      }
+
+      // 4. Create new contact: NEVER invent fake phone from LID!
+      const contactPhone = resolvedPhone || "";
+      const contactLid = resolvedLid || null;
+      let displayName = pushName?.trim();
+      if (!displayName) {
+        if (contactPhone) {
+          displayName = contactPhone;
+        } else if (contactLid) {
+          displayName = `WhatsApp (${contactLid.slice(-4)})`;
+        } else {
+          displayName = "Contacto WhatsApp";
+        }
       }
 
       const { data: newContact, error } = await supabaseAdmin
         .from("contacts")
         .insert({
           user_id: userId,
-          name: pushName || phone,
-          phone,
+          name: displayName,
+          phone: contactPhone,
+          lid: contactLid,
           tags: ["WhatsApp"],
           created_at: new Date().toISOString(),
         })
@@ -723,8 +861,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
       if (error) throw error;
       return newContact.id;
-    } catch (err) {
-      console.error("Get or create contact error:", err);
+    } catch (err: any) {
+      console.error("[WhatsApp] Get or create contact error:", err.message);
       return "unknown";
     }
   }
@@ -924,8 +1062,9 @@ export class WhatsAppManager implements IWhatsAppTransport {
     }
 
     // Sync the sent message back to DB if it's not a status
+    let savedMsg: any = null;
     if (result && !isStatus) {
-      await this.syncMessage(
+      savedMsg = await this.syncMessage(
         userId, 
         {
           key: {
@@ -943,6 +1082,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
           messageTimestamp: Math.floor(Date.now() / 1000),
           pushName: session.socket.user?.name || "Me"
         },
+        undefined,
         mediaUrl,
         mediaType,
         mimetype,
@@ -950,7 +1090,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
       );
     }
 
-    return result;
+    return { ...result, savedMessage: savedMsg };
   }
 
   async sendPresenceUpdate(userId: string, jid: string, presence: "composing" | "recording" | "paused") {

@@ -547,16 +547,35 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       return;
     }
 
-    // Check contact and clean phone
-    const phone = jid.split("@")[0];
-    const cleanSenderPhone = phone.replace(/\D/g, "");
+    // Check contact and clean phone/LID
+    const isLid = jid.includes("@lid");
+    const cleanSenderPhone = isLid ? "" : jid.split("@")[0].split(":")[0].replace(/\D/g, "");
+    const cleanSenderLid = isLid ? jid.split("@")[0].split(":")[0].replace(/\D/g, "") : "";
 
-    const { data: contactData } = await supabaseAdmin
-      .from("contacts")
-      .select("id, ai_paused, name, tags")
-      .eq("user_id", userId)
-      .eq("phone", phone)
-      .maybeSingle();
+    let contactData: any = null;
+    if (isLid && cleanSenderLid) {
+      const { data: byLid } = await supabaseAdmin
+        .from("contacts")
+        .select("id, ai_paused, name, tags")
+        .eq("user_id", userId)
+        .eq("lid", cleanSenderLid)
+        .maybeSingle();
+      contactData = byLid;
+    }
+
+    if (!contactData && cleanSenderPhone) {
+      const phoneNo258 = cleanSenderPhone.startsWith("258") ? cleanSenderPhone.slice(3) : cleanSenderPhone;
+      const phoneWith258 = cleanSenderPhone.startsWith("258") ? cleanSenderPhone : `258${cleanSenderPhone}`;
+
+      const { data: contacts } = await supabaseAdmin
+        .from("contacts")
+        .select("id, ai_paused, name, tags")
+        .eq("user_id", userId)
+        .or(`phone.eq.${cleanSenderPhone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
+        .limit(1);
+
+      contactData = contacts?.[0] || null;
+    }
 
     // Determine if sender is the administrator, account owner or authorized manager
     const myInfo = whatsappManager.getMe(userId);
@@ -590,8 +609,8 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
     // Authorized administration is STRICTLY based on verified telephone identity, NEVER on contact text/names/tags
     const isOwner = isSelfMessage || 
-                    rawList.some(adminNum => matchesNumber(cleanSenderPhone, String(adminNum))) ||
-                    (Boolean(myLid) && cleanSenderPhone === myLid) ||
+                    (Boolean(cleanSenderPhone) && rawList.some(adminNum => matchesNumber(cleanSenderPhone, String(adminNum)))) ||
+                    (Boolean(myLid) && cleanSenderLid === myLid) ||
                     (Boolean(myPhone) && cleanSenderPhone === myPhone);
 
     const role: UserRole = isOwner ? "admin" : "lead";
@@ -606,7 +625,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
     // Leads are skipped if human takeover (ai_paused) is active
     if (!isOwner && contactData?.ai_paused) {
-      console.log(`[AI Engine] AI is paused for contact ${phone} (${contactData.name || "Human assumed"}). Skipping AI.`);
+      console.log(`[AI Engine] AI is paused for contact ${cleanSenderPhone || cleanSenderLid} (${contactData.name || "Human assumed"}). Skipping AI.`);
       return;
     }
 

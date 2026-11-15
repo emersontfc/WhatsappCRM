@@ -384,20 +384,46 @@ router.post("/send", async (req: AuthRequest, res) => {
     });
   }
 
-  // Normalize JID: handle Mozambique local 9-digit numbers, groups, LIDs, and standard formats
-  let cleanDigits = (jid || "").replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@newsletter|@lid/g, "").replace(/\D/g, "");
-  if (cleanDigits.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanDigits.slice(0, 2))) {
-    cleanDigits = `258${cleanDigits}`;
+  let resolvedContactId = contactId;
+  let contactRecord: any = null;
+  if (resolvedContactId) {
+    const { data: c } = await supabaseAdmin
+      .from("contacts")
+      .select("id, phone, lid")
+      .eq("id", resolvedContactId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    contactRecord = c;
   }
 
-  const isLid = jid.includes("@lid") || (cleanDigits.length === 15 && !cleanDigits.startsWith("258"));
+  // Determine formatted JID
   let formattedJid = jid;
-  if (cleanDigits.startsWith("120363") || jid.includes("@g.us")) {
-    formattedJid = `${cleanDigits}@g.us`;
-  } else if (isLid) {
-    formattedJid = `${cleanDigits}@lid`;
-  } else {
-    formattedJid = `${cleanDigits}@s.whatsapp.net`;
+  if (contactRecord) {
+    if (contactRecord.lid && (!contactRecord.phone || contactRecord.phone === contactRecord.lid)) {
+      const cleanLid = contactRecord.lid.replace("@lid", "").replace(/\D/g, "");
+      formattedJid = `${cleanLid}@lid`;
+    } else if (contactRecord.phone) {
+      let clean = contactRecord.phone.replace(/\D/g, "");
+      if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
+        clean = `258${clean}`;
+      }
+      formattedJid = clean.startsWith("120363") ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
+    }
+  }
+
+  if (!formattedJid) {
+    let cleanDigits = (jid || "").replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@newsletter|@lid/g, "").replace(/\D/g, "");
+    if (cleanDigits.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanDigits.slice(0, 2))) {
+      cleanDigits = `258${cleanDigits}`;
+    }
+    const isLid = (jid || "").includes("@lid") || (cleanDigits.length === 15 && !cleanDigits.startsWith("258"));
+    if (cleanDigits.startsWith("120363") || (jid || "").includes("@g.us")) {
+      formattedJid = `${cleanDigits}@g.us`;
+    } else if (isLid) {
+      formattedJid = `${cleanDigits}@lid`;
+    } else {
+      formattedJid = `${cleanDigits}@s.whatsapp.net`;
+    }
   }
 
   try {
@@ -409,66 +435,19 @@ router.post("/send", async (req: AuthRequest, res) => {
       .update({ messages_used: currentUsed + 1 })
       .eq("user_id", userId);
 
-    // Save outbound message to database immediately
-    const msgTimestamp = new Date().toISOString();
-    const msgId = result?.key?.id || `out-${Date.now()}`;
-    const messageText = text || (mediaType === "audio" ? "🎵 Áudio" : "Mídia");
-
-    const phoneNo258 = cleanDigits.startsWith("258") ? cleanDigits.slice(3) : cleanDigits;
-    const phoneWith258 = cleanDigits.startsWith("258") ? cleanDigits : `258${cleanDigits}`;
-
-    let resolvedContactId = contactId;
-
-    if (!resolvedContactId) {
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id")
+    let savedMessage = result?.savedMessage || null;
+    if (!savedMessage && result?.key?.id) {
+      const { data: existing } = await supabaseAdmin
+        .from("messages")
+        .select("*")
         .eq("user_id", userId)
-        .or(`phone.eq.${cleanDigits},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-        .limit(1);
-
-      resolvedContactId = contacts?.[0]?.id;
+        .eq("msg_id", result.key.id)
+        .maybeSingle();
+      savedMessage = existing;
     }
 
-    if (!resolvedContactId && !formattedJid.includes("@g.us")) {
-      const { data: createdContact } = await supabaseAdmin
-        .from("contacts")
-        .insert({
-          user_id: userId,
-          name: cleanDigits,
-          phone: cleanDigits,
-          tags: ["WhatsApp"],
-          created_at: msgTimestamp,
-        })
-        .select("id")
-        .single();
-      resolvedContactId = createdContact?.id;
-    }
-
-    let savedMessage = null;
-    if (resolvedContactId) {
-      const { data: newMsg } = await supabaseAdmin.from("messages").insert({
-        user_id: userId,
-        contact_id: resolvedContactId,
-        text: messageText,
-        type: "outbound",
-        timestamp: msgTimestamp,
-        msg_id: msgId,
-        media_url: mediaUrl || null,
-        media_type: mediaType || null
-      }).select().single();
-      savedMessage = newMsg;
-
-      // Safely update last_message on contact
-      try {
-        await supabaseAdmin
-          .from("contacts")
-          .update({
-            last_message_at: msgTimestamp,
-            last_message_text: messageText.substring(0, 100)
-          })
-          .eq("id", resolvedContactId);
-      } catch (e) {}
+    if (savedMessage?.contact_id) {
+      resolvedContactId = savedMessage.contact_id;
     }
 
     res.json({ success: true, result, message: savedMessage, contact_id: resolvedContactId });
