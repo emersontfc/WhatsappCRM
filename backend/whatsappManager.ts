@@ -818,8 +818,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
     const options: any = {};
 
     if (isStatus) {
-      options.backgroundColor = "#333333";
-      options.font = 1;
+      options.backgroundColor = options.backgroundColor || "#075E54";
+      options.font = options.font || 2;
       
       // Fetch contacts to define who can see the status
       const { data: contacts } = await supabaseAdmin
@@ -832,6 +832,15 @@ export class WhatsAppManager implements IWhatsAppTransport {
       const myJid = session.socket.user?.id ? session.socket.user.id.split(':')[0] + '@s.whatsapp.net' : '';
       if (myJid && !jidList.includes(myJid)) {
           jidList.push(myJid); // É importante enviar para o seu próprio número para aparecer no aparelho
+      }
+      
+      // Fallback: if no contacts yet, fetch user's own registered phone
+      if (jidList.length === 0) {
+        const { data: u } = await supabaseAdmin.from("users").select("phone").eq("id", userId).maybeSingle();
+        if (u?.phone) {
+          const clean = u.phone.replace(/\D/g, "");
+          if (clean) jidList.push(`${clean}@s.whatsapp.net`);
+        }
       }
       options.statusJidList = jidList;
     }

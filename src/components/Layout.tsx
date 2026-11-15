@@ -35,7 +35,7 @@ import { Badge } from "./ui/Badge";
 import { apiFetch } from "../lib/api";
 import { Button } from "./ui/Button";
 import { AgentexCopilot } from "./AgentexCopilot";
-import { getStoredNiche, NICHE_CONFIGS } from "../lib/niches";
+import { getStoredNiche, NICHE_CONFIGS, fetchBusinessProfile } from "../lib/niches";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -78,6 +78,16 @@ export default function Layout({ children }: LayoutProps) {
           const rawName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Usuário";
           setUserName(typeof rawName === "string" ? rawName : "Usuário");
           setUserEmail(typeof user.email === "string" ? user.email : "");
+        }
+
+        // Fetch company business profile from backend
+        try {
+          const profile = await fetchBusinessProfile();
+          if (isMounted && profile?.type) {
+            setActiveNiche(profile.type);
+          }
+        } catch (pErr) {
+          console.warn("Could not fetch business profile in Layout:", pErr);
         }
 
         // Fetch profile/subscription from backend to ensure consistency and isolation

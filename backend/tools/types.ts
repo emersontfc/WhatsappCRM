@@ -23,8 +23,10 @@ export interface ToolParametersSchema {
 
 export interface ToolResult {
   success: boolean;
+  code?: string;
   message: string;
   data?: any;
+  retryable?: boolean;
   error?: string;
 }
 

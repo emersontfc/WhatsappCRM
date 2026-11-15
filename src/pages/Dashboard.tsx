@@ -54,7 +54,7 @@ import { Badge } from "../components/ui/Badge";
 import { TemplateModal } from "../components/TemplateModal";
 import { QRCodeSVG } from "qrcode.react";
 
-import { BusinessNiche, NICHE_CONFIGS, getStoredNiche } from "../lib/niches";
+import { BusinessNiche, NICHE_CONFIGS, getStoredNiche, fetchBusinessProfile } from "../lib/niches";
 
 const WeeklyActivityChart = ({ 
   data, 
@@ -277,6 +277,11 @@ useEffect(() => {
         user.email?.split("@")[0] ||
         "Usuário"
       );
+
+      // Fetch business profile from backend
+      fetchBusinessProfile().then(p => {
+        if (p?.type) setNiche(p.type);
+      }).catch(() => {});
 
       if (user.template_applied === false) {
         setShowTemplateModal(true);
@@ -931,20 +936,29 @@ useEffect(() => {
   const usagePercentage = Math.min(100, Math.round((currentMessagesUsed / dailyMessageLimit) * 100));
 
   // Dynamic KPI values tailored to the active niche
-  const kpi1Value = niche === "vendas" 
+  const isClinic = niche === "clinic" || niche === "clinica";
+  const isRetail = niche === "retail" || niche === "vendas";
+  const isServices = niche === "services" || niche === "servicos";
+  const isRestaurant = niche === "restaurant";
+
+  const kpi1Value = isRetail
     ? (pipelineTotal > 0 ? `${pipelineTotal.toLocaleString()} MZN` : `${stats.leads} Leads`)
-    : niche === "clinica"
+    : isClinic
     ? `${stats.leads} Pacientes`
-    : niche === "servicos"
+    : isServices
     ? `${stats.leads} Agendamentos`
+    : isRestaurant
+    ? `${stats.leads} Pedidos`
     : stats.leads.toString();
 
-  const kpi2Value = niche === "clinica"
+  const kpi2Value = isClinic
     ? `${stats.messages} Atendimentos`
-    : niche === "vendas"
+    : isRetail
     ? `${stats.messages} Negociações`
-    : niche === "servicos"
+    : isServices
     ? `${stats.messages} Sessões`
+    : isRestaurant
+    ? `${stats.messages} Clientes`
     : stats.messages.toString();
 
   const kpi3Value = stats.actions.toString();
@@ -1182,7 +1196,7 @@ useEffect(() => {
                   )}
                 >
                   <Users size={12} />
-                  {niche === "clinica" ? "Pacientes" : niche === "servicos" ? "Agendamentos" : "Leads"}
+                  {isClinic ? "Pacientes" : isServices ? "Agendamentos" : "Leads"}
                 </button>
               </div>
             </div>
@@ -1190,7 +1204,7 @@ useEffect(() => {
             <div className="p-3 sm:p-5 pt-2 sm:pt-3">
               <WeeklyActivityChart 
                 data={weeklyActivity} 
-                metricLabel={chartMetric === "messages" ? "Mensagens" : niche === "clinica" ? "Pacientes" : "Leads"} 
+                metricLabel={chartMetric === "messages" ? "Mensagens" : isClinic ? "Pacientes" : "Leads"} 
               />
             </div>
           </Card>
@@ -1245,7 +1259,7 @@ useEffect(() => {
                               {displayName}
                             </p>
                             <span className="text-[9px] sm:text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100/80 shrink-0">
-                              {lead.intent || (niche === "clinica" ? "Consulta" : niche === "servicos" ? "Agendamento" : "Negociação")}
+                              {lead.intent || (isClinic ? "Consulta" : isServices ? "Agendamento" : isRetail ? "Venda" : "Negociação")}
                             </span>
                           </div>
                           <p className="text-[11px] sm:text-xs text-slate-500 truncate italic">

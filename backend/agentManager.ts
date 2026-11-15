@@ -278,7 +278,17 @@ export async function runAI(agent: any, message: string, context: string[], role
     roleHeader = `ATENÇÃO: VOCÊ ESTÁ CONVERSANDO COM O SEU ADMINISTRADOR / CHEFE / DONO DO SISTEMA.
 O SEU PAPEL É DE OPERADOR EXECUTIVO DO NEGÓCIO E CRM.
 NÃO TENTE VENDER NADA PARA ELE! Ele é o proprietário / gestor da empresa.
-Você tem total poder e acesso às ferramentas do sistema para executar o que ele pedir (consultar métricas do funil, verificar conversas pendentes, agendar mensagens, agendar postagens no status, criar regras de automação, pausar ou retomar IA, cadastrar leads, etc.).
+Você tem total poder e acesso às ferramentas do sistema para executar o que ele pedir:
+- Para agendar mensagens: use 'schedule_message' (com recipient, message, scheduledAt).
+- Para listar mensagens agendadas: use 'list_scheduled_messages'.
+- Para cancelar mensagem agendada: use 'cancel_scheduled_message'.
+- Para publicar no Status do WhatsApp IMEDIATAMENTE: use 'post_whatsapp_status' (com text, opcional mediaUrl).
+- Para agendar publicação no Status para data futura: use 'schedule_status' (com text, scheduledAt, opcional mediaUrl).
+- Para listar status agendados: use 'list_scheduled_status'.
+- Para cancelar status agendado: use 'cancel_scheduled_status'.
+- Para relatórios de vendas/financeiro: use 'getFinancialMetrics'.
+- Para métricas de conversas e pipeline: use 'get_pending_conversations' e 'get_pipeline_metrics'.
+- Para pausar ou retomar IA de um contato: use 'pause_ai' e 'resume_ai'.
 Seja ágil, prestativo e direto.`;
     baseInstruction = "Seja extremamente eficiente e execute os comandos solicitados através das ferramentas apropriadas.";
   } else {
@@ -437,6 +447,12 @@ export function robustParseAgentJSON(raw: string): { reply: string; tool: string
 
 export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult): string {
   if (!result.success) {
+    if (result.code === "SESSION_NOT_CONNECTED") {
+      return `❌ *WhatsApp Desconectado*: A sessão WhatsApp do sistema não está ativa no momento. Conecte o aparelho no menu Conexão para executar esta ação.`;
+    }
+    if (result.code === "RECIPIENT_NOT_FOUND") {
+      return `❌ *Contacto Não Localizado*: ${result.message}`;
+    }
     return `❌ *Falha ao executar ${toolName}*: ${result.message || 'Erro durante a operação.'}`;
   }
 
@@ -460,9 +476,25 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
   } else if (toolName === "create_lead" && result.data) {
     formatted += `\n\n👤 *Lead Cadastrado*: ${result.data.name || ''}\n📱 *Telefone*: ${result.data.phone || ''}\n🏷️ *Etapa*: ${result.data.stage || 'novo'}`;
   } else if (toolName === "schedule_message" && result.data) {
-    formatted += `\n\n📅 *Agendado para*: ${result.data.dataAgendada || ''}\n👤 *Destinatário*: ${result.data.contacto || ''}`;
+    formatted = `📅 *Mensagem Agendada com Sucesso!*\n\n👤 *Destinatário:* ${result.data.cliente || result.data.contacto || ''} (${result.data.telefone || ''})\n⏰ *Horário:* ${result.data.dataAgendada || result.data.dataEnvio || ''}\n💬 *Mensagem:* _"${result.data.mensagem || ''}"_`;
+  } else if (toolName === "list_scheduled_messages" && result.data?.agendamentos) {
+    const list = result.data.agendamentos.map((m: any, i: number) => {
+      return `*${i + 1}. Para:* ${m.destinatario}\n   ⏰ *Data:* ${m.dataEnvioFormatada || m.dataEnvio}\n   💬 _"${m.mensagem}"_ (${m.status})`;
+    }).join("\n\n");
+    formatted = `📅 *Mensagens Agendadas (${result.data.total}):*\n\n${list || "Nenhum agendamento pendente."}`;
+  } else if (toolName === "cancel_scheduled_message" && result.data) {
+    formatted = `🗑️ *Agendamento Cancelado!*\n\nA mensagem para o destinatário não será enviada.`;
+  } else if (toolName === "post_whatsapp_status" && result.data) {
+    formatted = `📱 *Status Publicado com Sucesso!*\n\n📝 *Legenda:* _"${result.data.texto || ''}"_\n📸 *Mídia:* ${result.data.temMidia ? 'Sim (' + result.data.mediaType + ')' : 'Texto puro'}`;
   } else if (toolName === "schedule_status" && result.data) {
-    formatted += `\n\n📅 *Status agendado para*: ${result.data.dataAgendada || ''}`;
+    formatted = `📅 *Status do WhatsApp Agendado!*\n\n⏰ *Publicação prevista:* ${result.data.dataAgendada || result.data.dataPublicacao || ''}\n📝 *Texto:* _"${result.data.texto || ''}"_`;
+  } else if (toolName === "list_scheduled_status" && result.data?.postagens) {
+    const list = result.data.postagens.map((s: any, i: number) => {
+      return `*${i + 1}.* ⏰ ${s.dataAgendadaFormatada || s.dataAgendada}\n   📝 _"${s.texto}"_ [${s.status}]`;
+    }).join("\n\n");
+    formatted = `📱 *Status Agendados no WhatsApp (${result.data.total}):*\n\n${list || "Nenhum status agendado."}`;
+  } else if (toolName === "cancel_scheduled_status" && result.data) {
+    formatted = `🗑️ *Status Agendado Cancelado!*\n\nA postagem foi cancelada e não será publicada no WhatsApp.`;
   } else if (toolName === "getProductsCatalog" && Array.isArray(result.data)) {
     const list = result.data.map((p: any, i: number) => `*${i + 1}. ${p.name}* — ${p.price}\n   _${p.description || "Disponível"}_`).join("\n\n");
     formatted = `📦 *Catálogo de Produtos & Serviços:*\n\n${list || "Nenhum produto cadastrado no momento."}`;

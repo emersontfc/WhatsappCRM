@@ -8,7 +8,7 @@ import { Input } from "../components/ui/Input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/api";
-import { BusinessNiche, NICHE_CONFIGS, getStoredNiche, setStoredNiche } from "../lib/niches";
+import { BusinessNiche, NICHE_CONFIGS, getStoredNiche, setStoredNiche, fetchBusinessProfile, saveBusinessProfile } from "../lib/niches";
 
 interface LicenseKey {
   id: string;
@@ -41,6 +41,7 @@ export default function Settings() {
   const initialTab = tabParam === "niche" ? "niche" : "profile";
   const [activeTab, setActiveTab] = useState<"profile" | "niche" | "keys" | "users" | "plans" | "settings">(initialTab);
   const [currentNiche, setCurrentNiche] = useState<BusinessNiche>(getStoredNiche);
+  const [isSavingNiche, setIsSavingNiche] = useState(false);
   const [newKey, setNewKey] = useState({ duration: "30", plan: "Premium" });
   const [plans, setPlans] = useState<any[]>([]);
   const [globalSettings, setGlobalSettings] = useState<any>({
@@ -49,10 +50,24 @@ export default function Settings() {
     support_contact: ""
   });
 
-  const handleSelectNiche = (nKey: BusinessNiche) => {
+  useEffect(() => {
+    fetchBusinessProfile().then(profile => {
+      if (profile?.type) {
+        setCurrentNiche(profile.type);
+      }
+    });
+  }, []);
+
+  const handleSelectNiche = async (nKey: BusinessNiche) => {
+    setIsSavingNiche(true);
     setCurrentNiche(nKey);
-    setStoredNiche(nKey);
-    toast.success(`Modo de negócio definido como: ${NICHE_CONFIGS[nKey].label}`);
+    const success = await saveBusinessProfile(nKey);
+    setIsSavingNiche(false);
+    if (success) {
+      toast.success(`Modo de negócio persistido: ${NICHE_CONFIGS[nKey].label}`);
+    } else {
+      toast.error("Falha ao salvar no servidor. Usando cache local.");
+    }
   };
 
   const fetchPlans = async () => {

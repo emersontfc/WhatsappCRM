@@ -203,13 +203,35 @@ router.post("/status", async (req: AuthRequest, res) => {
   const { mediaUrl, mediaType, text } = req.body;
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
-  if (!mediaUrl || !mediaType) return res.status(400).json({ error: "Mídia é obrigatória para Status" });
+  if (!text?.trim() && !mediaUrl) {
+    return res.status(400).json({ success: false, code: "INVALID_ARGUMENTS", error: "Texto ou Mídia é obrigatório para publicar Status no WhatsApp." });
+  }
+
+  const session = whatsappManager.getSession(userId);
+  if (!session || session.status !== "connected") {
+    return res.status(400).json({ 
+      success: false, 
+      code: "SESSION_NOT_CONNECTED", 
+      error: "Sessão WhatsApp desconectada. Conecte o aparelho antes de publicar no Status.",
+      retryable: true 
+    });
+  }
 
   try {
-    const result = await whatsappManager.sendMessage(userId, "status@broadcast", text || "", mediaUrl, mediaType);
-    res.json({ success: true, result });
+    let detectedMediaType = mediaType;
+    if (mediaUrl && !detectedMediaType) {
+      detectedMediaType = mediaUrl.match(/\.(mp4|mov|avi|webm)/i) ? "video" : "image";
+    }
+
+    const result = await whatsappManager.sendMessage(userId, "status@broadcast", text || "", mediaUrl, detectedMediaType);
+    res.json({ success: true, message: "Status publicado com sucesso no WhatsApp!", result });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("[WhatsApp Status Post Error]:", err.message);
+    res.status(500).json({ 
+      success: false, 
+      code: "EXECUTION_FAILED",
+      error: err.message || "Erro ao publicar no Status do WhatsApp." 
+    });
   }
 });
 

@@ -13,7 +13,12 @@ import { resumeAITool } from "./messaging/resumeAI.ts";
 import { createKeywordAutomationTool } from "./automations/createKeywordAutomation.ts";
 import { createReminderFollowupTool } from "./automations/createReminderFollowup.ts";
 import { scheduleMessageTool } from "./automations/scheduleMessage.ts";
+import { listScheduledMessagesTool } from "./automations/listScheduledMessages.ts";
+import { cancelScheduledMessageTool } from "./automations/cancelScheduledMessage.ts";
 import { scheduleStatusTool } from "./automations/scheduleStatus.ts";
+import { postWhatsAppStatusTool } from "./messaging/postWhatsAppStatus.ts";
+import { listScheduledStatusTool } from "./automations/listScheduledStatus.ts";
+import { cancelScheduledStatusTool } from "./automations/cancelScheduledStatus.ts";
 import { getProductsCatalogTool } from "./commerce/getProductsCatalog.ts";
 import { createOrderTool } from "./commerce/createOrder.ts";
 import { getOrderStatusTool } from "./commerce/getOrderStatus.ts";
@@ -37,7 +42,12 @@ export const ALL_TOOLS: ToolDefinition[] = [
   createKeywordAutomationTool,
   createReminderFollowupTool,
   scheduleMessageTool,
+  listScheduledMessagesTool,
+  cancelScheduledMessageTool,
   scheduleStatusTool,
+  postWhatsAppStatusTool,
+  listScheduledStatusTool,
+  cancelScheduledStatusTool,
   getProductsCatalogTool,
   createOrderTool,
   getOrderStatusTool,
