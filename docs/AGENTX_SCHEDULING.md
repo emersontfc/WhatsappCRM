@@ -66,3 +66,4 @@ O agente compreende instruções relativas e absolutas em Português sem exigir 
 
 - **Tarefas Órfãs:** Se o servidor for reiniciado enquanto uma mensagem estiver com status `processing`, o scheduler identifica automaticamente tarefas órfãs com mais de 15 minutos e reverte-as para `pending` para reprocessamento seguro.
 - **Novas Tentativas:** Em caso de falha de conexão temporária, o scheduler aplica até 3 tentativas com intervalo progressivo de 5 minutos antes de marcar definitivamente como `failed`.
+

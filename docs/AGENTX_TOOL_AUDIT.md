@@ -59,3 +59,4 @@ Códigos oficiais implementados:
 - `RESOURCE_NOT_FOUND`: Agendamento ou pedido inexistente ao tentar cancelar.
 - `PERSISTENCE_FAILED`: Falha na gravação no Supabase; erro reportado sem falsa confirmação.
 - `EXECUTION_FAILED`: Erro em tempo de execução capturado com stack trace seguro.
+

@@ -68,3 +68,4 @@ CHECK (type IN ('general', 'clinic', 'retail', 'restaurant', 'services', 'sales'
 
 - A troca de tipo de negócio entre "Geral", "Clínica", "Comércio", "Restaurante" e "Serviços" **não apaga** nenhum contacto, conversa, lead, pedido ou agendamento existente.
 - A configuração altera a experiência visual e os termos na interface (ex: "Leads" vs "Pacientes" vs "Pedidos"), mantendo os registros originais 100% seguros e intactos.
+

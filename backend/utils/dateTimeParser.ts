@@ -239,3 +239,4 @@ export function formatInTimezone(date: Date, timezone: string = DEFAULT_TIMEZONE
     return date.toLocaleString("pt-PT");
   }
 }
+

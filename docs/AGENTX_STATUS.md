@@ -43,3 +43,4 @@ No protocolo Baileys / WhatsApp:
 
 - **Apenas Administradores:** Apenas utilizadores com papel `admin` ou gerentes autorizados podem solicitar publicações de status.
 - **Validação de Sessão Conectada:** Se o WhatsApp estiver desconectado, a ferramenta rejeita a operação com código estruturado `SESSION_NOT_CONNECTED`, informando claramente ao operador para ler o QR Code antes de publicar.
+

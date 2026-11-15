@@ -131,3 +131,4 @@ describe("Fase 6 — Testes de Persistência do Perfil de Negócio (AgentX)", ()
     expect(mockDatabase[tenantId].timezone).toBe("Africa/Maputo");
   });
 });
+
