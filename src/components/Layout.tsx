@@ -342,12 +342,12 @@ export default function Layout({ children }: LayoutProps) {
         <div className={cn(
           "flex-1 overflow-y-auto custom-scrollbar",
           location.pathname.startsWith("/messages")
-            ? "p-1 sm:p-3 lg:p-6 overflow-hidden flex flex-col"
+            ? "min-h-0 p-1 sm:p-3 lg:p-6 overflow-hidden flex flex-col"
             : "p-3 sm:p-6 lg:p-10"
         )}>
           <div className={cn(
             "max-w-7xl mx-auto w-full",
-            location.pathname.startsWith("/messages") ? "flex-1 flex flex-col h-full" : "pb-16 sm:pb-20"
+            location.pathname.startsWith("/messages") ? "flex-1 flex flex-col min-h-0 min-w-0" : "pb-16 sm:pb-20"
           )}>
             {children}
           </div>

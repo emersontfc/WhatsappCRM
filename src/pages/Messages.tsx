@@ -38,6 +38,7 @@ import { Card } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/api";
+import { mergeMessage } from "../lib/chatMessages";
 import { useActivation } from "../lib/useActivation";
 import { VoiceRecorder } from "../components/VoiceRecorder";
 import { Contact, Message, Lead, LeadStage, LEAD_STAGES } from "../types";
@@ -212,7 +213,7 @@ export default function Messages() {
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
-  const [showCrmPanel, setShowCrmPanel] = useState(true);
+  const [showCrmPanel, setShowCrmPanel] = useState(false);
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
@@ -249,25 +250,16 @@ export default function Messages() {
         if (!uId || uId === "guest-user") return;
         setUserId(uId);
 
-        // Fetch quick replies
-        const response = await apiFetch("/api/packs/my");
-        if (isMounted && response.success) {
-          setQuickReplies(response.data);
-        }
+        void apiFetch("/api/packs/my").then((response) => {
+          if (isMounted && response.success) setQuickReplies(response.data);
+        }).catch((error) => console.error("Quick replies unavailable:", error));
 
-        // Fetch agents
-        const { data: agentsData } = await supabase
-          .from("agents")
-          .select("*")
-          .eq("user_id", uId)
-          .eq("is_active", true);
-
-        if (isMounted && agentsData) {
-          setAgents(agentsData);
-          if (agentsData.length > 0) {
-            setSelectedAgentId(agentsData[0].id);
-          }
-        }
+        void Promise.resolve(supabase.from("agents").select("*").eq("user_id", uId).eq("is_active", true))
+          .then(({ data }) => {
+            if (!isMounted || !data) return;
+            setAgents(data);
+            if (data.length) setSelectedAgentId(data[0].id);
+          }).catch((error) => console.error("Agents unavailable:", error));
 
         // Initial contacts fetch (all contacts without exclusion)
         const { data: initialContacts, error: contactsError } = await supabase
@@ -299,61 +291,6 @@ export default function Messages() {
           }
         }
 
-        // Real-time contacts subscription
-        const contactsChannel = supabase
-          .channel('messages-contacts-sync')
-          .on('postgres_changes', {
-            event: '*',
-            schema: 'public',
-            table: 'contacts',
-            filter: `user_id=eq.${uId}`
-          }, async (payload) => {
-            if (!isMounted) return;
-            if (payload.new) {
-              const updated = payload.new as Contact;
-              setContacts(prev => {
-                const idx = prev.findIndex(c => c.id === updated.id);
-                if (idx >= 0) {
-                  const copy = [...prev];
-                  copy[idx] = { ...copy[idx], ...updated };
-                  return copy.sort((a, b) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime());
-                }
-                return [updated, ...prev];
-              });
-              if (selectedContact && selectedContact.id === updated.id) {
-                setSelectedContact(prev => prev ? { ...prev, ...updated } : prev);
-              }
-            }
-          })
-          .subscribe();
-
-        // 🔄 Fast polling fallback for contacts list every 2 seconds
-        const contactsPoll = setInterval(async () => {
-          if (!isMounted) return;
-          try {
-            const { data: refreshed } = await supabase
-              .from("contacts")
-              .select("*")
-              .eq("user_id", uId)
-              .order("last_message_at", { ascending: false, nullsFirst: false });
-            if (isMounted && refreshed) {
-              setContacts(prev => {
-                if (refreshed.length !== prev.length ||
-                  refreshed[0]?.last_message_at !== prev[0]?.last_message_at ||
-                  refreshed[0]?.id !== prev[0]?.id ||
-                  refreshed[0]?.unread_count !== prev[0]?.unread_count) {
-                  return refreshed;
-                }
-                return prev;
-              });
-            }
-          } catch (e) { }
-        }, 2000);
-
-        return () => {
-          supabase.removeChannel(contactsChannel);
-          clearInterval(contactsPoll);
-        };
       } catch (err) {
         console.error("Messages init failed:", err);
       }
@@ -363,129 +300,107 @@ export default function Messages() {
     return () => { isMounted = false; };
   }, [activationLoading]);
 
-  // Load Messages & Lead when selected contact changes
   useEffect(() => {
-    if (!selectedContact || !userId) return;
-    let isMounted = true;
+    if (!userId) return;
+    let active = true;
+    let refreshing = false;
+    const refresh = async () => {
+      if (!active || refreshing || document.hidden) return;
+      refreshing = true;
+      try {
+        const { data } = await supabase.from("contacts").select("*").eq("user_id", userId)
+          .order("last_message_at", { ascending: false, nullsFirst: false });
+        if (active && data) {
+          setContacts((current) => JSON.stringify(current) === JSON.stringify(data) ? current : data);
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const sync = () => { void refresh().catch((error) => console.error("Contact synchronization failed:", error)); };
+    const channel = supabase.channel(`messages-contacts-${userId}`)
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "contacts", filter: `user_id=eq.${userId}`
+      }, sync)
+      .subscribe((status) => { if (status === "SUBSCRIBED") sync(); });
+    const poll = window.setInterval(sync, 2000);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      active = false;
+      window.clearInterval(poll);
+      document.removeEventListener("visibilitychange", sync);
+      void supabase.removeChannel(channel);
+    };
+  }, [userId]);
 
+  // Keep the open conversation independent from optional lead and pack requests.
+  const contactId = selectedContact?.id;
+  useEffect(() => {
+    if (!selectedContact || !contactId || !userId) return;
+    let active = true;
+    let refreshing = false;
+    let revision = 0;
+
+    setMessages([]);
+    setCurrentLead(null);
+    setIsNearBottom(true);
     setContactNotes(selectedContact.notes || "");
     setContactTags(Array.isArray(selectedContact.tags) ? selectedContact.tags : []);
     setContactNameInput(selectedContact.name || "");
     setIsEditingName(false);
 
-    const loadContactData = async () => {
-      // 1. Initial messages fetch
-      const { data: initialMessages } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("contact_id", selectedContact.id)
-        .order("timestamp", { ascending: true });
+    setLeadLoading(true);
+    void Promise.resolve(supabase.from("leads").select("*").eq("user_id", userId)
+      .or(`contact_id.eq.${contactId},phone.eq.${selectedContact.phone}`).maybeSingle())
+      .then(({ data }) => { if (active) setCurrentLead(data ?? null); })
+      .catch((error) => console.error("Lead unavailable:", error))
+      .finally(() => { if (active) setLeadLoading(false); });
 
-      if (isMounted && initialMessages) {
-        setMessages(initialMessages);
-      }
+    void markConversationAsRead(contactId);
 
-      // 2. Fetch Lead for this contact
-      setLeadLoading(true);
+    const refresh = async () => {
+      if (!active || refreshing || document.hidden) return;
+      refreshing = true;
+      const startedAt = revision;
       try {
-        const { data: leadData } = await supabase
-          .from("leads")
-          .select("*")
-          .eq("user_id", userId)
-          .or(`contact_id.eq.${selectedContact.id},phone.eq.${selectedContact.phone}`)
-          .maybeSingle();
-
-        if (isMounted) {
-          setCurrentLead(leadData || null);
-        }
-      } catch (e) {
-        console.error("Error loading lead for contact:", e);
-      } finally {
-        if (isMounted) setLeadLoading(false);
-      }
-
-      // 3. Mark conversation as read
-      markConversationAsRead(selectedContact.id);
-
-      // 4. Real-time messages subscription with instant direct state append
-      const channelName = `chat-${selectedContact.id}-${Date.now()}`;
-      const messagesChannel = supabase
-        .channel(channelName)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'messages',
-          filter: `user_id=eq.${userId}`
-        }, (payload) => {
-          if (!isMounted || !payload.new) return;
-          const incoming = payload.new as any;
-          if (incoming.contact_id === selectedContact.id) {
-            setMessages(prev => {
-              if (prev.some(m => m.id === incoming.id || (incoming.msg_id && m.msg_id === incoming.msg_id))) {
-                return prev;
-              }
-              // Replace any matching optimistic temp message
-              const clean = prev.filter(m => !(m.id.startsWith("temp-") && m.text === incoming.text && m.type === incoming.type));
-              return [...clean, incoming];
-            });
-          }
-          // Also update contact last message in sidebar in real-time
-          setContacts(prev => {
-            return prev.map(c => {
-              if (c.id === incoming.contact_id) {
-                return {
-                  ...c,
-                  last_message_at: incoming.timestamp,
-                  last_message_text: incoming.text,
-                  unread_count: (incoming.type === 'inbound' && incoming.contact_id !== selectedContact.id)
-                    ? (c.unread_count || 0) + 1
-                    : c.unread_count
-                };
-              }
-              return c;
-            }).sort((a, b) => new Date(b.last_message_at || 0).getTime() - new Date(a.last_message_at || 0).getTime());
+        const { data } = await supabase.from("messages").select("*")
+          .eq("user_id", userId).eq("contact_id", contactId)
+          .order("timestamp", { ascending: false }).order("id", { ascending: false }).limit(1000);
+        if (active && data && startedAt === revision) {
+          const ordered = data.reverse() as Message[];
+          setMessages((current) => {
+            const savedIds = new Set(ordered.map((message) => message.msg_id).filter(Boolean));
+            const pending = current.filter((message) =>
+              message.id.startsWith("temp-") && !savedIds.has(message.msg_id));
+            const next = [...ordered, ...pending];
+            return JSON.stringify(current) === JSON.stringify(next) ? current : next;
           });
-        })
-        .subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            console.log(`[Realtime] Connected to chat channel for contact ${selectedContact.id}`);
-          }
-        });
-
-      // 🔄 Fast polling fallback for open conversation every 1.0 second (instant feel)
-      const chatPoll = setInterval(async () => {
-        if (!isMounted || !selectedContact?.id || !userId) return;
-        try {
-          const { data: latestMessages } = await supabase
-            .from("messages")
-            .select("*")
-            .eq("user_id", userId)
-            .eq("contact_id", selectedContact.id)
-            .order("timestamp", { ascending: true });
-
-          if (isMounted && latestMessages && latestMessages.length > 0) {
-            setMessages(prev => {
-              if (latestMessages.length !== prev.length ||
-                latestMessages[latestMessages.length - 1]?.id !== prev[prev.length - 1]?.id) {
-                const pendingTemps = prev.filter(p => p.id.startsWith("temp-") && !latestMessages.some(l => l.text === p.text));
-                return [...latestMessages, ...pendingTemps];
-              }
-              return prev;
-            });
-          }
-        } catch (e) { }
-      }, 1000);
-
-      return () => {
-        supabase.removeChannel(messagesChannel);
-        clearInterval(chatPoll);
-      };
+        }
+      } finally {
+        refreshing = false;
+      }
     };
-
-    loadContactData();
-    return () => { isMounted = false; };
-  }, [selectedContact?.id, userId]);
+    const sync = () => { void refresh().catch((error) => console.error("Chat synchronization failed:", error)); };
+    const channel = supabase.channel(`messages-chat-${userId}-${contactId}`)
+      .on("postgres_changes", {
+        event: "INSERT", schema: "public", table: "messages", filter: `user_id=eq.${userId}`
+      }, ({ new: row }) => {
+        const incoming = row as Message;
+        if (!active || incoming.contact_id !== contactId) return;
+        revision++;
+        setMessages((current) => mergeMessage(current, incoming));
+      })
+      .subscribe((status) => { if (status === "SUBSCRIBED") sync(); });
+    sync();
+    const poll = window.setInterval(sync, 2500);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      active = false;
+      window.clearInterval(poll);
+      document.removeEventListener("visibilitychange", sync);
+      void supabase.removeChannel(channel);
+    };
+  }, [contactId, userId]);
 
   const handleMessagesScroll = () => {
     if (!messagesContainerRef.current) return;
@@ -516,7 +431,9 @@ export default function Messages() {
   };
 
   const handleSelectContact = (contact: Contact) => {
+    if (contact.id !== contactId) setMessages([]);
     setSelectedContact(contact);
+    setShowCrmPanel(false);
     setShowChatOnMobile(true);
     setSearchParams(contact.phone ? { phone: contact.phone } : { contactId: contact.id });
   };
@@ -668,9 +585,19 @@ export default function Messages() {
 
       // Mark optimistic message as sent or replace with backend saved message
       if (response.message) {
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...response.message, is_sending: false } : m));
+        setMessages((current) => current.some((message) => message.id === tempId)
+          ? mergeMessage(current.filter((message) => message.id !== tempId), response.message)
+          : current);
       } else {
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, is_sending: false } : m));
+        setMessages((current) => {
+          const messageId = response.result?.key?.id;
+          if (messageId && current.some((message) => message.msg_id === messageId && message.id !== tempId)) {
+            return current.filter((message) => message.id !== tempId);
+          }
+          return current.map((message) => message.id === tempId
+            ? { ...message, msg_id: messageId, is_sending: false }
+            : message);
+        });
       }
     } catch (err: any) {
       console.error("Failed to send message:", err);
@@ -895,7 +822,7 @@ export default function Messages() {
   });
 
   return (
-    <div className="flex flex-1 h-full min-h-0 gap-2 sm:gap-4 relative overflow-hidden">
+    <div className="relative flex min-h-0 min-w-0 flex-1 gap-2 overflow-hidden sm:gap-4">
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* COLUNA 1 (ESQUERDA): LISTA DE CONVERSAS & FILTROS                  */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
@@ -1054,7 +981,7 @@ export default function Messages() {
       {/* COLUNA 2 (CENTRAL): CONVERSA SELECIONADA                           */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       <Card className={cn(
-        "flex-1 flex flex-col overflow-hidden transition-all duration-300 border-slate-100 shadow-sm bg-white relative h-full",
+        "flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden border-slate-100 shadow-sm bg-white relative",
         !showChatOnMobile ? "hidden lg:flex" : "flex"
       )}>
         {selectedContact ? (
@@ -1066,7 +993,8 @@ export default function Messages() {
                   variant="ghost"
                   size="icon"
                   className="lg:hidden -ml-1 h-8 w-8 rounded-xl shrink-0"
-                  onClick={() => setShowChatOnMobile(false)}
+                  aria-label="Voltar às conversas"
+                  onClick={() => { setShowCrmPanel(false); setShowChatOnMobile(false); }}
                 >
                   <ChevronLeft size={18} />
                 </Button>
@@ -1176,7 +1104,7 @@ export default function Messages() {
             <div
               ref={messagesContainerRef}
               onScroll={handleMessagesScroll}
-              className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-2 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
             >
               {messages.length > 0 ? (
                 messages.map((msg) => {
@@ -1193,7 +1121,7 @@ export default function Messages() {
                         )}
                       >
                         <div className="my-1 cursor-pointer hover:scale-105 transition-transform" onClick={() => setPreviewMedia({ url: msg.media_url!, type: "image", title: "sticker.webp" })}>
-                          <img src={msg.media_url} alt="Sticker" className="w-32 h-32 object-contain" />
+                          <img src={msg.media_url} alt="Sticker" className="w-32 h-32 max-w-full object-contain" />
                         </div>
                         <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5 px-1 font-mono">
                           {msg.is_automated && <span className="text-emerald-600 font-bold uppercase mr-1">[Auto]</span>}
@@ -1220,7 +1148,7 @@ export default function Messages() {
                     >
                       <div
                         className={cn(
-                          "px-4 py-2.5 rounded-2xl text-xs sm:text-sm shadow-sm leading-relaxed",
+                          "max-w-full break-words px-3 py-2.5 rounded-2xl text-sm shadow-sm leading-relaxed",
                           isOut
                             ? "bg-emerald-600 text-white rounded-tr-none"
                             : "bg-white text-slate-900 border border-slate-100 rounded-tl-none"
@@ -1280,7 +1208,7 @@ export default function Messages() {
                             )}
                           </div>
                         )}
-                        <span className="whitespace-pre-wrap">{msg.text}</span>
+                        <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.text}</span>
                       </div>
                       <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1 px-1 font-mono">
                         {msg.is_automated && <span className="text-emerald-600 font-bold uppercase mr-1">[Auto]</span>}
@@ -1402,7 +1330,7 @@ export default function Messages() {
                     placeholder={selectedContact.ai_paused ? "Modo Humano ativo..." : "Digite uma mensagem..."}
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    className="flex-1 h-9 sm:h-10 text-xs sm:text-sm rounded-xl border-slate-200 focus:ring-emerald-500/20"
+                    className="min-w-0 flex-1 h-9 sm:h-10 text-base sm:text-sm rounded-xl border-slate-200 focus:ring-emerald-500/20"
                     disabled={loading || !isActivated}
                   />
                   <Button
