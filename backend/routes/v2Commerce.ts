@@ -25,6 +25,7 @@ async function requireFinanceRole(req: AuthRequest, res: express.Response, next:
 }
 
 router.get("/:organizationId/payment-proofs/pending", requireFinanceRole, async (req: AuthRequest, res) => {
+  try {
   const { organizationId } = req.params;
   const { data, error } = await supabaseAdmin.from("agentx_payment_proofs")
     .select("id,order_id,claimed_amount,transaction_reference,created_at,status")
@@ -32,9 +33,14 @@ router.get("/:organizationId/payment-proofs/pending", requireFinanceRole, async 
     .order("created_at", { ascending: true }).limit(50);
   if (error) return res.status(503).json({ success: false, error: "Cannot retrieve payment queue" });
   return res.json({ success: true, data: data ?? [] });
+  } catch (err) {
+    console.error("[V2 Commerce] Queue lookup error", err);
+    return res.status(503).json({ success: false, error: "Unable to read payment queue" });
+  }
 });
 
 router.post("/:organizationId/payment-proofs/:proofId/review", requireFinanceRole, async (req: AuthRequest, res) => {
+  try {
   const { organizationId, proofId } = req.params;
   const actorId = req.user!.id;
   const { decision, note, settlementVerified } = req.body ?? {};
@@ -65,6 +71,10 @@ router.post("/:organizationId/payment-proofs/:proofId/review", requireFinanceRol
       .json({ success: false, error: "Payment review failed or is no longer available" });
   }
   return res.json({ success: true, data });
+  } catch (err) {
+    console.error("[V2 Commerce] Unexpected review error", err);
+    return res.status(503).json({ success: false, error: "Unable to process payment review" });
+  }
 });
 
 export default router;
