@@ -18,7 +18,11 @@ done
   cat migrations/20261122_agentx_v2_digital_orders.sql
   cat migrations/rollback/20261122_agentx_v2_digital_orders.sql
   cat migrations/20261122_agentx_v2_digital_orders.sql
+  cat migrations/20261123_agentx_v2_proof_attachments.sql
+  cat migrations/rollback/20261123_agentx_v2_proof_attachments.sql
+  cat migrations/20261123_agentx_v2_proof_attachments.sql
   cat tests/integration/agentx-v2-digital-orders.sql
+  cat tests/integration/agentx-v2-proof-attachments.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 
 review() {
@@ -64,4 +68,9 @@ if psql_test < migrations/rollback/20261122_agentx_v2_digital_orders.sql >"$test
   exit 1
 fi
 rg -q 'refusing to drop digital commerce data' "$test_logs/rollback" || { cat "$test_logs/rollback"; exit 1; }
+if psql_test < migrations/rollback/20261123_agentx_v2_proof_attachments.sql >"$test_logs/attachment-rollback" 2>&1; then
+  echo "Rollback unexpectedly removed stored attachments"
+  exit 1
+fi
+rg -q 'refusing to drop payment proof attachments' "$test_logs/attachment-rollback" || { cat "$test_logs/attachment-rollback"; exit 1; }
 echo 'AgentX v2 PostgreSQL integration passed'

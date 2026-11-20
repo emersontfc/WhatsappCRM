@@ -79,6 +79,36 @@ describe("AgentX v2 commerce HTTP", () => {
     });
   });
 
+  it("rejects a disguised attachment and submits a PDF only as unverified evidence", async () => {
+    const path = `/${org}/orders/${order}/proof-attachments`;
+    const send = (content: string) => {
+      const data = new FormData();
+      data.append("file", new Blob([content], { type: "application/pdf" }), "proof.pdf");
+      return fetch(baseUrl + path, {
+        method: "POST", body: data, headers: { authorization: "Bearer http-test-token" }
+      });
+    };
+    expect((await send("<html>fake pdf</html>")).status).toBe(400);
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    mocks.rpc.mockResolvedValue({ data: proof, error: null });
+    expect((await send("%PDF-1.7 fixture")).status).toBe(200);
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("agentx_submit_proof_attachment", {
+      p_org: org, p_order: order, p_actor: actor, p_extension: "pdf",
+      p_content: Buffer.from("%PDF-1.7 fixture").toString("base64")
+    });
+  });
+
+  it("does not return attachment bytes after a finance authorization failure", async () => {
+    mocks.rpc.mockResolvedValue({ error: { code: "42501" } });
+    const response = await request(`/${org}/payment-proofs/${proof}/attachment`);
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ success: false, error: "Organization access denied" });
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("agentx_get_proof_attachment", {
+      p_org: org, p_proof: proof, p_actor: actor
+    });
+  });
+
   it("requires explicit settlement confirmation and a verified reference", async () => {
     expect((await request(reviewPath, { decision: "approve", settlementVerified: true })).status).toBe(400);
     expect((await request(reviewPath, {

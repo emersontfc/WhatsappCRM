@@ -55,6 +55,24 @@ router.param("proofId", (_req, res, next, value) => {
   next();
 });
 
+router.get("/organizations", handle(async (req, res) => {
+  const { data, error } = await supabaseAdmin.from("organization_members")
+    .select("organization_id,role,organizations!inner(name)")
+    .eq("user_id", req.user!.id).eq("organizations.status", "active")
+    .order("organization_id");
+  if (error) return databaseFailure(res, error);
+  return res.json({ success: true, data });
+}));
+
+router.get("/my-orders", handle(async (req, res) => {
+  const { data, error } = await supabaseAdmin.from("agentx_orders")
+    .select("id,organization_id,amount,currency,status,approved_at,settlement_reference,organizations!inner(name),agentx_digital_deliveries(order_id)")
+    .eq("customer_user_id", req.user!.id).eq("organizations.status", "active")
+    .order("created_at", { ascending: false }).order("id").limit(100);
+  if (error) return databaseFailure(res, error);
+  return res.json({ success: true, data });
+}));
+
 router.post("/organizations", handle(async (req, res) => {
   const { name, slug } = req.body ?? {};
   if (typeof name !== "string" || name.trim().length < 2 || name.trim().length > 120 ||
@@ -142,6 +160,39 @@ router.post("/:organizationId/orders/:orderId/payment-proofs", handle(async (req
   });
   if (error) return databaseFailure(res, error);
   return res.json({ success: true, data: { id: data } });
+}));
+
+const proofUpload = multer({ limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 } }).single("file");
+
+router.post("/:organizationId/orders/:orderId/proof-attachments", (req, res, next) => {
+  proofUpload(req, res, (error) => {
+    if (error) {
+      fail(res, error.code === "LIMIT_FILE_SIZE" ? 413 : 400, "Invalid proof attachment");
+      return;
+    }
+    next();
+  });
+}, handle(async (req, res) => {
+  const bytes = req.file?.buffer;
+  const signature = bytes?.subarray(0, 8).toString("hex") ?? "";
+  const extension = signature.startsWith("ffd8ff") ? "jpg"
+    : signature === "89504e470d0a1a0a" ? "png"
+    : signature.startsWith("255044462d") ? "pdf" : null;
+  if (!bytes || !extension) return fail(res, 400, "Choose a JPEG, PNG or PDF proof");
+  const { data, error } = await supabaseAdmin.rpc("agentx_submit_proof_attachment", {
+    p_org: req.params.organizationId, p_order: req.params.orderId, p_actor: req.user!.id,
+    p_extension: extension, p_content: bytes.toString("base64")
+  });
+  if (error) return databaseFailure(res, error);
+  return res.json({ success: true, data: { id: data } });
+}));
+
+router.get("/:organizationId/payment-proofs/:proofId/attachment", handle(async (req, res) => {
+  const { data, error } = await supabaseAdmin.rpc("agentx_get_proof_attachment", {
+    p_org: req.params.organizationId, p_proof: req.params.proofId, p_actor: req.user!.id
+  });
+  if (error) return databaseFailure(res, error);
+  return res.json({ success: true, data });
 }));
 
 router.get("/:organizationId/payment-proofs/pending", handle(async (req, res) => {
