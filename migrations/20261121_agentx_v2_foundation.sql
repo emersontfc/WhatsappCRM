@@ -55,9 +55,7 @@ USING (owner_user_id=(SELECT auth.uid()) OR EXISTS(
 ));
 DROP POLICY IF EXISTS agentx_member_read ON public.organization_members;
 CREATE POLICY agentx_member_read ON public.organization_members FOR SELECT TO authenticated
-USING (user_id=(SELECT auth.uid()) OR EXISTS(
- SELECT 1 FROM public.organizations o WHERE o.id=organization_id AND o.owner_user_id=(SELECT auth.uid())
-));
+USING (user_id=(SELECT auth.uid()));
 DROP POLICY IF EXISTS agentx_workflow_read ON public.agentx_workflows;
 CREATE POLICY agentx_workflow_read ON public.agentx_workflows FOR SELECT TO authenticated
 USING (EXISTS(SELECT 1 FROM public.organization_members m WHERE m.organization_id=agentx_workflows.organization_id AND m.user_id=(SELECT auth.uid())));
