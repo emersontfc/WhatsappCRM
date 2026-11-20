@@ -270,11 +270,12 @@ export default function Contacts() {
         ai_paused_at: newPaused ? now : null
       }).eq("id", contact.id);
 
-      await fetch(`/api/whatsapp/chats/${contact.id}/toggle-ai`, {
+      await apiFetch(`/api/whatsapp/chats/${contact.id}/toggle-ai`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paused: newPaused })
-      }).catch(() => { });
+      }).catch((e) => {
+        console.warn("Could not sync toggle-ai with backend socket:", e);
+      });
 
       toast.success(newPaused ? "Modo Humano ativado (IA pausada)" : "IA Ativada para este contacto");
     } catch (err) {
