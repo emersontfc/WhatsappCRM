@@ -32,3 +32,20 @@ services:
         max-size: "20m"
         max-file: "5"
 
+  digital-worker:
+    profiles: [commerce-v2]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "./node_modules/tsx/dist/cli.mjs", "scripts/agentx-digital-worker.ts"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    healthcheck:
+      disable: true
+    mem_limit: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

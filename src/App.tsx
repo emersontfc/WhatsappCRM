@@ -23,6 +23,7 @@ import Leads from "./pages/Leads";
 import ActivityLog from "./pages/ActivityLog";
 import Appointments from "./pages/Appointments";
 import Orders from "./pages/Orders";
+import DigitalOrders from "./pages/DigitalOrders";
 import PublicBooking from "./pages/PublicBooking";
 import Docs from "./pages/Docs";
 import Layout from "./components/Layout";
@@ -92,6 +93,10 @@ export default function App() {
         <Route
           path="/orders"
           element={user ? <Layout><Orders key={user?.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/digital-orders"
+          element={user ? <Layout><DigitalOrders key={user.id} accountId={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/activate"

@@ -147,6 +147,7 @@ export default function Layout({ children }: LayoutProps) {
         { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
         { name: "Mensagens", path: "/messages", icon: MessageCircle },
         { name: "Vendas & Pedidos", path: "/orders", icon: ShoppingCart },
+        { name: "Pedidos digitais", path: "/digital-orders", icon: ShoppingCart },
         { name: "Agenda & Consultas", path: "/appointments", icon: CalendarCheck },
         { name: "Disparos Programados", path: "/schedule", icon: Clock, premiumOnly: true },
       ]
