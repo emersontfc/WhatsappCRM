@@ -11,11 +11,15 @@ for attempt in {1..40}; do
   if docker exec "$db" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; then break; fi
   sleep 0.25
 done
+docker cp migrations "$db:/agentx-migrations"
 {
   cat tests/integration/agentx-v2-supabase-fixture.sql
-  cat migrations/20261121_agentx_v2_foundation.sql
-  cat migrations/20261121_agentx_v2_payment_reviews.sql
-  cat migrations/20261122_agentx_v2_digital_orders.sql
+  echo 'CREATE TABLE public.agents (id uuid PRIMARY KEY);'
+  cat supabase/migrations/08_agentx_2_0_commerce_operations.sql
+  cat tests/integration/agentx-v2-legacy-upgrade-fixture.sql
+  echo '\i /agentx-migrations/apply_agentx_v2.sql'
+  echo '\i /agentx-migrations/apply_agentx_v2.sql'
+  cat migrations/rollback/20261123_agentx_v2_proof_attachments.sql
   cat migrations/rollback/20261122_agentx_v2_digital_orders.sql
   cat migrations/20261122_agentx_v2_digital_orders.sql
   cat migrations/20261123_agentx_v2_proof_attachments.sql
@@ -23,6 +27,17 @@ done
   cat migrations/20261123_agentx_v2_proof_attachments.sql
   cat tests/integration/agentx-v2-digital-orders.sql
   cat tests/integration/agentx-v2-proof-attachments.sql
+  cat <<'SQL'
+SELECT public.test_assert(
+  (SELECT jsonb_build_array(
+    (SELECT jsonb_agg(o) FROM public.orders o),
+    (SELECT jsonb_agg(p) FROM public.products p),
+    (SELECT jsonb_agg(v) FROM public.payment_verifications v),
+    (SELECT jsonb_agg(a) FROM public.agents a)
+  )) = (SELECT snapshot FROM agentx_legacy_before),
+  'existing orders, products, verifications and agent settings survived the upgrade'
+);
+SQL
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 
 review() {

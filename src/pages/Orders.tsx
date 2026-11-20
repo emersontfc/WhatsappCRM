@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { 
   ShoppingCart, 
   Package, 
@@ -272,7 +273,10 @@ export default function Orders() {
             Gestão de pedidos, catálogo de produtos, conferência de comprovativos e entrega automatizada.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link to="/digital-orders" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
+            Pedidos digitais
+          </Link>
           <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
             <RefreshCw size={16} className={cn(loading && "animate-spin")} /> Atualizar
           </Button>

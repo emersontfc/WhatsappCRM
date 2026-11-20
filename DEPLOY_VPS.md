@@ -83,6 +83,19 @@ O Docker isola a aplicação com todas as bibliotecas de áudio FFmpeg e depend�
 sudo docker compose up -d --build
 ```
 
+### Ativar Pedidos digitais no AgentX existente
+
+Em staging, execute `psql -X -f migrations/apply_agentx_v2.sql` com a ligação PostgreSQL Supabase configurada em `PGDATABASE`. Faça backup antes de repetir o processo em produção. A atualização cria as tabelas v2 e mantém os pedidos, produtos, verificações e configurações existentes nas respetivas tabelas. O menu **Vendas & Pedidos** dá acesso a **Pedidos digitais**.
+
+Inicie também o worker no mesmo ambiente da aplicação para processar as entregas aprovadas:
+
+```bash
+sudo docker compose --profile commerce-v2 up -d --build
+sudo docker compose --profile commerce-v2 logs --tail=50 digital-worker
+```
+
+Em instalações PM2, execute `npm run worker:digital` como processo supervisionado com as mesmas variáveis Supabase do backend. Valide primeiro o fluxo com contas de teste de comprador e financeiro. Consulte [o guia de Pedidos digitais](docs/AGENTX_V2_MILESTONE_1.md) para rollback e detalhes do fluxo.
+
 ### 2. Verificar status e logs em tempo real:
 ```bash
 sudo docker compose ps
