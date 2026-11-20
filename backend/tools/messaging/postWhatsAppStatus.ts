@@ -65,7 +65,8 @@ export const postWhatsAppStatusTool: ToolDefinition = {
         mediaType
       );
 
-      const msgId = result?.key?.id || "OK";
+      const msgId = result?.key?.id;
+      if (!msgId) throw new Error("O WhatsApp não confirmou a publicação.");
 
       // Log operation
       try {

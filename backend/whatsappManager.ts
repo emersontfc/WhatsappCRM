@@ -1,3 +1,4 @@
+import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "./services/whatsappOperator.ts";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -341,25 +342,29 @@ export class WhatsAppManager implements IWhatsAppTransport {
             console.log(`[WhatsApp] Message from ${jid} (isMe: ${isMe}): "${text}"`);
 
             const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
-            await this.syncMessage(userId, msg, altJid);
+            const saved = await this.syncMessage(userId, msg, altJid);
 
             // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
-            const myInfo = this.getMe(userId);
-            const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
-            const myLid = myInfo?.lid ? myInfo.lid.split(":")[0].replace(/\D/g, "") : "";
-            const senderPhone = jid.split("@")[0].replace(/\D/g, "");
-            const isSelfMessage = isMe && (
-              (Boolean(myPhone) && senderPhone === myPhone) || 
-              (Boolean(myLid) && senderPhone === myLid) ||
-              (Boolean(myInfo?.id) && jid.includes(myInfo.id.split(":")[0])) ||
-              (Boolean(myInfo?.lid) && jid.includes(myInfo.lid.split(":")[0]))
-            );
+            const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
             const isGroupOrBroadcast = jid.includes("@g.us") || 
                                        jid.includes("@broadcast") || 
                                        jid.includes("@newsletter") || 
                                        jid.startsWith("120363");
 
-            if ((!isMe || isSelfMessage) && text && !isGroupOrBroadcast) {
+            if (type === "notify" && !isGroupOrBroadcast) {
+              if (!isMe && saved?.contact_id && Date.now() - Date.parse(saved.timestamp) < 5 * 60_000) {
+                void alertOperator(this, userId, saved.contact_id)
+                  .catch((error) => console.warn("[WhatsApp] Could not send contact alert:", error?.code || "delivery_failed"));
+              }
+            }
+            if (text && parseOperatorCommand(text)) {
+              if (isSelfMessage && msgKeyId && saved &&
+                  Date.now() - Date.parse(saved.timestamp) < 2 * 60_000) {
+                await handleOperatorCommand(this, userId, jid, true, text, msgKeyId);
+              }
+              continue;
+            }
+            if ((!isMe || (isSelfMessage && !text.startsWith("AgentX:"))) && text && !isGroupOrBroadcast) {
               console.log(`[WhatsApp] Processing message for ${userId} (from: ${jid}, text: "${text}", isSelf: ${isSelfMessage})`);
               const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
               if (!handledByAutomation) {
@@ -995,65 +1000,37 @@ export class WhatsAppManager implements IWhatsAppTransport {
           caption: text,
         }, options);
       } else if (mediaType === 'audio') {
-        let audioPath = mediaUrl;
-        let tempInputPath = "";
-        let tempOutputPath = "";
-
-        if (mediaUrl) {
-          try {
-            // Check if mediaUrl points directly to a local file in uploads/
-            let localPath = "";
-            if (mediaUrl.includes("/uploads/")) {
-              const filename = mediaUrl.split("/uploads/").pop()?.split("?")[0];
-              if (filename) {
-                const candidate = path.join(process.cwd(), "uploads", filename);
-                if (fs.existsSync(candidate)) localPath = candidate;
-              }
-            } else if (fs.existsSync(mediaUrl)) {
-              localPath = mediaUrl;
-            }
-
-            if (localPath) {
-              if (localPath.toLowerCase().endsWith(".ogg")) {
-                // Already in OGG/Opus format from upload! Send directly with 0 conversion overhead!
-                audioPath = localPath;
-                console.log(`[WhatsAppManager] Fast direct audio dispatch from disk: ${audioPath}`);
-              } else {
-                tempOutputPath = await convertToOpus(localPath);
-                audioPath = tempOutputPath;
-              }
-            } else if (mediaUrl.startsWith("http")) {
-              tempInputPath = path.join(os.tmpdir(), `input_${Date.now()}`);
-              const response = await axios({
-                method: 'get',
-                url: mediaUrl,
-                responseType: 'stream'
-              });
-              const writer = fs.createWriteStream(tempInputPath);
-              response.data.pipe(writer);
-              await new Promise<void>((resolve, reject) => {
-                writer.on('finish', () => resolve());
-                writer.on('error', (err) => reject(err));
-              });
-              tempOutputPath = await convertToOpus(tempInputPath);
-              if (tempOutputPath) audioPath = tempOutputPath;
-            }
-          } catch (err) {
-            console.error("[WhatsAppManager] Error preparing audio, falling back to original:", err);
-            audioPath = mediaUrl;
+        let inputDirectory: string | undefined;
+        let converted: string | undefined;
+        try {
+          const filename = mediaUrl.split("/uploads/").at(-1)?.split("?")[0] ?? "";
+          let localPath = "";
+          if (mediaUrl.includes("/uploads/") && /^[a-zA-Z0-9_.-]+$/.test(filename) && filename !== "." && filename !== "..") {
+            const file = path.join(process.cwd(), "uploads", filename);
+            if (fs.existsSync(file)) localPath = file;
           }
+          if (!localPath) {
+            const url = new URL(mediaUrl);
+            const storage = new URL(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://invalid.local");
+            if (url.protocol !== "https:" || url.origin !== storage.origin ||
+                !url.pathname.startsWith("/storage/v1/object/")) throw new Error("Origem do áudio inválida.");
+            const response = await axios.get(url.href, {
+              responseType: "arraybuffer", timeout: 20000, maxContentLength: 20 * 1024 * 1024, maxRedirects: 0
+            });
+            inputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "agentx-audio-"));
+            localPath = path.join(inputDirectory, "source");
+            fs.writeFileSync(localPath, response.data);
+          }
+          // The voice upload endpoint already encodes these files in Opus.
+          const ready = /^voice-\d+-\d+\.ogg$/.test(path.basename(localPath));
+          const audioPath = ready ? localPath : (converted = await convertToOpus(localPath));
+          result = await session.socket.sendMessage(jid, {
+            audio: fs.readFileSync(audioPath), mimetype: "audio/ogg; codecs=opus", ptt: true, seconds: duration
+          }, options);
+        } finally {
+          if (converted) fs.rmSync(converted, { force: true });
+          if (inputDirectory) fs.rmSync(inputDirectory, { recursive: true, force: true });
         }
-
-        result = await session.socket.sendMessage(jid, { 
-          audio: audioPath.startsWith("http") ? { url: audioPath } : fs.readFileSync(audioPath), 
-          mimetype: 'audio/ogg; codecs=opus', 
-          ptt: true, 
-          seconds: duration 
-        }, options);
-
-        // Cleanup temp files
-        if (tempInputPath && fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
-        if (tempOutputPath && fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
       } else if (mediaType === 'document') {
         result = await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: mimetype || 'application/pdf', fileName: fileName || 'documento', caption: text }, options);
       }

@@ -41,6 +41,14 @@ SQL
   cat supabase/migrations/12_catalog_deliverables.sql
   cat supabase/migrations/12_catalog_deliverables.sql
   cat tests/integration/catalog-deliverables.sql
+  cat <<'SQL'
+CREATE TABLE public.contacts (id uuid PRIMARY KEY, user_id uuid REFERENCES auth.users(id));
+CREATE TABLE public.scheduled_messages (id uuid PRIMARY KEY);
+CREATE TABLE public.scheduled_status (id uuid PRIMARY KEY);
+SQL
+  cat supabase/migrations/13_whatsapp_operator.sql
+  cat supabase/migrations/13_whatsapp_operator.sql
+  cat tests/integration/whatsapp-operator.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 
 review() {

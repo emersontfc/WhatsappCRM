@@ -1,3 +1,4 @@
+import { dispatchScheduled } from "../services/scheduledDispatch.ts";
 import express from "express";
 import { whatsappManager } from "../whatsappManager.ts";
 import { AuthRequest } from "../middleware/auth.ts";
@@ -12,60 +13,43 @@ router.use((req, res, next) => {
   next();
 });
 
+router.get("/operator-settings", async (req: AuthRequest, res) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: "Unauthorized" });
+    const { data, error } = await supabaseAdmin.from("whatsapp_operator_settings").select("contact_alerts")
+      .eq("user_id", req.user.id).maybeSingle();
+    if (error) return res.status(503).json({ error: "Preferências indisponíveis." });
+    return res.json({ data: { contact_alerts: data?.contact_alerts ?? false } });
+  } catch {
+    return res.status(503).json({ error: "Preferências indisponíveis." });
+  }
+});
+
+router.put("/operator-settings", async (req: AuthRequest, res) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: "Unauthorized" });
+    if (typeof req.body?.contact_alerts !== "boolean") return res.status(400).json({ error: "Preferência inválida." });
+    const { error } = await supabaseAdmin.from("whatsapp_operator_settings")
+      .upsert({ user_id: req.user.id, contact_alerts: req.body.contact_alerts });
+    if (error) return res.status(503).json({ error: "Não foi possível guardar as preferências." });
+    return res.json({ data: { contact_alerts: req.body.contact_alerts } });
+  } catch {
+    return res.status(503).json({ error: "Preferências indisponíveis." });
+  }
+});
+
 router.post("/send-scheduled*", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  const { id, type } = req.body;
-  
-  console.log(`[WhatsApp Router] Handling /send-scheduled: user=${userId}, id=${id}, type=${type}, url=${req.url}`);
-
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
-
+  const { id, type } = req.body ?? {};
+  if (typeof id !== "string" || !["status", "contact"].includes(type)) {
+    return res.status(400).json({ error: "Agendamento inválido." });
+  }
   try {
-    const table = type === 'status' ? "scheduled_status" : "scheduled_messages";
-    const { data: item, error } = await supabaseAdmin
-      .from(table)
-      .select("*")
-      .eq("id", id)
-      .eq("user_id", userId)
-      .single();
-
-    if (error || !item) throw new Error("Agendamento não encontrado");
-
-    let jid = "";
-    if (type === 'status') {
-      jid = "status@broadcast";
-    } else {
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("phone")
-        .eq("id", item.contact_id)
-        .single();
-      if (!contact?.phone) throw new Error("Contato sem telefone");
-      jid = `${contact.phone}@s.whatsapp.net`;
-    }
-
-    console.log(`[WhatsApp Router] Sending scheduled content to ${jid}`);
-
-    await whatsappManager.sendMessage(
-      userId,
-      jid,
-      type === 'status' ? item.caption : item.message,
-      item.media_url,
-      item.media_type,
-      undefined,
-      item.media_mimetype,
-      item.media_filename
-    );
-
-    await supabaseAdmin
-      .from(table)
-      .update({ status: "sent" })
-      .eq("id", id);
-
-    res.json({ success: true });
-  } catch (err: any) {
-    console.error(`[WhatsApp Router] Error in /send-scheduled:`, err.message);
-    res.status(500).json({ success: false, error: err.message });
+    const result = await dispatchScheduled(type === "status" ? "scheduled_status" : "scheduled_messages", id, userId);
+    return res.status(result.success ? 200 : 409).json(result);
+  } catch {
+    return res.status(503).json({ error: "Não foi possível confirmar o envio. Consulte a agenda antes de tentar novamente." });
   }
 });
 

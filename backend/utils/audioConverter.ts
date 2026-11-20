@@ -38,6 +38,7 @@ export async function convertToOpus(inputPath: string): Promise<string> {
       .toFormat("ogg")
       .on("error", (err) => {
         console.error("[AudioConverter] Error during conversion:", err);
+        fs.rmSync(outputPath, { force: true });
         reject(err);
       })
       .on("end", () => {

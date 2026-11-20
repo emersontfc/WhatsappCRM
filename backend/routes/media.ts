@@ -44,12 +44,13 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+const uploadAudio = multer({ storage, limits: { fileSize: 10 * 1024 * 1024, files: 1 } }).single("audio");
 
 router.post("/upload-audio", authenticate, (req, res) => {
-  upload.single("audio")(req, res, async (err) => {
+  uploadAudio(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       console.error("[Media] Multer error:", err);
-      return res.status(400).json({ success: false, error: `Erro no upload: ${err.message}` });
+      return res.status(err.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ success: false, error: "Ficheiro de áudio inválido. Limite de 10 MiB." });
     } else if (err) {
       console.error("[Media] Unknown upload error:", err);
       return res.status(500).json({ success: false, error: "Erro interno no upload" });
@@ -114,18 +115,9 @@ router.post("/upload-audio", authenticate, (req, res) => {
           duration: duration || 1,
         });
       } catch (convErr: any) {
-        console.warn("[Media] FFmpeg conversion failed, falling back to original upload:", convErr.message);
-        
-        // Fallback: serve original uploaded audio file directly
-        const fallbackFilename = path.basename(inputPath);
-        const fallbackUrl = `${protocol}://${host}/uploads/${fallbackFilename}`;
-
-        return res.json({
-          success: true,
-          url: fallbackUrl,
-          filename: fallbackFilename,
-          duration: duration || 1,
-        });
+        console.warn("[Media] FFmpeg conversion failed:", convErr.message);
+        await Promise.allSettled([fs.promises.rm(inputPath, { force: true }), fs.promises.rm(outputPath, { force: true })]);
+        return res.status(422).json({ success: false, error: "Não foi possível converter o ficheiro numa nota de voz." });
       }
 
     } catch (err: any) {
