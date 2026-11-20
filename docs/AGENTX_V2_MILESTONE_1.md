@@ -44,3 +44,25 @@ Faça backup antes de aplicar a migração num ambiente com dados. Para reverter
 ## Continuação da reconstrução
 
 O fluxo v2 já inclui as telas do comprador, do operador e da equipa financeira. Ficam pendentes os avisos externos de revisão e entrega por WhatsApp, a extração automática de dados dos anexos, o rastreio de ficheiros maliciosos e a emissão fiscal. O catálogo com preços, stock e itens de encomenda ainda precisa de integração com os ativos privados. Também ficam pendentes a migração auditada do CRM legado para organizações, PaySuite, moderação de grupos, ferramentas comerciais da IA com permissões por empresa, BullMQ/Redis e administração de subscrições e limites.
+
+## Catálogo do agente e ficheiros vendidos pelo WhatsApp
+
+Aplique `supabase/migrations/12_catalog_deliverables.sql` num projeto que já tenha a migração
+`08_agentx_2_0_commerce_operations.sql` do comércio existente. A migração é aditiva e desativa
+o acesso direto do navegador às tabelas do comércio. As rotas autenticadas continuam a usar
+o catálogo vinculado à conta que gere a sessão WhatsApp.
+
+Em **Vendas & Pedidos → Catálogo**, crie um produto digital ou anexe um ficheiro a um produto
+já cadastrado. São aceites PDF, EPUB, JPEG, PNG e WebP até 20 MiB. O agente recebe apenas os
+dados comerciais e consulta o catálogo ativo da conta. No pedido, o preço e a referência do
+ficheiro vêm do catálogo. O sistema verifica o stock disponível no momento da criação do pedido.
+
+Após conferir o pagamento no prestador, aprove o comprovativo. O WhatsApp recebe um link
+assinado válido por 24 horas. Guarde o link como uma credencial temporária. Se a sessão estiver
+desligada, volte a ligá-la e use **Tentar entrega**. Se o envio ficar por confirmar, verifique a
+conversa antes de qualquer reenvio. O estado de pagamento permanece confirmado.
+
+O catálogo associado a cada conta do WhatsApp permanece no módulo **Vendas & Pedidos**.
+O fluxo por organização em **Pedidos digitais** continua a usar a descarga autenticada do
+comprador. Uma reversão do container deve manter o esquema novo para preservar ficheiros,
+aprovações e pedidos que tenham sido criados entretanto.

@@ -21,13 +21,15 @@ export const getOrderStatusTool: ToolDefinition = {
     try {
       let query = supabaseAdmin
         .from("orders")
-        .select("*, order_items(*)")
+        .select("order_number,status,rejected_reason,total_amount,currency,order_items(product_name,quantity)")
         .eq("user_id", ctx.userId);
+
+      if (ctx.role !== "admin" || !args.orderNumber) query = query.eq("customer_phone", ctx.phone);
 
       if (args.orderNumber) {
         query = query.eq("order_number", args.orderNumber.trim().toUpperCase());
       } else {
-        query = query.eq("customer_phone", ctx.phone).order("created_at", { ascending: false }).limit(1);
+        query = query.order("created_at", { ascending: false }).limit(1);
       }
 
       const { data: orders, error } = await query;

@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
-import { commerceService } from "../../services/commerceService.ts";
+import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
 import { supabaseAdmin } from "../../supabaseAdmin.ts";
 
 export const createOrderTool: ToolDefinition = {
@@ -30,21 +30,21 @@ export const createOrderTool: ToolDefinition = {
   },
   execute: async (args: { productName: string; quantity?: number; paymentMethod?: any }, ctx: ToolContext): Promise<ToolResult> => {
     try {
-      const quantity = Math.max(1, Math.floor(args.quantity || 1));
-      const paymentMethod = args.paymentMethod || "mpesa";
-
-      // 1. Find product in catalog
-      const { data: products } = await supabaseAdmin
-        .from("products")
-        .select("*")
-        .eq("user_id", ctx.userId)
-        .eq("is_active", true)
-        .ilike("name", `%${args.productName.trim()}%`)
-        .limit(1);
-
-      const matchedProduct = products?.[0];
-      const unitPrice = matchedProduct ? Number(matchedProduct.price) : 0;
-      const finalProductName = matchedProduct ? matchedProduct.name : args.productName;
+      const quantity = args.quantity ?? 1;
+      const paymentMethod = args.paymentMethod ?? "mpesa";
+      const term = typeof args.productName === "string" ? normalizeCatalogText(args.productName) : "";
+      if (!term || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
+        return { success: false, message: "Indique o produto e uma quantidade entre 1 e 999." };
+      }
+      const catalog = await commerceService.listAgentProducts(ctx.userId);
+      const exact = catalog.filter((product) => product.id === term || normalizeCatalogText(product.name) === term);
+      const matches = exact.length ? exact : catalog.filter((product) => normalizeCatalogText(product.name).includes(term));
+      if (matches.length !== 1) {
+        return { success: false, message: matches.length
+          ? "Há vários produtos com esse nome. Indique o nome completo ou o código do produto."
+          : "Produto não encontrado no catálogo ativo." };
+      }
+      const product = matches[0];
 
       // 2. Fetch contact info
       const { data: contact } = await supabaseAdmin
@@ -61,18 +61,12 @@ export const createOrderTool: ToolDefinition = {
         customerName: contact?.name || "Cliente",
         contactId: contact?.id,
         paymentMethod,
-        items: [
-          {
-            productId: matchedProduct?.id,
-            productName: finalProductName,
-            quantity,
-            unitPrice
-          }
-        ]
+        productId: product.id,
+        quantity
       });
 
       const order = result.order;
-      const totalFormatted = `${order.total_amount} MT`;
+      const totalFormatted = `${order.total_amount} ${order.currency}`;
 
       // 4. Instructions based on payment method
       let instructions = "";

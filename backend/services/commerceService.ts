@@ -1,29 +1,22 @@
+import { randomBytes } from "node:crypto";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
+import { PRODUCT_FILE_BUCKET } from "./catalogDeliverables.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 
 export interface CreateOrderParams {
   userId: string;
   customerPhone: string;
-  customerName?: string;
+  customerName: string;
   contactId?: string;
-  paymentMethod?: "mpesa" | "emola" | "bank_transfer" | "reference" | "other";
-  items: {
-    productId?: string;
-    productName: string;
-    quantity: number;
-    unitPrice: number;
-  }[];
+  paymentMethod: string;
+  productId: string;
+  quantity: number;
 }
 
-export class CommerceService {
-  /**
-   * Generates a human-friendly unique order reference e.g. AGX-8492
-   */
-  private generateOrderNumber(): string {
-    const random = Math.floor(1000 + Math.random() * 9000);
-    return `AGX-${random}`;
-  }
+export const normalizeCatalogText = (text: string) =>
+  text.normalize("NFD").replace(/\p{M}/gu, "").trim().toLowerCase();
 
+export class CommerceService {
   /**
    * Lists active products for a user/company
    */
@@ -44,71 +37,33 @@ export class CommerceService {
     return data || [];
   }
 
-  /**
-   * Creates a new commercial order with items and records timeline event
-   */
+  async listAgentProducts(userId: string) {
+    const { data, error } = await supabaseAdmin.from("products")
+      .select("id,name,description,price,currency,category,stock")
+      .eq("user_id", userId).eq("is_active", true)
+      .order("created_at", { ascending: false }).order("id");
+    if (error) throw error;
+    return data ?? [];
+  }
+
   async createOrder(params: CreateOrderParams) {
-    const { userId, customerPhone, customerName, contactId, paymentMethod = "mpesa", items } = params;
-    
-    if (!items || items.length === 0) {
-      throw new Error("O pedido precisa conter pelo menos 1 item.");
-    }
-
-    const cleanPhone = customerPhone.replace(/\D/g, "");
-    const orderNumber = this.generateOrderNumber();
-    const totalAmount = items.reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0);
-
-    // 1. Insert order
-    const { data: order, error: orderErr } = await supabaseAdmin
-      .from("orders")
-      .insert({
-        order_number: orderNumber,
-        user_id: userId,
-        contact_id: contactId || null,
-        customer_name: customerName || "Cliente",
-        customer_phone: cleanPhone,
-        total_amount: totalAmount,
-        currency: "MT",
-        status: "awaiting_payment",
-        payment_method: paymentMethod,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (orderErr) throw orderErr;
-
-    // 2. Insert items
-    const orderItemsPayload = items.map(i => ({
-      order_id: order.id,
-      product_id: i.productId || null,
-      product_name: i.productName,
-      quantity: i.quantity,
-      unit_price: i.unitPrice,
-      total_price: i.quantity * i.unitPrice,
-      created_at: new Date().toISOString()
-    }));
-
-    const { error: itemsErr } = await supabaseAdmin.from("order_items").insert(orderItemsPayload);
-    if (itemsErr) console.warn("[CommerceService] Error inserting order items:", itemsErr.message);
-
-    // 3. Record timeline step
-    await this.recordTimelineEvent({
-      userId,
-      orderId: order.id,
-      contactId,
-      phone: cleanPhone,
-      step: "order_created",
-      description: `Pedido ${orderNumber} criado no valor de ${totalAmount} MT. Aguardando pagamento.`,
-      metadata: { items, totalAmount, paymentMethod }
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_catalog_create_order", {
+      p_user: params.userId,
+      p_product: params.productId,
+      p_quantity: params.quantity,
+      p_phone: params.customerPhone.replace(/\D/g, ""),
+      p_customer: params.customerName,
+      p_contact: params.contactId ?? null,
+      p_method: params.paymentMethod,
+      p_order_number: `AGX-${randomBytes(6).toString("hex").toUpperCase()}`
     });
-
-    return {
-      success: true,
-      order,
-      items: orderItemsPayload
-    };
+    if (error) throw error;
+    await this.recordTimelineEvent({
+      userId: params.userId, orderId: order.id, contactId: params.contactId,
+      phone: order.customer_phone, step: "order_created",
+      description: `Pedido ${order.order_number} criado. Aguardando pagamento.`
+    });
+    return { order };
   }
 
   /**
@@ -147,6 +102,13 @@ export class CommerceService {
 
     const cleanPhone = customerPhone.replace(/\D/g, "");
 
+    if (orderId) {
+      const { data: eligible, error } = await supabaseAdmin.from("orders").select("id")
+        .eq("id", orderId).eq("user_id", userId).eq("customer_phone", cleanPhone)
+        .in("status", ["created", "awaiting_payment", "verification_pending", "rejected"]).maybeSingle();
+      if (error || !eligible) throw new Error("Pedido indisponível para receber comprovativos.");
+    }
+
     // 1. Create verification record
     const { data: verification, error: verErr } = await supabaseAdmin
       .from("payment_verifications")
@@ -183,7 +145,8 @@ export class CommerceService {
           proof_data: { verificationId: verification.id, ...extractedData },
           updated_at: new Date().toISOString()
         })
-        .eq("id", orderId);
+        .eq("id", orderId).eq("user_id", userId)
+        .in("status", ["created", "awaiting_payment", "verification_pending", "rejected"]);
 
       await this.recordTimelineEvent({
         userId,
@@ -202,63 +165,12 @@ export class CommerceService {
    * Approves an order by an authorized human administrator and triggers digital fulfillment
    */
   async approveOrder(orderId: string, adminUserId: string, notes?: string) {
-    const { data: order, error: getErr } = await supabaseAdmin
-      .from("orders")
-      .select("*, order_items(*)")
-      .eq("id", orderId)
-      .single();
-
-    if (getErr || !order) throw new Error("Pedido não encontrado.");
-
-    if (order.status === "paid" || order.status === "fulfilled") {
-      return { success: true, message: "Pedido já aprovado anteriormente.", order };
-    }
-
-    // 1. Update order status to paid
-    const nowISO = new Date().toISOString();
-    const { data: updatedOrder, error: upErr } = await supabaseAdmin
-      .from("orders")
-      .update({
-        status: "paid",
-        approved_by: adminUserId,
-        approved_at: nowISO,
-        verification_notes: notes || "Aprovado pelo administrador.",
-        updated_at: nowISO
-      })
-      .eq("id", orderId)
-      .select()
-      .single();
-
-    if (upErr) throw upErr;
-
-    // 2. Update payment verification status
-    await supabaseAdmin
-      .from("payment_verifications")
-      .update({
-        status: "approved",
-        reviewed_by: adminUserId,
-        reviewed_at: nowISO
-      })
-      .eq("order_id", orderId);
-
-    // 3. Record timeline step
-    await this.recordTimelineEvent({
-      userId: order.user_id,
-      orderId,
-      phone: order.customer_phone,
-      step: "admin_approved",
-      description: `Pagamento aprovado pelo administrador (${order.total_amount} MT). Iniciando entrega.`,
-      metadata: { adminUserId, notes }
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_catalog_approve_order", {
+      p_user: adminUserId, p_order: orderId, p_note: notes?.trim() || "Pagamento conferido no prestador."
     });
-
-    // 4. Automatically trigger fulfillment of digital products
-    const fulfillmentResult = await this.fulfillOrder(orderId);
-
-    return {
-      success: true,
-      order: updatedOrder,
-      fulfillment: fulfillmentResult
-    };
+    if (error) throw error;
+    const fulfillment = await this.fulfillOrder(orderId, adminUserId);
+    return { success: true, order, fulfillment };
   }
 
   /**
@@ -269,12 +181,12 @@ export class CommerceService {
     const { data: order, error: getErr } = await supabaseAdmin
       .from("orders")
       .select("id, user_id, customer_phone, order_number")
-      .eq("id", orderId)
-      .single();
+      .eq("id", orderId).eq("user_id", adminUserId)
+      .eq("status", "verification_pending").single();
 
     if (getErr || !order) throw new Error("Pedido não encontrado.");
 
-    await supabaseAdmin
+    const { data: rejected, error: updateError } = await supabaseAdmin
       .from("orders")
       .update({
         status: "rejected",
@@ -283,7 +195,9 @@ export class CommerceService {
         approved_at: nowISO,
         updated_at: nowISO
       })
-      .eq("id", orderId);
+      .eq("id", orderId).eq("user_id", adminUserId).eq("status", "verification_pending")
+      .select("id").maybeSingle();
+    if (updateError || !rejected) throw new Error("O pedido já saiu da fila de verificação.");
 
     await supabaseAdmin
       .from("payment_verifications")
@@ -292,7 +206,7 @@ export class CommerceService {
         reviewed_by: adminUserId,
         reviewed_at: nowISO
       })
-      .eq("order_id", orderId);
+      .eq("order_id", orderId).eq("user_id", adminUserId).eq("status", "pending");
 
     await this.recordTimelineEvent({
       userId: order.user_id,
@@ -321,70 +235,80 @@ export class CommerceService {
   /**
    * Delivers digital goods/service credentials to customer via WhatsApp with duplicate protection
    */
-  async fulfillOrder(orderId: string) {
-    const { data: order } = await supabaseAdmin
-      .from("orders")
-      .select("*, order_items(*)")
-      .eq("id", orderId)
-      .single();
+  async fulfillOrder(orderId: string, userId: string) {
+    const { data: order, error } = await supabaseAdmin.from("orders")
+      .select("*, order_items(*)").eq("id", orderId).eq("user_id", userId).single();
+    if (error || !order) throw new Error("Pedido não encontrado.");
+    if (order.status === "fulfilled") return { success: true, delivered: true };
+    if (order.status !== "paid") throw new Error("O pagamento ainda aguarda confirmação.");
+    if (order.delivery_started_at) return { success: false, delivered: false, message: "Envio em curso ou por confirmar. Verifique a conversa antes de qualquer reenvio." };
 
-    if (!order) throw new Error("Pedido não encontrado.");
-    if (order.status === "fulfilled") {
-      return { success: true, message: "Pedido já entregue anteriormente." };
-    }
-
-    const items = order.order_items || [];
-    let deliveryMessage = `🎉 *PAGAMENTO CONFIRMADO!*\n\nOlá *${order.customer_name || "Cliente"}*! O seu pedido *${order.order_number}* foi confirmado e aprovado com sucesso.\n\n📦 *SEUS PRODUTOS:*\n`;
-
-    // Fetch product details for digital content
-    for (const item of items) {
-      if (item.product_id) {
-        const { data: prod } = await supabaseAdmin
-          .from("products")
-          .select("name, digital_content, type")
-          .eq("id", item.product_id)
-          .maybeSingle();
-
-        if (prod?.digital_content) {
-          deliveryMessage += `\n• *${item.product_name}* (Qtd: ${item.quantity}):\n${prod.digital_content}\n`;
-        } else {
-          deliveryMessage += `\n• *${item.product_name}* (Qtd: ${item.quantity}) — Liberado e ativo no sistema.\n`;
-        }
-      } else {
-        deliveryMessage += `\n• *${item.product_name}* (Qtd: ${item.quantity}) — Concluído.\n`;
+    const lines: string[] = [];
+    let manualDelivery = false;
+    for (const item of order.order_items ?? []) {
+      let deliverable = item.deliverable_snapshot;
+      if (!deliverable && item.product_id) {
+        const { data: product, error: productError } = await supabaseAdmin.from("products")
+          .select("type,digital_content,deliverable_path,deliverable_name")
+          .eq("id", item.product_id).eq("user_id", userId).maybeSingle();
+        if (productError) throw productError;
+        if (product) deliverable = {
+          type: product.type, text: product.digital_content,
+          path: product.deliverable_path, name: product.deliverable_name
+        };
       }
+      if (!deliverable || (deliverable.type !== "digital" && !deliverable.text) ||
+          (!deliverable.text && !deliverable.path)) {
+        manualDelivery = true;
+        break;
+      }
+      let line = `• ${item.product_name} (x${item.quantity})`;
+      if (deliverable.text) line += `\n${deliverable.text}`;
+      if (deliverable.path) {
+        if (!deliverable.path.startsWith(`${userId}/`)) throw new Error("Ficheiro fora do catálogo da conta.");
+        const { data, error: signedError } = await supabaseAdmin.storage.from(PRODUCT_FILE_BUCKET)
+          .createSignedUrl(deliverable.path, 86400, { download: deliverable.name || true });
+        if (signedError || !data) return { success: false, delivered: false, message: "Não foi possível preparar o ficheiro. Pode tentar a entrega novamente." };
+        line += `\n${data.signedUrl} (válido por 24 horas)`;
+      }
+      lines.push(line);
+    }
+    if (manualDelivery || !lines.length) {
+      return { success: false, delivered: false, message: "Pagamento confirmado. Este pedido precisa de preparação ou entrega manual." };
     }
 
-    deliveryMessage += `\nMuito obrigado pela sua preferência! Se tiver qualquer dúvida, estamos à disposição.`;
+    const { data: claim, error: claimError } = await supabaseAdmin.from("orders")
+      .update({ delivery_started_at: new Date().toISOString(), delivery_error: null })
+      .eq("id", orderId).eq("user_id", userId).eq("status", "paid").is("delivery_started_at", null)
+      .select("id").maybeSingle();
+    if (claimError) throw claimError;
+    if (!claim) return { success: false, delivered: false, message: "Outro processo está a tratar da entrega." };
 
-    // Dispatch WhatsApp delivery
-    const nowISO = new Date().toISOString();
     try {
-      const jid = `${order.customer_phone}@s.whatsapp.net`;
-      await whatsappManager.sendMessage(order.user_id, jid, deliveryMessage);
-    } catch (e) {
-      console.warn("[CommerceService] Error delivering order via WhatsApp:", e);
+      const result = await whatsappManager.sendMessage(userId, `${order.customer_phone}@s.whatsapp.net`,
+        `Pagamento confirmado para o pedido *${order.order_number}*.\n\n${lines.join("\n\n")}\n\nObrigado pela compra!`);
+      if (!result?.key?.id) throw new Error("Envio sem identificador WhatsApp.");
+    } catch (error) {
+      const disconnected = error instanceof Error && error.message === "WhatsApp session not connected.";
+      await supabaseAdmin.from("orders").update({
+        delivery_error: disconnected ? "WhatsApp desligado" : "Envio por confirmar",
+        ...(disconnected ? { delivery_started_at: null } : {})
+      }).eq("id", orderId).eq("user_id", userId);
+      return { success: false, delivered: false, message: disconnected
+        ? "WhatsApp desligado. Ligue a sessão e tente a entrega novamente."
+        : "O WhatsApp não confirmou o envio. Verifique a conversa antes de qualquer reenvio." };
     }
 
-    // Mark as fulfilled
-    await supabaseAdmin
-      .from("orders")
-      .update({
-        status: "fulfilled",
-        fulfilled_at: nowISO,
-        updated_at: nowISO
-      })
-      .eq("id", orderId);
-
+    const deliveredAt = new Date().toISOString();
+    const { error: deliveryError } = await supabaseAdmin.from("orders")
+      .update({ status: "fulfilled", fulfilled_at: deliveredAt, updated_at: deliveredAt })
+      .eq("id", orderId).eq("user_id", userId).eq("status", "paid");
+    if (deliveryError) return { success: false, delivered: false, message: "O WhatsApp recebeu a entrega, mas o estado está por confirmar. Verifique a conversa." };
     await this.recordTimelineEvent({
-      userId: order.user_id,
-      orderId,
-      phone: order.customer_phone,
-      step: "fulfilled",
-      description: `Produtos do pedido ${order.order_number} entregues ao cliente via WhatsApp.`,
-      metadata: { deliveredAt: nowISO }
+      userId, orderId, phone: order.customer_phone, step: "fulfilled",
+      description: `Entrega do pedido ${order.order_number} aceite pelo WhatsApp.`,
+      metadata: { deliveredAt }
     });
-
     return { success: true, delivered: true };
   }
 
@@ -419,11 +343,11 @@ export class CommerceService {
   /**
    * Retrieves timeline events for an order or user
    */
-  async getOrderTimeline(orderId: string) {
+  async getOrderTimeline(orderId: string, userId: string) {
     const { data, error } = await supabaseAdmin
       .from("agent_operations")
       .select("*")
-      .eq("order_id", orderId)
+      .eq("order_id", orderId).eq("user_id", userId)
       .order("created_at", { ascending: true });
 
     if (error) throw error;

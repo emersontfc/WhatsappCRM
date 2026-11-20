@@ -39,11 +39,14 @@ export const submitPaymentProofTool: ToolDefinition = {
           .from("orders")
           .select("id, order_number")
           .eq("user_id", ctx.userId)
+          .eq("customer_phone", ctx.phone)
+          .in("status", ["created", "awaiting_payment", "verification_pending", "rejected"])
           .eq("order_number", args.orderNumber.trim().toUpperCase())
           .maybeSingle();
 
         targetOrderId = o?.id;
         targetOrderNumber = o?.order_number;
+        if (!targetOrderId) return { success: false, message: "Pedido indicado não está disponível para este cliente." };
       }
 
       if (!targetOrderId) {
@@ -53,7 +56,7 @@ export const submitPaymentProofTool: ToolDefinition = {
           .select("id, order_number")
           .eq("user_id", ctx.userId)
           .eq("customer_phone", ctx.phone)
-          .in("status", ["awaiting_payment", "created"])
+          .in("status", ["awaiting_payment", "created", "verification_pending", "rejected"])
           .order("created_at", { ascending: false })
           .limit(1);
 

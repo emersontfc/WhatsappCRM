@@ -1,5 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
-import { commerceService } from "../../services/commerceService.ts";
+import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
 
 export const getProductsCatalogTool: ToolDefinition = {
   name: "getProductsCatalog",
@@ -11,15 +11,20 @@ export const getProductsCatalogTool: ToolDefinition = {
   parameters: {
     type: "object",
     properties: {
+      search: { type: "string", description: "Nome do produto, mesmo sem acentos" },
       category: {
         type: "string",
         description: "Categoria opcional para filtrar produtos (ex: 'Pacotes', 'Cursos', 'Serviços')"
       }
     }
   },
-  execute: async (args: { category?: string }, ctx: ToolContext): Promise<ToolResult> => {
+  execute: async (args: { category?: string; search?: string }, ctx: ToolContext): Promise<ToolResult> => {
     try {
-      const products = await commerceService.listProducts(ctx.userId, args.category);
+      const category = typeof args.category === "string" ? normalizeCatalogText(args.category) : "";
+      const search = typeof args.search === "string" ? normalizeCatalogText(args.search) : "";
+      const products = (await commerceService.listAgentProducts(ctx.userId))
+        .filter((product) => normalizeCatalogText(product.category || "").includes(category) &&
+          normalizeCatalogText(product.name).includes(search));
 
       if (!products || products.length === 0) {
         return {
@@ -29,18 +34,20 @@ export const getProductsCatalogTool: ToolDefinition = {
         };
       }
 
-      const formatted = products.map((p: any) => ({
+      const formatted = products.slice(0, 20).map((p) => ({
         id: p.id,
         name: p.name,
         price: `${p.price} ${p.currency || "MT"}`,
         category: p.category,
-        description: p.description,
+        description: String(p.description ?? "").slice(0, 180),
         stock: p.stock
       }));
 
       return {
         success: true,
-        message: `${products.length} produtos encontrados no catálogo.`,
+        message: products.length > formatted.length
+          ? "A mostrar os primeiros 20 produtos. Indique um nome ou categoria para refinar."
+          : undefined,
         data: formatted
       };
     } catch (err: any) {

@@ -38,6 +38,9 @@ SELECT public.test_assert(
   'existing orders, products, verifications and agent settings survived the upgrade'
 );
 SQL
+  cat supabase/migrations/12_catalog_deliverables.sql
+  cat supabase/migrations/12_catalog_deliverables.sql
+  cat tests/integration/catalog-deliverables.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 
 review() {

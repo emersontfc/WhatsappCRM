@@ -1,9 +1,22 @@
 import express from "express";
+import multer from "multer";
 import { AuthRequest } from "../middleware/auth.ts";
 import { commerceService } from "../services/commerceService.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 
+import { PRODUCT_FILE_LIMIT, productFilename, storeProductFile } from "../services/catalogDeliverables.ts";
+
 const router = express.Router();
+const upload = multer({ limits: { fileSize: PRODUCT_FILE_LIMIT, files: 1 } }).single("file");
+const productUpload: express.RequestHandler = (req, res, next) => {
+  upload(req, res, (error) => {
+    if (error) {
+      res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ error: "Anexo inválido. Limite de 20 MiB." });
+      return;
+    }
+    next();
+  });
+};
 
 // 1. Products CRUD
 router.get("/products", async (req: AuthRequest, res) => {
@@ -18,16 +31,24 @@ router.get("/products", async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/products", async (req: AuthRequest, res) => {
+router.post("/products", productUpload, async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const { name, description, price, currency, category, stock, type, digital_content } = req.body;
-  if (!name || price === undefined) {
+  const file = req.file;
+  const filename = file && productFilename(file);
+  if (file && (!filename || (type && type !== "digital"))) {
+    return res.status(400).json({ error: "Escolhe um PDF, EPUB ou uma imagem JPEG, PNG ou WebP para o produto digital." });
+  }
+  if (typeof name !== "string" || !name.trim() || price === "" || price == null ||
+      !Number.isFinite(Number(price)) || Number(price) < 0 ||
+      (stock !== undefined && (!Number.isInteger(Number(stock)) || Number(stock) < 0))) {
     return res.status(400).json({ error: "Nome e preço são obrigatórios." });
   }
 
   try {
+    const deliverable = file && filename ? await storeProductFile(userId, file, filename) : {};
     const { data: product, error } = await supabaseAdmin
       .from("products")
       .insert({
@@ -40,6 +61,7 @@ router.post("/products", async (req: AuthRequest, res) => {
         stock: stock !== undefined ? Number(stock) : 999,
         type: type || "digital",
         digital_content: digital_content || "",
+        ...deliverable,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
@@ -50,6 +72,26 @@ router.post("/products", async (req: AuthRequest, res) => {
     res.json({ success: true, data: product });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put("/products/:id/deliverable", productUpload, async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  const filename = req.file && productFilename(req.file);
+  if (!req.file || !filename) return res.status(400).json({ error: "Escolhe um PDF, EPUB ou uma imagem JPEG, PNG ou WebP." });
+  try {
+    const { data: product, error } = await supabaseAdmin.from("products").select("id")
+      .eq("id", req.params.id).eq("user_id", userId).eq("type", "digital").maybeSingle();
+    if (error) throw error;
+    if (!product) return res.status(404).json({ error: "Produto digital não encontrado." });
+    const deliverable = await storeProductFile(userId, req.file, filename);
+    const { data: updated, error: updateError } = await supabaseAdmin.from("products").update(deliverable)
+      .eq("id", product.id).eq("user_id", userId).select("id,deliverable_name").single();
+    if (updateError) throw updateError;
+    return res.json({ success: true, data: updated });
+  } catch {
+    return res.status(503).json({ error: "Não foi possível guardar o ficheiro." });
   }
 });
 
@@ -103,12 +145,23 @@ router.post("/orders/:id/approve", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  const { notes } = req.body;
+  const { notes, settlementVerified } = req.body ?? {};
+  if (settlementVerified !== true) return res.status(400).json({ error: "Confirma a liquidação no prestador antes de aprovar." });
   try {
     const result = await commerceService.approveOrder(req.params.id, userId, notes);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/orders/:id/delivery", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    return res.json(await commerceService.fulfillOrder(req.params.id, userId));
+  } catch {
+    return res.status(503).json({ error: "Não foi possível verificar a entrega." });
   }
 });
 
@@ -134,7 +187,7 @@ router.get("/orders/:id/timeline", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   try {
-    const timeline = await commerceService.getOrderTimeline(req.params.id);
+    const timeline = await commerceService.getOrderTimeline(req.params.id, userId);
     res.json({ success: true, data: timeline });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });

@@ -37,6 +37,7 @@ interface Product {
   stock: number;
   type: string;
   digital_content?: string;
+  deliverable_name?: string;
 }
 
 interface Order {
@@ -48,6 +49,8 @@ interface Order {
   currency: string;
   status: "created" | "awaiting_payment" | "verification_pending" | "paid" | "fulfilled" | "rejected" | "cancelled";
   payment_method: string;
+  delivery_started_at?: string | null;
+  delivery_error?: string | null;
   created_at: string;
   order_items: {
     id: string;
@@ -143,20 +146,46 @@ export default function Orders() {
     fetchData();
   }, []);
 
+  const [productFile, setProductFile] = useState<File | null>(null);
+
+  const attachProductFile = async (id: string, file: File) => {
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("O ficheiro excede 20 MiB.");
+      return;
+    }
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      await apiFetch(`/api/commerce/products/${id}/deliverable`, { method: "PUT", body });
+      toast.success("Ficheiro privado guardado");
+      void fetchData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao guardar o ficheiro");
+    }
+  };
+
   const handleCreateProduct = async () => {
     if (!newProduct.name || !newProduct.price) {
       toast.error("Nome e preço são obrigatórios.");
       return;
     }
 
+    if (productFile && productFile.size > 20 * 1024 * 1024) {
+      toast.error("O ficheiro excede 20 MiB.");
+      return;
+    }
     setSavingProduct(true);
     try {
+      const body = new FormData();
+      for (const [key, value] of Object.entries(newProduct)) body.append(key, value);
+      if (newProduct.type === "digital" && productFile) body.append("file", productFile);
       const res = await apiFetch("/api/commerce/products", {
         method: "POST",
-        body: JSON.stringify(newProduct)
+        body: productFile && newProduct.type === "digital" ? body : JSON.stringify(newProduct)
       });
 
       if (res.success) {
+        setProductFile(null);
         toast.success("Produto cadastrado com sucesso!");
         setShowProductModal(false);
         setNewProduct({
@@ -178,19 +207,32 @@ export default function Orders() {
   };
 
   const handleApproveOrder = async (orderId: string) => {
+    if (!window.confirm("Confirmaste no prestador o recebimento do montante e da moeda deste pedido?")) return;
     try {
       toast.info("Aprovando pedido e iniciando entrega digital...");
       const res = await apiFetch(`/api/commerce/orders/${orderId}/approve`, {
         method: "POST",
-        body: JSON.stringify({ notes: "Validado pelo painel administrativo" })
+        body: JSON.stringify({ settlementVerified: true, notes: "Liquidação conferida no prestador pelo responsável da conta." })
       });
 
       if (res.success) {
-        toast.success("Pedido aprovado! Produtos entregues via WhatsApp.");
+        if (res.fulfillment?.delivered) toast.success("Pagamento confirmado e envio aceite pelo WhatsApp.");
+        else toast.info(res.fulfillment?.message || "Pagamento confirmado. Entrega pendente.");
         fetchData();
       }
     } catch (err: any) {
       toast.error(`Falha ao aprovar: ${err.message}`);
+    }
+  };
+
+  const retryDelivery = async (id: string) => {
+    try {
+      const result = await apiFetch(`/api/commerce/orders/${id}/delivery`, { method: "POST" });
+      if (result.delivered) toast.success("Envio aceite pelo WhatsApp.");
+      else toast.info(result.message || "Entrega pendente.");
+      void fetchData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha ao tentar a entrega");
     }
   };
 
@@ -470,6 +512,10 @@ export default function Orders() {
                               <Eye size={16} />
                             </Button>
 
+                            {order.status === "paid" && (order.delivery_started_at
+                              ? <span className="text-xs text-amber-700">{order.delivery_error || "Envio por confirmar"}</span>
+                              : <Button size="sm" variant="outline" onClick={() => retryDelivery(order.id)}>Tentar entrega</Button>)}
+
                             {order.status === "verification_pending" && (
                               <>
                                 <Button
@@ -597,6 +643,17 @@ export default function Orders() {
                     <span className="text-2xl font-black text-slate-900">{prod.price} {prod.currency || "MT"}</span>
                     <span className="text-xs text-emerald-600 font-bold uppercase">{prod.type}</span>
                   </div>
+                  {prod.type === "digital" && (
+                    <label className="block text-sm">
+                      {prod.deliverable_name ? `Ficheiro atual: ${prod.deliverable_name}` : "Anexar ficheiro para entrega"}
+                      <Input type="file" accept=".pdf,.epub,.jpg,.jpeg,.png,.webp" aria-label={`Ficheiro de ${prod.name}`}
+                        onChange={(event) => {
+                          const selected = event.currentTarget.files?.[0];
+                          event.currentTarget.value = "";
+                          if (selected) void attachProductFile(prod.id, selected);
+                        }} />
+                    </label>
+                  )}
                 </CardContent>
               </Card>
             ))}
@@ -686,6 +743,13 @@ export default function Orders() {
                 />
               </div>
 
+              {newProduct.type === "digital" && (
+                <label className="block text-sm font-medium">
+                  Ficheiro de entrega privado (PDF, EPUB, JPEG, PNG ou WebP, até 20 MiB)
+                  <Input type="file" accept=".pdf,.epub,.jpg,.jpeg,.png,.webp"
+                    onChange={(event) => setProductFile(event.currentTarget.files?.[0] ?? null)} />
+                </label>
+              )}
               <div>
                 <label className="text-xs font-bold text-slate-700">Conteúdo Digital / Instrução de Entrega</label>
                 <textarea
@@ -698,7 +762,7 @@ export default function Orders() {
               </div>
             </CardContent>
             <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-slate-50">
-              <Button variant="ghost" onClick={() => setShowProductModal(false)}>
+              <Button variant="ghost" onClick={() => { setProductFile(null); setShowProductModal(false); }}>
                 Cancelar
               </Button>
               <Button onClick={handleCreateProduct} disabled={savingProduct} className="bg-emerald-600 hover:bg-emerald-700 font-bold">
