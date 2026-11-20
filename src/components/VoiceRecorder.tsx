@@ -7,9 +7,10 @@ import { apiFetch } from "../lib/api";
 interface VoiceRecorderProps {
   onSend: (audioUrl: string, duration?: number) => void;
   onCancel: () => void;
+  actionLabel?: string;
 }
 
-export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
+export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
@@ -142,7 +143,7 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
       if (result.success && result.url) {
         const dur = result.duration || (recordingTime > 0 ? recordingTime : 1);
         onSend(result.url, dur);
-        toast.success("Áudio enviado!");
+        if (actionLabel !== "Enviar") toast.success("Áudio anexado");
       } else {
         throw new Error(result.error || "Erro ao processar áudio");
       }
@@ -288,7 +289,7 @@ export function VoiceRecorder({ onSend, onCancel }: VoiceRecorderProps) {
               ) : (
                 <>
                   <Send size={15} />
-                  <span>Enviar</span>
+                  <span>{actionLabel}</span>
                 </>
               )}
             </Button>

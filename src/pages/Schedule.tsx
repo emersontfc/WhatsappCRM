@@ -1,3 +1,4 @@
+import { WhatsAppOperatorCard } from "../components/WhatsAppOperatorCard";
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { 
@@ -40,7 +41,8 @@ interface ScheduledMessage {
   media_mimetype?: string;
   media_filename?: string;
   scheduled_at: string;
-  status: "pending" | "sent" | "failed";
+  status: "pending" | "processing" | "sent" | "failed";
+  error?: string | null;
   target_type?: "contact" | "status";
   created_at: string;
 }
@@ -57,6 +59,8 @@ export default function Schedule() {
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
+  const [agendaError, setAgendaError] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -90,134 +94,63 @@ export default function Schedule() {
     scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
   });
 
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const refreshAgenda = () => setRefreshVersion((value) => value + 1);
+
   useEffect(() => {
     if (activationLoading) return;
+    let active = true;
+    let busy = false;
+    let channel: ReturnType<typeof supabase.channel> | undefined;
+    let poll: number | undefined;
+    let removeVisibilityListener: (() => void) | undefined;
+
     const init = async () => {
       const userId = await getUserId();
-      if (!userId) {
-        setLoading(false);
-        return;
-      }
-
-      // Fetch contacts for dropdown
-      const { data: contactsData } = await supabase
-        .from("contacts")
-        .select("id, name, phone, tags")
-        .eq("user_id", userId)
-        .order("name", { ascending: true });
-      
-      if (contactsData) {
-        const allContacts = contactsData.map(c => ({ ...c, tags: Array.isArray(c.tags) ? c.tags : [] }));
-        setContacts(allContacts);
-      }
-
-      // Fetch scheduled messages
-      const { data: messagesData } = await supabase
-        .from("scheduled_messages")
-        .select("*")
-        .eq("user_id", userId)
-        .order("scheduled_at", { ascending: true });
-      
-      // Fetch scheduled status
-      const { data: statusData } = await supabase
-        .from("scheduled_status")
-        .select("*")
-        .eq("user_id", userId)
-        .order("scheduled_at", { ascending: true });
-      
-      const allMessages = [
-        ...(messagesData || []),
-        ...(statusData || []).map(s => ({ 
-          ...s, 
-          target_type: 'status', 
-          message: s.caption,
-          contact_name: "WhatsApp Status",
-          contact_id: "status"
-        }))
-      ].sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime());
-      
-      if (allMessages) setMessages(allMessages as any);
-      setLoading(false);
-
-      // Real-time subscription for messages
-      const channel = supabase
-        .channel(`scheduled-${userId}`)
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
-          table: 'scheduled_messages',
-          filter: `user_id=eq.${userId}`
-        }, (payload) => {
-          if (payload.eventType === 'INSERT') {
-            setMessages(prev => [...prev, payload.new as ScheduledMessage].sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()));
-          } else if (payload.eventType === 'UPDATE') {
-            setMessages(prev => prev.map(m => m.id === payload.new.id ? payload.new as ScheduledMessage : m));
-          } else if (payload.eventType === 'DELETE') {
-            setMessages(prev => prev.filter(m => m.id !== payload.old.id));
-          }
-        })
-        .subscribe();
-
-      // Real-time subscription for status
-      const statusChannel = supabase
-        .channel(`status-${userId}`)
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
-          table: 'scheduled_status',
-          filter: `user_id=eq.${userId}`
-        }, (payload) => {
-          if (payload.eventType === 'INSERT') {
-            const newStatus = { ...payload.new, target_type: 'status', message: payload.new.caption, contact_name: "WhatsApp Status", contact_id: "status" };
-            setMessages(prev => [...prev, newStatus as any].sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()));
-          } else if (payload.eventType === 'UPDATE') {
-            const updatedStatus = { ...payload.new, target_type: 'status', message: payload.new.caption, contact_name: "WhatsApp Status", contact_id: "status" };
-            setMessages(prev => prev.map(m => m.id === payload.new.id ? updatedStatus as any : m));
-          } else if (payload.eventType === 'DELETE') {
-            setMessages(prev => prev.filter(m => m.id !== payload.old.id));
-          }
-        })
-        .subscribe();
-
-      // Contacts subscription to update dropdown
-      const contactsChannel = supabase
-        .channel(`contacts-${userId}`)
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
-          table: 'contacts',
-          filter: `user_id=eq.${userId}`
-        }, async () => {
-          const { data: updatedContacts } = await supabase
-            .from("contacts")
-            .select("id, name, phone, tags")
-            .eq("user_id", userId)
-            .order("name", { ascending: true });
-          
-          if (updatedContacts) {
-            const manualContacts = updatedContacts
-              .map(c => ({ ...c, tags: Array.isArray(c.tags) ? c.tags : [] }))
-              .filter(c => {
-                const tags = c.tags;
-                return tags.includes("Manual") || tags.includes("Importado") || !tags.includes("WhatsApp");
-              });
-            setContacts(manualContacts);
-          }
-        })
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-        supabase.removeChannel(contactsChannel);
+      if (!active) return;
+      if (!userId || userId === "guest-user") { setLoading(false); return; }
+      const refresh = async () => {
+        if (!active || busy || document.hidden) return;
+        busy = true;
+        try {
+          const [contactsResult, messagesResult, statusResult] = await Promise.all([
+            supabase.from("contacts").select("id,name,phone,tags").eq("user_id", userId).order("name"),
+            supabase.from("scheduled_messages").select("*").eq("user_id", userId).order("scheduled_at"),
+            supabase.from("scheduled_status").select("*").eq("user_id", userId).order("scheduled_at")
+          ]);
+          if (!active) return;
+          if (contactsResult.error || messagesResult.error || statusResult.error) throw new Error("Agenda indisponível.");
+          const nextContacts = contactsResult.data.map((contact) => ({ ...contact, tags: Array.isArray(contact.tags) ? contact.tags : [] }));
+          const names = new Map(nextContacts.map((contact) => [contact.id, contact.name || contact.phone]));
+          setAgendaError(false);
+          setContacts(nextContacts);
+          setMessages([
+            ...messagesResult.data.map((item) => ({ ...item, contact_name: names.get(item.contact_id) ?? item.contact_name ?? "Contacto" })),
+            ...statusResult.data.map((item) => ({ ...item, target_type: "status", message: item.caption, contact_name: "WhatsApp Status", contact_id: "status" }))
+          ].sort((a, b) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at)));
+        } finally {
+          busy = false;
+          if (active) setLoading(false);
+        }
       };
+      const sync = () => { void refresh().catch(() => { if (active) setAgendaError(true); }); };
+      channel = supabase.channel(`agenda-${userId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "scheduled_messages", filter: `user_id=eq.${userId}` }, sync)
+        .on("postgres_changes", { event: "*", schema: "public", table: "scheduled_status", filter: `user_id=eq.${userId}` }, sync)
+        .subscribe();
+      poll = window.setInterval(sync, 10000);
+      document.addEventListener("visibilitychange", sync);
+      removeVisibilityListener = () => document.removeEventListener("visibilitychange", sync);
+      sync();
     };
-
-    let cleanup: any;
-    init().then(c => cleanup = c);
+    void init().catch(() => { if (active) setLoading(false); });
     return () => {
-      if (cleanup) cleanup();
+      active = false;
+      window.clearInterval(poll);
+      removeVisibilityListener?.();
+      if (channel) void supabase.removeChannel(channel);
     };
-  }, [activationLoading]);
+  }, [activationLoading, refreshVersion]);
 
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -334,6 +267,17 @@ export default function Schedule() {
 
     setUploadingMedia(true);
     try {
+      if (file.type.startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/i.test(file.name)) {
+        if (newMessage.target_type === "status") throw new Error("O Status aceita texto, imagem ou vídeo.");
+        const body = new FormData();
+        body.append("audio", file);
+        const result = await apiFetch("/api/media/upload-audio", { method: "POST", body });
+        if (!result.success || !result.url) throw new Error("Não foi possível preparar o áudio.");
+        setNewMessage((previous) => ({ ...previous, media_url: result.url, media_type: "audio", media_filename: file.name }));
+        toast.success("Áudio anexado");
+        return;
+      }
+
       const userId = await getUserId();
       if (!userId) throw new Error("Usuário não identificado.");
 
@@ -373,9 +317,10 @@ export default function Schedule() {
     }
   };
 
-  const handleAdd = async () => {
-    if (newMessage.target_type === 'contact' && (!newMessage.contact_id || !newMessage.message?.trim())) {
-      toast.error("Selecione um contato e digite a mensagem.");
+  const handleAdd = async (publishNow = false) => {
+    if (savingSchedule || uploadingMedia) return;
+    if (newMessage.target_type === 'contact' && (!newMessage.contact_id || (!newMessage.media_url && !newMessage.message?.trim()))) {
+      toast.error("Seleciona um contacto e adiciona texto ou um ficheiro.");
       return;
     }
 
@@ -384,12 +329,21 @@ export default function Schedule() {
       return;
     }
 
-    if (!newMessage.scheduled_at) {
+    if (newMessage.media_type === "audio" && newMessage.message?.trim()) {
+      toast.error("Agenda a nota de voz e a mensagem de texto separadamente.");
+      return;
+    }
+    if (newMessage.target_type === "status" && newMessage.media_type && !["image", "video"].includes(newMessage.media_type)) {
+      toast.error("O Status aceita texto, imagem ou vídeo.");
+      return;
+    }
+
+    if (!publishNow && !newMessage.scheduled_at) {
       toast.error("Selecione a data e hora do agendamento.");
       return;
     }
 
-    const scheduledDate = parseDateTimeInput(newMessage.scheduled_at);
+    const scheduledDate = publishNow ? new Date() : parseDateTimeInput(newMessage.scheduled_at!);
     if (isNaN(scheduledDate.getTime())) {
       toast.error("Data ou hora inválida.");
       return;
@@ -406,6 +360,7 @@ export default function Schedule() {
       toast.info("Lembrete: O WhatsApp limita vídeos no Status a 30 segundos.");
     }
     
+    setSavingSchedule(true);
     try {
       const userId = await getUserId();
       if (!userId) throw new Error("Usuário não identificado.");
@@ -424,15 +379,24 @@ export default function Schedule() {
           const { error } = await supabase
             .from("scheduled_status")
             .update(statusPayload)
-            .eq("id", editingId);
+            .eq("id", editingId).eq("user_id", userId).eq("status", "pending").select("id").single();
           if (error) throw error;
           toast.success("Status atualizado!");
         } else {
-          const { error } = await supabase
-            .from("scheduled_status")
-            .insert(statusPayload);
+          const { data, error } = await supabase.from("scheduled_status").insert(statusPayload).select("id").single();
           if (error) throw error;
-          toast.success("Status agendado com sucesso!");
+          if (publishNow) {
+            try {
+              await apiFetch("/api/whatsapp/send-scheduled", {
+                method: "POST", body: JSON.stringify({ id: data.id, type: "status" })
+              });
+              toast.success("Publicação aceite pelo WhatsApp.");
+            } catch {
+              toast.info("Status guardado. Confirma o estado na agenda.");
+            }
+          } else {
+            toast.success("Status agendado.");
+          }
         }
       } else {
         // Normal message / invoice scheduling
@@ -453,7 +417,7 @@ export default function Schedule() {
           const { error } = await supabase
             .from("scheduled_messages")
             .update(messagePayload)
-            .eq("id", editingId);
+            .eq("id", editingId).eq("user_id", userId).eq("status", "pending").select("id").single();
           if (error) throw error;
           toast.success("Agendamento atualizado!");
         } else {
@@ -465,6 +429,7 @@ export default function Schedule() {
         }
       }
 
+      refreshAgenda();
       setIsAdding(false);
       setEditingId(null);
       setNewMessage({
@@ -481,14 +446,14 @@ export default function Schedule() {
     } catch (err: any) {
       console.error("Error saving scheduled message:", err);
       toast.error(err.message || "Erro ao salvar agendamento.");
+    } finally {
+      setSavingSchedule(false);
     }
   };
 
   const handleSendNow = async (msg: ScheduledMessage) => {
     try {
       toast.loading("Enviando agora...", { id: `send-${msg.id}` });
-      const table = msg.target_type === 'status' ? "scheduled_status" : "scheduled_messages";
-      
       const response = await apiFetch(`/api/whatsapp/send-scheduled`, {
         method: "POST",
         body: JSON.stringify({ id: msg.id, type: msg.target_type || 'contact' })
@@ -496,12 +461,14 @@ export default function Schedule() {
 
       if (response.success) {
         toast.success("Enviado com sucesso!", { id: `send-${msg.id}` });
-        // Real-time will update the list
+        setMessages((items) => items.map((item) => item.id === msg.id ? { ...item, status: "sent" } : item));
       } else {
         throw new Error(response.error || "Falha ao enviar");
       }
     } catch (err: any) {
       toast.error(`Erro: ${err.message}`, { id: `send-${msg.id}` });
+    } finally {
+      refreshAgenda();
     }
   };
 
@@ -517,6 +484,8 @@ export default function Schedule() {
       message: msg.message || (msg as any).text || "",
       media_url: msg.media_url,
       media_type: msg.media_type,
+      media_filename: msg.media_filename,
+      media_mimetype: msg.media_mimetype,
       target_type: msg.target_type || "contact",
       scheduled_at: formatForDateTimeInput(new Date(msg.scheduled_at))
     });
@@ -548,8 +517,9 @@ export default function Schedule() {
       const { error } = await supabase
         .from(table)
         .delete()
-        .eq("id", id);
+        .eq("id", id).neq("status", "processing").select("id").single();
       if (error) throw error;
+      refreshAgenda();
       toast.success("Agendamento excluído.");
     } catch (err) {
       console.error("Failed to delete scheduled item:", err);
@@ -587,6 +557,8 @@ export default function Schedule() {
 
   return (
     <div className="space-y-8">
+      <WhatsAppOperatorCard agendaLink={false} />
+      {agendaError && <p className="text-sm text-red-700" role="status">Não foi possível atualizar a agenda. A lista será consultada novamente.</p>}
       {planDetails && contacts.length >= planDetails.max_contacts && (
         <UpgradePrompt 
           title="Limite de Contatos Atingido"
@@ -601,7 +573,7 @@ export default function Schedule() {
             <span className="h-1 w-1 rounded-full bg-slate-300" />
             <div className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
               <Clock size={12} />
-              GMT+2 África/Harare
+              {Intl.DateTimeFormat().resolvedOptions().timeZone}
             </div>
           </div>
         </div>
@@ -701,9 +673,9 @@ export default function Schedule() {
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-slate-500">Legenda / Mensagem</label>
                   {isRecording ? (
-                    <VoiceRecorder 
+                    <VoiceRecorder actionLabel="Anexar gravação"
                       onSend={(url) => {
-                        setNewMessage(prev => ({ ...prev, media_url: url, media_type: "audio" }));
+                        setNewMessage(prev => ({ ...prev, media_url: url, media_type: "audio", media_filename: "nota-de-voz.ogg" }));
                         setIsRecording(false);
                       }} 
                       onCancel={() => setIsRecording(false)} 
@@ -777,6 +749,8 @@ export default function Schedule() {
                       </div>
                     )}
                   </div>
+                  {newMessage.media_type === "audio" && newMessage.media_url &&
+                    <audio controls preload="metadata" src={newMessage.media_url} className="w-full max-w-sm" aria-label="Pré-visualizar nota de voz" />}
                   {newMessage.target_type === 'status' && newMessage.media_type === 'video' && (
                     <p className="text-[10px] text-amber-600 font-medium flex items-center gap-1 mt-1">
                       <AlertCircle size={10} /> O WhatsApp corta vídeos no status em 30 segundos.
@@ -813,7 +787,9 @@ export default function Schedule() {
 
             <div className="flex justify-end gap-3 pt-6 border-t border-slate-100">
               <Button variant="ghost" onClick={cancelEdit}>Cancelar</Button>
-              <Button onClick={handleAdd} className={cn(newMessage.target_type === 'status' ? "bg-purple-600 hover:bg-purple-700" : "bg-emerald-600 hover:bg-emerald-700")}>
+              {!editingId && newMessage.target_type === "status" &&
+                <Button variant="outline" disabled={savingSchedule || uploadingMedia} onClick={() => void handleAdd(true)}>Publicar agora</Button>}
+              <Button onClick={() => void handleAdd()} disabled={savingSchedule || uploadingMedia} className={cn(newMessage.target_type === 'status' ? "bg-purple-600 hover:bg-purple-700" : "bg-emerald-600 hover:bg-emerald-700")}>
                 {editingId ? "Atualizar Agendamento" : newMessage.target_type === 'status' ? "Agendar Status" : "Agendar Mensagem"}
               </Button>
             </div>
@@ -835,8 +811,8 @@ export default function Schedule() {
           messages.map((msg) => (
             <Card key={msg.id} className={cn("transition-all", msg.status !== 'pending' && "opacity-60")}>
               <CardContent className="p-6">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-4 min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <div className={cn(
                       "h-12 w-12 rounded-2xl flex items-center justify-center shrink-0",
                       msg.status === 'pending' ? "bg-amber-100 text-amber-600" : 
@@ -872,9 +848,10 @@ export default function Schedule() {
                             "text-red-600"
                           )}>
                             {msg.status === 'pending' ? 'Pendente' : 
-                             msg.status === 'sent' ? 'Enviado' : 'Falhou'}
+                             msg.status === 'sent' ? 'Enviado' : msg.status === 'processing' ? 'A processar / por confirmar' : 'Falhou'}
                           </span>
                         </div>
+                        {msg.error && <p className="text-sm text-slate-600">{msg.error}</p>}
                       </div>
                     </div>
                   </div>
@@ -895,6 +872,7 @@ export default function Schedule() {
                       size="icon"
                       className="h-8 w-8 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
                       onClick={() => handleEdit(msg)}
+                      disabled={msg.status !== "pending"}
                       title="Editar"
                     >
                       <Settings2 size={14} />
@@ -904,6 +882,7 @@ export default function Schedule() {
                       size="icon"
                       className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
                       onClick={() => handleDelete(msg.id, msg.target_type)}
+                      disabled={msg.status === "processing"}
                       title="Excluir"
                     >
                       <Trash2 size={14} />

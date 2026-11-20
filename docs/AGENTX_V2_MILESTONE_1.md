@@ -66,3 +66,20 @@ O catálogo associado a cada conta do WhatsApp permanece no módulo **Vendas & P
 O fluxo por organização em **Pedidos digitais** continua a usar a descarga autenticada do
 comprador. Uma reversão do container deve manter o esquema novo para preservar ficheiros,
 aprovações e pedidos que tenham sido criados entretanto.
+
+## Agenda e comandos pelo WhatsApp
+
+Aplique `supabase/migrations/13_whatsapp_operator.sql` antes de atualizar o backend.
+Em **Disparos Programados**, selecione um contacto e programe texto, anexos ou uma nota de voz.
+O horário mostrado no painel usa o fuso do navegador. Ao programar pelo WhatsApp, o agente
+usa o fuso da empresa ou África/Maputo quando não houver configuração.
+
+A aba **Agente IA** mostra os comandos que funcionam na conversa do número ligado consigo
+mesmo. `/agentx mensagens` lista até cinco mensagens por ler, `/agentx leads` lista até
+cinco leads recentes e `/agentx agenda` mostra os próximos cinco envios. É possível publicar
+um Status de texto, agendar Status ou agendar uma mensagem de texto. Para notas de voz
+ou Status com imagem e vídeo, use a agenda no painel.
+
+O aviso de contacto vem desativado. Quando ativado, é enviado ao próprio número ligado,
+sem incluir conteúdo da conversa. O sistema limita a um aviso por contacto a cada 30 minutos.
+Se a confirmação do WhatsApp for ambígua, verifique a conversa ou o Status antes de reenviar.
