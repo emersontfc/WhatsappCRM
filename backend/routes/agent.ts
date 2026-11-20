@@ -129,7 +129,7 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
       api_url: (api_url || (validatedProvider === 'deepseek' ? 'https://api.deepseek.com/v1/chat/completions' : '')).trim(),
       model: model || (validatedProvider === 'gemini' ? 'gemini-3-flash-preview' : ''),
       instructions,
-      is_active: is_active ?? existingAgent?.is_active ?? false,
+      is_active: is_active !== undefined ? Boolean(is_active) : (existingAgent?.is_active ?? false),
       specialization: specialization || existingAgent?.specialization || 'multifuncional',
       autonomy_level: autonomy_level || existingAgent?.autonomy_level || 'hybrid',
       risk_tolerance: risk_tolerance || existingAgent?.risk_tolerance || 'moderate',
@@ -220,32 +220,33 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
   }
 });
 
-router.post("/toggle", async (req: AuthRequest, res) => {
+const toggleAgentHandler = async (req: AuthRequest, res: express.Response) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
-  const { is_active } = req.body;
+  const is_active = req.body.is_active === true || req.body.is_active === "true";
   
   try {
-    // Check if agent exists
-    const { data: existingAgent } = await supabaseAdmin
+    console.log(`[Agent API] Toggling agent is_active to ${is_active} for user ${userId}`);
+
+    // Update ALL agents belonging to this user to ensure complete synchronization
+    const { data: updatedAgents, error: updateError } = await supabaseAdmin
       .from("agents")
-      .select("id")
+      .update({ is_active })
       .eq("user_id", userId)
-      .maybeSingle();
+      .select();
 
-    let data, error;
+    if (updateError) {
+      console.error(`[Agent API] Toggle error updating agents for user ${userId}:`, updateError);
+      throw updateError;
+    }
 
-    if (existingAgent) {
-      ({ data, error } = await supabaseAdmin
-        .from("agents")
-        .update({ is_active })
-        .eq("id", existingAgent.id)
-        .select()
-        .single());
-    } else {
+    let resultAgent = updatedAgents && updatedAgents.length > 0 ? updatedAgents[0] : null;
+
+    // If user has no agent record yet, create default one
+    if (!resultAgent) {
       const defaultProvider = "gemini";
-      ({ data, error } = await supabaseAdmin
+      const { data: newAgent, error: insertError } = await supabaseAdmin
         .from("agents")
         .insert({ 
           user_id: userId, 
@@ -255,25 +256,29 @@ router.post("/toggle", async (req: AuthRequest, res) => {
           instructions: "Você é um assistente de vendas prestativo para o Agentex. Responda de forma educada e profissional." 
         })
         .select()
-        .single());
-    }
+        .single();
 
-    if (error) {
-      console.error(`[Agent API] Toggle error:`, error.message);
-      console.error(`[Agent API] Toggle error details:`, JSON.stringify(error, null, 2));
-      throw error;
+      if (insertError) {
+        console.error(`[Agent API] Toggle error creating agent for user ${userId}:`, insertError);
+        throw insertError;
+      }
+      resultAgent = newAgent;
     }
     
-    if (data && data.api_key) {
-      data.api_key = "********";
+    if (resultAgent && resultAgent.api_key) {
+      resultAgent.api_key = "********";
     }
     
-    res.json({ success: true, data });
+    console.log(`[Agent API] Successfully set agent is_active=${is_active} for user ${userId}`);
+    res.json({ success: true, data: resultAgent });
   } catch (err: any) {
-    console.error("Failed to toggle agent:", err);
+    console.error("[Agent API] Failed to toggle agent:", err);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+
+router.post("/toggle", toggleAgentHandler);
+router.post("/config", toggleAgentHandler);
 
 router.post("/test", async (req: AuthRequest, res) => {
   const userId = req.user?.id;

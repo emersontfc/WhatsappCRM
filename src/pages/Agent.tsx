@@ -175,16 +175,25 @@ export default function Agent() {
   };
 
   const handleToggle = async () => {
-    const newState = !config.is_active;
+    const currentActive = Boolean(config.is_active);
+    const newState = !currentActive;
+
+    // Optimistic UI update
+    setConfig(prev => ({ ...prev, is_active: newState }));
+
     try {
-      await apiFetch("/api/agent/toggle", {
+      const response = await apiFetch("/api/agent/toggle", {
         method: "POST",
         body: JSON.stringify({ is_active: newState })
       });
 
-      setConfig(prev => ({ ...prev, is_active: newState }));
+      if (response?.success && response?.data) {
+        setConfig(prev => ({ ...prev, is_active: response.data.is_active }));
+      }
       toast.success(newState ? "Agente IA ativado!" : "Agente IA desativado.");
     } catch (err: any) {
+      // Revert optimistic update
+      setConfig(prev => ({ ...prev, is_active: currentActive }));
       console.error("Error toggling agent:", err);
       toast.error(err.message || "Erro ao alterar status do agente.");
     }

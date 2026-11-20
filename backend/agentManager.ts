@@ -522,7 +522,6 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       .from("agents")
       .select("*")
       .eq("user_id", userId)
-      .eq("is_active", true)
       .order("created_at", { ascending: false })
       .limit(1);
 
@@ -532,8 +531,8 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     }
 
     const agent = agents && agents.length > 0 ? agents[0] : null;
-    if (!agent) {
-      console.log(`[AI Engine] Agent is inactive or not found for user ${userId}. Skipping AI response.`);
+    if (!agent || !agent.is_active) {
+      console.log(`[AI Engine] Agent is inactive or not configured for user ${userId} (is_active: ${agent?.is_active}). Skipping AI response.`);
       return;
     }
     

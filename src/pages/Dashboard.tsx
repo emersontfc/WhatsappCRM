@@ -288,36 +288,25 @@ useEffect(() => {
       }
 
       // ✅ BUSCAR AGENT
-      const { data: agentData, error } = await supabase
-        .from("agents")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (error) {
-        console.error("Erro ao buscar agent:", error);
-      }
-
-      // 🔥 SE NÃO EXISTIR → CRIA AUTOMATICAMENTE
-      if (!agentData) {
-        console.log("Agent não encontrado, criando automaticamente...");
-
-        const { data: newAgent, error: insertError } = await supabase
-          .from("agents")
-          .insert({
-            user_id: user.id,
-            is_active: false
-          })
-          .select()
-          .single();
-
-        if (insertError) {
-          console.error("Erro ao criar agent:", insertError);
+      try {
+        const agentRes = await apiFetch("/api/agent");
+        if (agentRes?.success && agentRes.data && agentRes.data.id) {
+          setAgent(agentRes.data);
         } else {
-          setAgent(newAgent);
+          const { data: agentData } = await supabase
+            .from("agents")
+            .select("*")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (agentData) {
+            setAgent(agentData);
+          }
         }
-      } else {
-        setAgent(agentData);
+      } catch (err) {
+        console.error("Erro ao buscar agent:", err);
       }
 
     } catch (err) {
@@ -913,17 +902,27 @@ useEffect(() => {
   }, [activationLoading, isActivated]);
 
   const toggleAgent = async () => {
-    if (!userId || !agent) return;
-    const newState = !agent.is_active;
+    if (!userId) return;
+    const currentActive = Boolean(agent?.is_active);
+    const newState = !currentActive;
+
+    // Optimistic UI update
+    setAgent((prev: any) => ({ ...(prev || {}), is_active: newState }));
+
     try {
-      await apiFetch("/api/agent/config", {
+      const response = await apiFetch("/api/agent/toggle", {
         method: "POST",
         body: JSON.stringify({ is_active: newState })
       });
-      setAgent({ ...agent, is_active: newState });
+      if (response?.success && response?.data) {
+        setAgent(response.data);
+      }
       toast.success(newState ? "Smart Bot ativado!" : "Smart Bot desativado.");
-    } catch (err) {
-      toast.error("Erro ao alterar estado do bot.");
+    } catch (err: any) {
+      // Revert optimistic update on error
+      setAgent((prev: any) => ({ ...(prev || {}), is_active: currentActive }));
+      console.error("Erro ao alternar status do bot:", err);
+      toast.error(err.message || "Erro ao alterar estado do bot.");
     }
   };
 
