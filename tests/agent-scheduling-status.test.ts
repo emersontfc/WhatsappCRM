@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { supabaseAdmin } from "../backend/supabaseAdmin.ts";
 import { parseScheduledDateTime, formatInTimezone } from "../backend/utils/dateTimeParser.ts";
 import { formatToolOutputForWhatsApp } from "../backend/agentManager.ts";
 import { scheduleMessageTool } from "../backend/tools/automations/scheduleMessage.ts";
@@ -8,6 +9,8 @@ import { postWhatsAppStatusTool } from "../backend/tools/messaging/postWhatsAppS
 import { scheduleStatusTool } from "../backend/tools/automations/scheduleStatus.ts";
 import { listScheduledStatusTool } from "../backend/tools/automations/listScheduledStatus.ts";
 import { cancelScheduledStatusTool } from "../backend/tools/automations/cancelScheduledStatus.ts";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("Fase 8 — Testes de Ponta a Ponta: Motor de Agentes, Agendamento e Status (AgentX)", () => {
 
@@ -92,6 +95,9 @@ describe("Fase 8 — Testes de Ponta a Ponta: Motor de Agentes, Agendamento e St
         }
       };
 
+      vi.spyOn(supabaseAdmin, "from").mockReturnValue({
+        insert: vi.fn().mockResolvedValue({ error: null })
+      } as unknown as ReturnType<typeof supabaseAdmin.from>);
       const result = await postWhatsAppStatusTool.execute(
         { text: "Ofertas válidas até amanhã!" },
         {
@@ -126,6 +132,9 @@ describe("Fase 8 — Testes de Ponta a Ponta: Motor de Agentes, Agendamento e St
 
   describe("Cenário E — Tratamento Estruturado de Falhas de Ferramentas", () => {
     it("não anuncia sucesso falso quando o destinatário é inválido", async () => {
+      vi.spyOn(supabaseAdmin, "from").mockReturnValue({
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) })
+      } as unknown as ReturnType<typeof supabaseAdmin.from>);
       const result = await scheduleMessageTool.execute(
         { recipient: "", message: "Teste", scheduledAt: "amanhã às 10h" },
         {
