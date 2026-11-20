@@ -13,7 +13,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "db:check": "tsx scripts/check-db.ts",
-    "test:agent": "tsx test-agent.ts"
+    "test:agent": "tsx test-agent.ts",
+    "worker:digital": "tsx scripts/agentx-digital-worker.ts"
   },
   "dependencies": {
     "@ffprobe-installer/ffprobe": "^2.1.2",
