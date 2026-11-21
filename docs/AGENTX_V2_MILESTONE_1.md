@@ -43,7 +43,7 @@ Faça backup antes de aplicar a migração num ambiente com dados. Para reverter
 
 ## Continuação da reconstrução
 
-O fluxo v2 já inclui as telas do comprador, do operador e da equipa financeira. Ficam pendentes os avisos externos de revisão e entrega por WhatsApp, a extração automática de dados dos anexos, o rastreio de ficheiros maliciosos e a emissão fiscal. O catálogo com preços, stock e itens de encomenda ainda precisa de integração com os ativos privados. Também ficam pendentes a migração auditada do CRM legado para organizações, PaySuite, moderação de grupos, ferramentas comerciais da IA com permissões por empresa, BullMQ/Redis e administração de subscrições e limites.
+O fluxo v2 já inclui as telas do comprador, do operador e da equipa financeira. Ficam pendentes os avisos externos de revisão e entrega por WhatsApp, a extração automática de dados dos anexos, o rastreio de ficheiros maliciosos e a emissão fiscal. O catálogo com preços, stock e itens de encomenda ainda precisa de integração com os ativos privados. Também ficam pendentes a migração auditada do CRM legado para organizações, moderação de grupos, ferramentas comerciais da IA com permissões por empresa, BullMQ/Redis e administração de subscrições e limites.
 
 ## Catálogo do agente e ficheiros vendidos pelo WhatsApp
 
