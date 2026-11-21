@@ -42,13 +42,26 @@ SQL
   cat supabase/migrations/12_catalog_deliverables.sql
   cat tests/integration/catalog-deliverables.sql
   cat <<'SQL'
-CREATE TABLE public.contacts (id uuid PRIMARY KEY, user_id uuid REFERENCES auth.users(id));
-CREATE TABLE public.scheduled_messages (id uuid PRIMARY KEY);
-CREATE TABLE public.scheduled_status (id uuid PRIMARY KEY);
+CREATE TABLE public.contacts (id uuid PRIMARY KEY, user_id uuid REFERENCES auth.users(id), name text);
+CREATE TABLE public.scheduled_messages (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, contact_id uuid, target_type text, message text, scheduled_at timestamptz, status text
+);
+CREATE TABLE public.scheduled_status (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, media_url text, media_type text, caption text, scheduled_at timestamptz, status text
+);
+CREATE TABLE public.leads (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, phone text NOT NULL, contact_id uuid REFERENCES public.contacts,
+ name text, last_message text, last_action text, stage text, status text, source text,
+ created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(), UNIQUE (user_id,phone)
+);
 SQL
   cat supabase/migrations/13_whatsapp_operator.sql
   cat supabase/migrations/13_whatsapp_operator.sql
   cat tests/integration/whatsapp-operator.sql
+  cat supabase/migrations/14_whatsapp_sales_pipeline.sql
+  cat supabase/migrations/15_whatsapp_group_moderation.sql
+  cat supabase/migrations/16_whatsapp_recurring_posts.sql
+  cat tests/integration/whatsapp-sales-and-recurrence.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 
 review() {

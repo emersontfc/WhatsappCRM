@@ -12,6 +12,7 @@ import {
   Music,
   X,
   User,
+  Users,
   AlertCircle,
   Upload,
   Settings2,
@@ -43,7 +44,10 @@ interface ScheduledMessage {
   scheduled_at: string;
   status: "pending" | "processing" | "sent" | "failed";
   error?: string | null;
-  target_type?: "contact" | "status";
+  repeat_days?: number;
+  target_type?: "contact" | "status" | "group";
+  group_jid?: string;
+  group_name?: string;
   created_at: string;
 }
 
@@ -57,6 +61,8 @@ interface Contact {
 export default function Schedule() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
+  const [groups, setGroups] = useState<Array<{ id: string; subject: string }>>([]);
+  const [groupError, setGroupError] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
   const [agendaError, setAgendaError] = useState(false);
@@ -93,6 +99,17 @@ export default function Schedule() {
     target_type: "contact",
     scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
   });
+
+  useEffect(() => {
+    if (!isAdding || newMessage.target_type !== "group") return;
+    let active = true;
+    setGroupError(false);
+    apiFetch("/api/whatsapp/groups").then(({ success, groups }) => {
+      if (!success) throw new Error("Grupos indisponíveis");
+      if (active) setGroups(groups ?? []);
+    }).catch(() => { if (active) setGroupError(true); });
+    return () => { active = false; };
+  }, [isAdding, newMessage.target_type]);
 
   const [refreshVersion, setRefreshVersion] = useState(0);
   const refreshAgenda = () => setRefreshVersion((value) => value + 1);
@@ -324,6 +341,11 @@ export default function Schedule() {
       return;
     }
 
+    if (newMessage.target_type === "group" && (!newMessage.group_jid || !newMessage.message?.trim() || newMessage.media_url)) {
+      toast.error("Seleciona um grupo e escreve o anúncio de texto.");
+      return;
+    }
+
     if (newMessage.target_type === 'status' && !newMessage.media_url && !newMessage.message?.trim()) {
       toast.error("Informe um texto ou selecione uma mídia para o Status.");
       return;
@@ -372,7 +394,10 @@ export default function Schedule() {
           media_type: newMessage.media_type || (newMessage.media_url ? "image" : null),
           caption: newMessage.message || "",
           scheduled_at: scheduledDate.toISOString(),
-          status: "pending"
+          status: "pending",
+          repeat_days: newMessage.repeat_days ?? 0,
+          repeat_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          repeat_anchor_at: scheduledDate.toISOString()
         };
 
         if (editingId) {
@@ -402,15 +427,20 @@ export default function Schedule() {
         // Normal message / invoice scheduling
         const messagePayload: any = {
           user_id: userId,
-          contact_id: newMessage.contact_id,
+          contact_id: newMessage.target_type === "group" ? null : newMessage.contact_id,
+          group_jid: newMessage.target_type === "group" ? newMessage.group_jid : null,
+          group_name: newMessage.target_type === "group" ? groups.find((group) => group.id === newMessage.group_jid)?.subject ?? newMessage.group_name : null,
           message: newMessage.message || "",
           media_url: newMessage.media_url || null,
           media_type: newMessage.media_type || null,
           media_mimetype: newMessage.media_mimetype || null,
           media_filename: newMessage.media_filename || null,
-          target_type: "contact",
+          target_type: newMessage.target_type === "group" ? "group" : "contact",
           status: "pending",
           scheduled_at: scheduledDate.toISOString(),
+          repeat_days: newMessage.target_type === "group" ? newMessage.repeat_days ?? 0 : 0,
+          repeat_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          repeat_anchor_at: scheduledDate.toISOString()
         };
 
         if (editingId) {
@@ -486,6 +516,9 @@ export default function Schedule() {
       media_type: msg.media_type,
       media_filename: msg.media_filename,
       media_mimetype: msg.media_mimetype,
+      repeat_days: msg.repeat_days,
+      group_jid: msg.group_jid,
+      group_name: msg.group_name,
       target_type: msg.target_type || "contact",
       scheduled_at: formatForDateTimeInput(new Date(msg.scheduled_at))
     });
@@ -616,8 +649,9 @@ export default function Schedule() {
               <div className="flex-1 space-y-4">
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-slate-500">Destino do Agendamento</label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button 
+                      disabled={Boolean(editingId && newMessage.target_type === 'status')}
                       onClick={() => setNewMessage({...newMessage, target_type: 'contact'})}
                       className={cn(
                         "flex-1 flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all",
@@ -630,6 +664,7 @@ export default function Schedule() {
                       <span className="font-bold text-sm">Contato Direto</span>
                     </button>
                     <button 
+                      disabled={Boolean(editingId && newMessage.target_type !== 'status')}
                       onClick={() => setNewMessage({...newMessage, target_type: 'status', contact_id: ""})}
                       className={cn(
                         "flex-1 flex items-center justify-center gap-2 p-3 rounded-xl border-2 transition-all",
@@ -640,6 +675,14 @@ export default function Schedule() {
                     >
                       <Sparkles size={18} />
                       <span className="font-bold text-sm">Status (Stories)</span>
+                    </button>
+                    <button type="button" disabled={Boolean(editingId && newMessage.target_type === "status")}
+                      onClick={() => { setIsRecording(false); setNewMessage((previous) => ({ ...previous, target_type: "group",
+                        media_url: "", media_type: "", media_filename: "", media_mimetype: "" })); }}
+                      className={cn("flex flex-1 items-center justify-center gap-2 rounded-xl border-2 p-3",
+                        newMessage.target_type === "group" ? "border-emerald-500 bg-emerald-50" : "border-slate-100 bg-white")}>
+                      <Users size={18} />
+                      <span className="text-sm font-bold">Anúncio de grupo</span>
                     </button>
                   </div>
                 </div>
@@ -660,6 +703,16 @@ export default function Schedule() {
                       </select>
                     </div>
                   )}
+                  {newMessage.target_type === "group" && (
+                    <label className="grid gap-1 text-sm">Grupo do WhatsApp
+                      <select className="h-10 rounded-md border border-slate-200 px-3" value={newMessage.group_jid ?? ""}
+                        onChange={(event) => setNewMessage((previous) => ({ ...previous, group_jid: event.target.value }))}>
+                        <option value="">Seleciona um grupo</option>
+                        {groups.map((group) => <option key={group.id} value={group.id}>{group.subject}</option>)}
+                      </select>
+                      {groupError && <span role="status">Liga o WhatsApp para carregar os grupos.</span>}
+                    </label>
+                  )}
                   <div className={cn("space-y-2", newMessage.target_type === 'status' && "md:col-span-2")}>
                     <label className="text-xs font-bold uppercase text-slate-500">Data e Hora de Postagem</label>
                     <Input 
@@ -669,6 +722,22 @@ export default function Schedule() {
                     />
                   </div>
                 </div>
+
+                {newMessage.target_type !== "contact" && (
+                  <label className="grid gap-1 text-sm">
+                    Repetir publicação
+                    <select className="h-10 rounded-md border border-slate-200 px-3"
+                      value={newMessage.repeat_days ?? 0}
+                      onChange={(event) => setNewMessage((previous) => ({ ...previous, repeat_days: Number(event.target.value) }))}>
+                      <option value={0}>Uma vez</option>
+                      <option value={1}>Todos os dias</option>
+                      <option value={7}>Todas as semanas</option>
+                    </select>
+                    {Boolean(newMessage.repeat_days) && <span className="text-xs text-slate-600">
+                      A próxima publicação é criada após o envio. Para parar, elimina a próxima publicação pendente.
+                    </span>}
+                  </label>
+                )}
 
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-slate-500">Legenda / Mensagem</label>
@@ -690,6 +759,7 @@ export default function Schedule() {
                   )}
                 </div>
 
+                {newMessage.target_type !== "group" && (
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-slate-500">
                     Arquivo de Mídia {newMessage.target_type === 'status' ? "(Opcional se houver texto)" : "(Opcional: PDF/Fatura, Imagem, Áudio)"}
@@ -757,6 +827,7 @@ export default function Schedule() {
                     </p>
                   )}
                 </div>
+                )}
               </div>
 
               {/* Preview Section */}
@@ -827,7 +898,7 @@ export default function Schedule() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="font-bold text-slate-900 truncate">
-                            {msg.target_type === 'status' ? "Postar no Status" : `Para: ${msg.contact_name}`}
+                            {msg.target_type === 'status' ? "Postar no Status" : msg.target_type === "group" ? msg.group_name || "Anúncio de grupo" : `Para: ${msg.contact_name}`}
                           </h3>
                           {msg.target_type === 'status' && (
                             <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
@@ -851,6 +922,7 @@ export default function Schedule() {
                              msg.status === 'sent' ? 'Enviado' : msg.status === 'processing' ? 'A processar / por confirmar' : 'Falhou'}
                           </span>
                         </div>
+                        {Boolean(msg.repeat_days) && <p className="text-sm text-slate-600">{msg.repeat_days === 1 ? "Diário" : "Semanal"}</p>}
                         {msg.error && <p className="text-sm text-slate-600">{msg.error}</p>}
                       </div>
                     </div>

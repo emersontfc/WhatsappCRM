@@ -1,3 +1,4 @@
+import { canPostInGroup, isGroupJid } from "./groupModeration.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 
@@ -27,7 +28,26 @@ export async function dispatchScheduled(table: ScheduleTable, id: string, userId
 
   const statusPost = table === "scheduled_status" || item.target_type === "status";
   let jid: string | null = statusPost ? "status@broadcast" : null;
-  if (!statusPost) {
+  if (item.target_type === "group" && !statusPost) {
+    try {
+      if (!isGroupJid(item.group_jid || "") || !item.message?.trim() || item.media_url) {
+        throw new Error("Anúncio de grupo inválido.");
+      }
+      const group = await whatsappManager.getGroupMetadata(userId, item.group_jid);
+      if (!canPostInGroup(group, whatsappManager.getMe(userId))) throw new Error("Sem permissão para publicar no grupo.");
+      jid = item.group_jid;
+    } catch (failure) {
+      const offline = failure instanceof Error && failure.message === "WhatsApp não conectado";
+      const attempts = Number(item.attempts ?? 0) + 1;
+      const message = offline ? "WhatsApp desligado. Verifique a ligação." : "Não foi possível validar a participação ou permissão no grupo.";
+      if (offline && attempts < 3) {
+        await update("pending", { attempts, error: message, scheduled_at: new Date(Date.now() + 5 * 60_000 * attempts).toISOString() });
+        return { success: false, status: "pending", error: message };
+      }
+      await update("failed", { attempts, error: message });
+      return { success: false, status: "failed", error: message };
+    }
+  } else if (!statusPost) {
     const { data: contact, error: contactError } = await supabaseAdmin.from("contacts").select("phone,lid")
       .eq("id", item.contact_id).eq("user_id", userId).maybeSingle();
     if (contactError) {

@@ -48,6 +48,7 @@ interface Order {
   total_amount: number;
   currency: string;
   status: "created" | "awaiting_payment" | "verification_pending" | "paid" | "fulfilled" | "rejected" | "cancelled";
+  lead_id?: string | null;
   payment_method: string;
   delivery_started_at?: string | null;
   delivery_error?: string | null;
@@ -482,7 +483,10 @@ export default function Orders() {
                   ) : (
                     filteredOrders.map(order => (
                       <tr key={order.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="py-4 px-4 font-mono font-bold text-slate-900">{order.order_number}</td>
+                        <td className="py-4 px-4">
+                          <span className="font-mono font-bold text-slate-900">{order.order_number}</span>
+                          {order.lead_id && <Link to={`/leads?id=${order.lead_id}`} className="block text-xs font-medium text-emerald-700 underline">Ver lead</Link>}
+                        </td>
                         <td className="py-4 px-4">
                           <p className="font-bold text-slate-900">{order.customer_name || "Cliente"}</p>
                           <p className="text-xs text-slate-400 font-mono">+{order.customer_phone}</p>

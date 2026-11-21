@@ -1,3 +1,4 @@
+import { supabaseAdmin } from "../../supabaseAdmin.ts";
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
 
@@ -26,12 +27,19 @@ export const getProductsCatalogTool: ToolDefinition = {
         .filter((product) => normalizeCatalogText(product.category || "").includes(category) &&
           normalizeCatalogText(product.name).includes(search));
 
-      if (!products || products.length === 0) {
-        return {
-          success: true,
-          message: "Nenhum produto cadastrado no momento.",
-          data: []
-        };
+      if (ctx.role === "lead" && /^\d{8,15}$/.test(ctx.phone)) {
+        try {
+          const { error } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
+            p_user: ctx.userId, p_phone: ctx.phone, p_contact: ctx.contactId ?? null,
+            p_name: ctx.contactName ?? null, p_activity: "catalog", p_message: ctx.incomingText ?? null
+          });
+          if (error) console.warn("[Catalog] Could not capture the sales lead", error.code);
+        } catch {
+          console.warn("[Catalog] Sales lead write unavailable");
+        }
+      }
+      if (products.length === 0) {
+        return { success: true, message: "Nenhum produto corresponde à pesquisa.", data: [] };
       }
 
       const formatted = products.slice(0, 20).map((p) => ({

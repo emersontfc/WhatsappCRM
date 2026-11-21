@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, 
   Search, 
@@ -34,26 +34,53 @@ interface Group {
   desc?: string;
 }
 
-interface GroupRule {
-  id: string;
-  type: 'anti_link' | 'anti_spam' | 'anti_flood' | 'welcome_msg';
-  active: boolean;
-  config?: any;
-}
+type GroupEvent = { id: number; rule: string; outcome: string; created_at: string };
+
+const defaultRules = { anti_link: false, anti_spam: false, anti_flood: false, welcome_msg: "", active: true };
+const ruleNames: Record<string, string> = { link: "Link", spam: "Spam", flood: "Flood", welcome: "Boas-vindas" };
+const outcomes: Record<string, string> = {
+  accepted: "Ação aceite pelo WhatsApp", no_permission: "Conta sem permissão",
+  unverified_sender: "Remetente não identificado", failed: "Falha no WhatsApp"
+};
 
 export default function Groups() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [groupRules, setGroupRules] = useState<any>({
-    anti_link: false,
-    anti_spam: false,
-    anti_flood: false,
-    anti_delete: false,
-    welcome_msg: '',
-    active: true
-  });
+  const [searchTerm, setSearchTerm] = useState("");
+  const [groupRules, setGroupRules] = useState(defaultRules);
+  const [groupEvents, setGroupEvents] = useState<GroupEvent[]>([]);
+  const [rulesReady, setRulesReady] = useState(false);
+  const [savingRules, setSavingRules] = useState(false);
+  const [eventsUnavailable, setEventsUnavailable] = useState(false);
+  const groupId = selectedGroup?.id;
+  const groupIdRef = useRef(groupId);
+  groupIdRef.current = groupId;
+
+  useEffect(() => {
+    if (!groupId) return;
+    let active = true;
+    setRulesReady(false);
+    setGroupEvents([]);
+    setEventsUnavailable(false);
+    const root = `/api/whatsapp/groups/${groupId}`;
+    void apiFetch(root + "/rules").then(({ data }) => {
+      if (!active) return;
+      setGroupRules({ ...defaultRules, ...data, active: data?.active ?? true, welcome_msg: data?.welcome_msg ?? "" });
+      setRulesReady(true);
+    }).catch(() => { if (active) toast.error("Não foi possível carregar as regras."); });
+    const refresh = () => {
+      if (document.hidden) return;
+      void apiFetch(root + "/events").then(({ data }) => {
+        if (!active) return;
+        setGroupEvents(data);
+        setEventsUnavailable(false);
+      }).catch(() => { if (active) setEventsUnavailable(true); });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 10000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [groupId]);
 
   useEffect(() => {
     fetchGroups();
@@ -88,7 +115,7 @@ export default function Groups() {
       const data = await apiFetch(`/api/whatsapp/groups/${jid}`);
       if (data.success) {
         setSelectedGroup(data.metadata);
-        fetchGroupRules(jid);
+
       } else {
         if (data.error === 'WhatsApp não conectado') {
           toast.error('Conecte o WhatsApp na aba "WhatsApp"');
@@ -105,41 +132,22 @@ export default function Groups() {
     }
   };
 
-  const fetchGroupRules = async (jid: string) => {
+  const saveRules = async (newRules: Partial<typeof defaultRules>) => {
+    if (!groupId || !rulesReady || savingRules) return;
+    setSavingRules(true);
     try {
-      const data = await apiFetch(`/api/whatsapp/groups/${jid}/rules`);
-      if (data.success && data.data) {
-        setGroupRules(data.data);
-      } else {
-        setGroupRules({
-          anti_link: false,
-          anti_spam: false,
-          anti_flood: false,
-          anti_delete: false,
-          welcome_msg: '',
-          active: true
-        });
-      }
-    } catch (err) {
-      console.error('Error fetching rules:', err);
-    }
-  };
-
-  const saveRules = async (newRules: any) => {
-    if (!selectedGroup) return;
-    try {
-      const data = await apiFetch(`/api/whatsapp/groups/${selectedGroup.id}/rules`, {
-        method: 'POST',
+      const data = await apiFetch(`/api/whatsapp/groups/${groupId}/rules`, {
+        method: "POST",
         body: JSON.stringify(newRules)
       });
-      if (data.success) {
-        toast.success('Regras salvas com sucesso');
-        setGroupRules(data.data);
-      } else {
-        toast.error(data.error || 'Falha ao salvar regras');
+      if (data.success && groupIdRef.current === groupId) {
+        setGroupRules((current) => ({ ...current, ...newRules }));
+        toast.success("Regras guardadas.");
       }
-    } catch (err) {
-      toast.error('Erro ao salvar regras');
+    } catch {
+      toast.error("Erro ao guardar regras.");
+    } finally {
+      setSavingRules(false);
     }
   };
 
@@ -191,10 +199,8 @@ export default function Groups() {
     }
   };
 
-  const toggleRule = (field: string) => {
-    const newRules = { ...groupRules, [field]: !groupRules[field] };
-    setGroupRules(newRules);
-    saveRules(newRules);
+  const toggleRule = (field: "active" | "anti_link" | "anti_spam" | "anti_flood") => {
+    void saveRules({ [field]: !groupRules[field] });
   };
 
   const handleWelcomeMsgChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -382,6 +388,12 @@ export default function Groups() {
                       </h3>
                     </div>
                     <div className="p-4 space-y-4">
+                      <label className="flex gap-2 text-sm">
+                        <input type="checkbox" checked={groupRules.active} disabled={!rulesReady || savingRules}
+                          onChange={() => toggleRule("active")} />
+                        Ativar as regras e boas-vindas deste grupo
+                      </label>
+                      <p className="text-sm text-slate-600">Para remover mensagens, a conta ligada precisa de ser administradora do grupo.</p>
                       {/* Anti-Link */}
                       <div className="flex items-center justify-between p-3 border border-slate-100 rounded-2xl hover:border-emerald-200 transition-colors">
                         <div className="flex items-center gap-3">
@@ -395,6 +407,8 @@ export default function Groups() {
                         </div>
                         <button
                           onClick={() => toggleRule('anti_link')}
+                          disabled={!rulesReady || savingRules}
+                          aria-pressed={groupRules.anti_link}
                           className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${groupRules.anti_link ? 'bg-emerald-500' : 'bg-slate-200'}`}
                         >
                           <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${groupRules.anti_link ? 'translate-x-6' : 'translate-x-1'}`} />
@@ -409,11 +423,13 @@ export default function Groups() {
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">Anti-Spam</p>
-                            <p className="text-[10px] text-slate-500">Bloqueia mensagens repetitivas</p>
+                            <p className="text-[10px] text-slate-500">Remove a terceira repetição de um membro em 30 segundos</p>
                           </div>
                         </div>
                         <button
                           onClick={() => toggleRule('anti_spam')}
+                          disabled={!rulesReady || savingRules}
+                          aria-pressed={groupRules.anti_spam}
                           className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${groupRules.anti_spam ? 'bg-emerald-500' : 'bg-slate-200'}`}
                         >
                           <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${groupRules.anti_spam ? 'translate-x-6' : 'translate-x-1'}`} />
@@ -428,33 +444,16 @@ export default function Groups() {
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">Anti-Flood</p>
-                            <p className="text-[10px] text-slate-500">Limite de mensagens por segundo</p>
+                            <p className="text-[10px] text-slate-500">Remove a partir da sexta mensagem do membro em 10 segundos</p>
                           </div>
                         </div>
                         <button
                           onClick={() => toggleRule('anti_flood')}
+                          disabled={!rulesReady || savingRules}
+                          aria-pressed={groupRules.anti_flood}
                           className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${groupRules.anti_flood ? 'bg-emerald-500' : 'bg-slate-200'}`}
                         >
                           <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${groupRules.anti_flood ? 'translate-x-6' : 'translate-x-1'}`} />
-                        </button>
-                      </div>
-
-                      {/* Anti-Delete */}
-                      <div className="flex items-center justify-between p-3 border border-slate-100 rounded-2xl hover:border-emerald-200 transition-colors">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${groupRules.anti_delete ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
-                            <Trash2 className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-bold text-slate-900">Anti-Delete</p>
-                            <p className="text-[10px] text-slate-500">Preserva mensagens deletadas no log</p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => toggleRule('anti_delete')}
-                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${groupRules.anti_delete ? 'bg-emerald-500' : 'bg-slate-200'}`}
-                        >
-                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${groupRules.anti_delete ? 'translate-x-6' : 'translate-x-1'}`} />
                         </button>
                       </div>
 
@@ -475,6 +474,8 @@ export default function Groups() {
                         <div className="space-y-2">
                           <textarea
                             value={groupRules.welcome_msg}
+                            disabled={!rulesReady || savingRules}
+                            maxLength={800}
                             onChange={handleWelcomeMsgChange}
                             placeholder="Olá {user}, bem-vindo ao grupo!"
                             className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500/20 outline-none min-h-[80px] resize-none"
@@ -482,7 +483,8 @@ export default function Groups() {
                           <div className="flex justify-between items-center">
                             <span className="text-[10px] text-slate-400 italic">Use {"{user}"} para mencionar o membro</span>
                             <button 
-                              onClick={() => saveRules(groupRules)}
+                              onClick={() => void saveRules({ welcome_msg: groupRules.welcome_msg })}
+                              disabled={!rulesReady || savingRules}
                               className="px-3 py-1 bg-emerald-500 text-white text-[10px] font-bold rounded-lg hover:bg-emerald-600 transition-colors"
                             >
                               Salvar Mensagem
@@ -499,6 +501,16 @@ export default function Groups() {
                           </p>
                         </div>
                       </div>
+                      <section className="border-t pt-3">
+                        <h4 className="font-semibold">Atividade recente</h4>
+                        {eventsUnavailable && <p className="text-sm">Histórico indisponível.</p>}
+                        {!eventsUnavailable && groupEvents.length === 0 && <p className="text-sm">Ainda sem ações registadas.</p>}
+                        <ul className="mt-2 grid gap-2 text-sm">
+                          {groupEvents.map((event) => <li key={event.id} className="rounded-lg bg-slate-50 p-2">
+                            {ruleNames[event.rule]} · {outcomes[event.outcome]} · {new Date(event.created_at).toLocaleString("pt-MZ")}
+                          </li>)}
+                        </ul>
+                      </section>
                     </div>
                   </div>
                 </div>

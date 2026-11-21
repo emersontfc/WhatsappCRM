@@ -83,3 +83,22 @@ ou Status com imagem e vídeo, use a agenda no painel.
 O aviso de contacto vem desativado. Quando ativado, é enviado ao próprio número ligado,
 sem incluir conteúdo da conversa. O sistema limita a um aviso por contacto a cada 30 minutos.
 Se a confirmação do WhatsApp for ambígua, verifique a conversa ou o Status antes de reenviar.
+
+## Venda fechada, moderação e publicações recorrentes
+
+Aplique `14_whatsapp_sales_pipeline.sql`, `15_whatsapp_group_moderation.sql` e
+`16_whatsapp_recurring_posts.sql` em `supabase/migrations`, por ordem, depois das migrações
+12 e 13 e da configuração do CRM existente. Atualize a aplicação depois da base.
+
+- Uma consulta comercial pode criar ou atualizar o lead. Um pedido novo fica ligado ao lead
+  e aparece em **Vendas & Pedidos** com pagamento pendente. Repetir a mesma mensagem
+  de compra do WhatsApp devolve o pedido original. Na revisão manual confirmada, a venda
+  fecha o lead e baixa o stock uma vez. O stock é verificado na criação e na confirmação.
+  A criação do pedido não reserva unidades.
+- Em **Grupos**, active as regras de cada grupo e configure as boas-vindas. A remoção de
+  mensagens exige uma conta administradora e preserva as mensagens dos administradores.
+  O histórico mostra o resultado recebido do WhatsApp.
+- Em **Disparos Programados**, selecione **Status** ou **Anúncio de grupo** e escolha
+  uma publicação única, diária ou semanal. Os anúncios de grupo aceitam texto e exigem
+  que a conta ligada possa publicar. O envio confirmado cria uma única ocorrência futura.
+  Para parar uma série, elimine ou edite a próxima ocorrência pendente.

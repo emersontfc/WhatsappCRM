@@ -10,6 +10,7 @@ export interface CreateOrderParams {
   contactId?: string;
   paymentMethod: string;
   productId: string;
+  sourceMessageId?: string;
   quantity: number;
 }
 
@@ -47,7 +48,7 @@ export class CommerceService {
   }
 
   async createOrder(params: CreateOrderParams) {
-    const { data: order, error } = await supabaseAdmin.rpc("agentx_catalog_create_order", {
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_whatsapp_create_order", {
       p_user: params.userId,
       p_product: params.productId,
       p_quantity: params.quantity,
@@ -55,14 +56,10 @@ export class CommerceService {
       p_customer: params.customerName,
       p_contact: params.contactId ?? null,
       p_method: params.paymentMethod,
-      p_order_number: `AGX-${randomBytes(6).toString("hex").toUpperCase()}`
+      p_order_number: `AGX-${randomBytes(6).toString("hex").toUpperCase()}`,
+      p_source_message: params.sourceMessageId ?? null
     });
     if (error) throw error;
-    await this.recordTimelineEvent({
-      userId: params.userId, orderId: order.id, contactId: params.contactId,
-      phone: order.customer_phone, step: "order_created",
-      description: `Pedido ${order.order_number} criado. Aguardando pagamento.`
-    });
     return { order };
   }
 

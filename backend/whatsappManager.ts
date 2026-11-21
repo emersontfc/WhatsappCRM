@@ -1,3 +1,4 @@
+import { isGroupJid, moderateGroupMessage, welcomeGroupParticipants } from "./services/groupModeration.ts";
 import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "./services/whatsappOperator.ts";
 import makeWASocket, {
   DisconnectReason,
@@ -306,13 +307,19 @@ export class WhatsAppManager implements IWhatsAppTransport {
         }
       });
 
+      socket.ev.on("group-participants.update", ({ id, action, participants }) => {
+        if (action !== "add") return;
+        void welcomeGroupParticipants(socket, userId, id, participants.map((member) => member.id))
+          .catch(() => console.warn("[WhatsApp] Group welcome could not be processed"));
+      });
+
       socket.ev.on("messages.upsert", async ({ messages, type }) => {
         console.log(`[WhatsApp] messages.upsert triggered for ${userId}, type: ${type}, count: ${messages.length}`);
         if (type !== "notify" && type !== "append") return;
         for (const msg of messages) {
           try {
             const msgKeyId = msg.key?.id;
-            if (msgKeyId && this.isDuplicateMessage(msgKeyId)) {
+            if (msgKeyId && this.isDuplicateMessage(`${userId}:${msgKeyId}`)) {
               console.log(`[WhatsApp] Duplicate message ignored (in-memory dedup): ${msgKeyId}`);
               continue;
             }
@@ -331,7 +338,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
               } catch (e) {}
             } else if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
 
-            const jid = msg.key.remoteJid!;
+            const jid = msg.key.remoteJid;
+            if (!jid) continue;
             const isMe = msg.key.fromMe;
             
             // Ignora status de outras pessoas para não poluir o log nem ativar a automação/IA
@@ -343,6 +351,10 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
             const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
             const saved = await this.syncMessage(userId, msg, altJid);
+            if (isGroupJid(jid)) {
+              if (type === "notify") await moderateGroupMessage(socket, userId, jid, msg.key, text);
+              continue;
+            }
 
             // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
             const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
@@ -368,7 +380,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
               console.log(`[WhatsApp] Processing message for ${userId} (from: ${jid}, text: "${text}", isSelf: ${isSelfMessage})`);
               const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
               if (!handledByAutomation) {
-                await handleAgentMessage(this, userId, jid, text, isSelfMessage);
+                await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined);
               }
             } else if (isGroupOrBroadcast) {
               console.log(`[WhatsApp] Skipping group/broadcast message for ${userId} (jid: ${jid})`);

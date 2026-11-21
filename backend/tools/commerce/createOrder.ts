@@ -1,6 +1,5 @@
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
-import { supabaseAdmin } from "../../supabaseAdmin.ts";
 
 export const createOrderTool: ToolDefinition = {
   name: "createOrder",
@@ -46,33 +45,30 @@ export const createOrderTool: ToolDefinition = {
       }
       const product = matches[0];
 
-      // 2. Fetch contact info
-      const { data: contact } = await supabaseAdmin
-        .from("contacts")
-        .select("id, name")
-        .eq("user_id", ctx.userId)
-        .eq("phone", ctx.phone)
-        .maybeSingle();
+      if (!/^\d{8,15}$/.test(ctx.phone)) {
+        return { success: false, message: "O contacto ainda não tem um número de telefone associado ao WhatsApp." };
+      }
 
-      // 3. Create the order
       const result = await commerceService.createOrder({
         userId: ctx.userId,
         customerPhone: ctx.phone,
-        customerName: contact?.name || "Cliente",
-        contactId: contact?.id,
+        customerName: ctx.contactName || "Cliente",
+        contactId: ctx.contactId,
+        sourceMessageId: ctx.messageId,
         paymentMethod,
         productId: product.id,
         quantity
       });
 
       const order = result.order;
+      const orderMethod = order.payment_method;
       const totalFormatted = `${order.total_amount} ${order.currency}`;
 
       // 4. Instructions based on payment method
       let instructions = "";
-      if (paymentMethod === "mpesa") {
+      if (orderMethod === "mpesa") {
         instructions = `Envie ${totalFormatted} via M-Pesa para o número oficial da empresa e envie o comprovativo (SMS ou print) nesta conversa.`;
-      } else if (paymentMethod === "emola") {
+      } else if (orderMethod === "emola") {
         instructions = `Envie ${totalFormatted} via e-Mola para o número oficial da empresa e envie o comprovativo nesta conversa.`;
       } else {
         instructions = `Efetue a transferência de ${totalFormatted} e envie o comprovativo bancário aqui.`;
@@ -85,7 +81,7 @@ export const createOrderTool: ToolDefinition = {
           orderNumber: order.order_number,
           orderId: order.id,
           total: totalFormatted,
-          paymentMethod,
+          paymentMethod: orderMethod,
           instructions
         }
       };

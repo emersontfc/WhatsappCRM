@@ -1,3 +1,4 @@
+import { invalidateGroupRules, isGroupJid, readGroupRulePatch } from "../services/groupModeration.ts";
 import { dispatchScheduled } from "../services/scheduledDispatch.ts";
 import express from "express";
 import { whatsappManager } from "../whatsappManager.ts";
@@ -42,7 +43,7 @@ router.post("/send-scheduled*", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   const { id, type } = req.body ?? {};
-  if (typeof id !== "string" || !["status", "contact"].includes(type)) {
+  if (typeof id !== "string" || !["status", "contact", "group"].includes(type)) {
     return res.status(400).json({ error: "Agendamento inválido." });
   }
   try {
@@ -588,27 +589,35 @@ router.get("/groups/:jid/rules", async (req: AuthRequest, res) => {
 router.post("/groups/:jid/rules", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   const { jid } = req.params;
-  const rules = req.body;
-  
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  const rules = readGroupRulePatch(req.body);
+  if (!isGroupJid(jid) || !rules) return res.status(400).json({ error: "Regras de grupo inválidas." });
 
   try {
-    const { id, created_at, ...rulesToSave } = rules;
-    const { data, error } = await supabaseAdmin
-      .from("group_rules")
-      .upsert({
-        user_id: userId,
-        group_jid: jid,
-        ...rulesToSave,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,group_jid' })
-      .select()
-      .single();
-
+    const { data, error } = await supabaseAdmin.from("group_rules")
+      .upsert({ ...rules, user_id: userId, group_jid: jid, updated_at: new Date().toISOString() },
+        { onConflict: "user_id,group_jid" })
+      .select().single();
     if (error) throw error;
-    res.json({ success: true, data });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    invalidateGroupRules(userId, jid);
+    return res.json({ success: true, data });
+  } catch {
+    return res.status(503).json({ error: "Não foi possível guardar as regras do grupo." });
+  }
+});
+
+router.get("/groups/:jid/events", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { jid } = req.params;
+  if (!userId) return res.status(401).json({ error: "Unauthorized" });
+  if (!isGroupJid(jid)) return res.status(400).json({ error: "Grupo inválido." });
+  try {
+    const { data, error } = await supabaseAdmin.from("agentx_group_events").select("id,rule,outcome,created_at")
+      .eq("user_id", userId).eq("group_jid", jid).order("id", { ascending: false }).limit(20);
+    if (error) throw error;
+    return res.json({ success: true, data });
+  } catch {
+    return res.status(503).json({ error: "Histórico de moderação indisponível." });
   }
 });
 

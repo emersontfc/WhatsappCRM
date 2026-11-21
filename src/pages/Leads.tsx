@@ -925,6 +925,10 @@ export default function Leads() {
                 </div>
               )}
 
+              {selectedLead.last_action && <p className="text-sm text-slate-700">
+                Última ação · {selectedLead.last_action}
+              </p>}
+
               {/* Last Message */}
               {selectedLead.last_message && (
                 <div className="space-y-1">

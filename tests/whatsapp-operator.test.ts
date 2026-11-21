@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "../backend/services/whatsappOperator.ts";
 import { dispatchScheduled, scheduledContactJid } from "../backend/services/scheduledDispatch.ts";
 
-const mocks = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), execute: vi.fn(), send: vi.fn() }));
+const mocks = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), execute: vi.fn(), send: vi.fn(), group: vi.fn(), identity: vi.fn() }));
 vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: { from: mocks.from, rpc: mocks.rpc } }));
 vi.mock("../backend/tools/index.ts", () => ({ executeToolByName: mocks.execute }));
-vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: { sendMessage: mocks.send } }));
+vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: { sendMessage: mocks.send, getGroupMetadata: mocks.group, getMe: mocks.identity } }));
 const user = "owner";
 const jid = "258841234567@s.whatsapp.net";
 const transport = { getMe: () => ({ id: "258841234567:2@s.whatsapp.net", lid: "13579@lid" }), sendMessage: mocks.send };
@@ -79,6 +79,20 @@ describe("shared scheduled dispatch", () => {
     expect(claim.lte).toHaveBeenCalledWith("scheduled_at", "due");
     expect(mocks.send).toHaveBeenCalledWith(user, jid, "", "/uploads/voice-1-1.ogg", "audio", undefined, undefined, undefined);
     expect(finish.update).toHaveBeenCalledWith({ status: "sent", error: null });
+  });
+
+  it("refuses announcements in admin-only groups unless this linked account is an admin", async () => {
+    const item = { target_type: "group", group_jid: "12345@g.us", message: "Aviso" };
+    mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query(null));
+    mocks.identity.mockReturnValue({ id: jid });
+    mocks.group.mockResolvedValue({ announce: true, participants: [{ id: jid, admin: null }] });
+    expect((await dispatchScheduled("scheduled_messages", "post", user)).status).toBe("failed");
+    expect(mocks.send).not.toHaveBeenCalled();
+    mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query(null));
+    mocks.group.mockResolvedValue({ announce: true, participants: [{ id: jid, admin: "admin" }] });
+    mocks.send.mockResolvedValue({ key: { id: "sent" } });
+    expect((await dispatchScheduled("scheduled_messages", "post", user)).status).toBe("sent");
+    expect(mocks.send).toHaveBeenCalledWith(user, "12345@g.us", "Aviso", undefined, undefined, undefined, undefined, undefined);
   });
 
   it("skips an already claimed job and freezes uncertain sends", async () => {

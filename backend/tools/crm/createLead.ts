@@ -30,10 +30,19 @@ export const createLeadTool: ToolDefinition = {
   },
   execute: async (args: { name?: string; phone?: string; interest?: string; stage?: string }, ctx: ToolContext): Promise<ToolResult> => {
     try {
-      const targetPhone = args.phone ? args.phone.replace(/\D/g, "") : ctx.phone;
+      const targetPhone = ctx.role === "admin" && args.phone ? args.phone.replace(/\D/g, "") : ctx.phone;
 
       if (!targetPhone) {
         return { success: false, message: "Telefone obrigatório para cadastrar lead." };
+      }
+
+      if (ctx.role === "lead") {
+        const { data, error } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
+          p_user: ctx.userId, p_phone: targetPhone, p_contact: ctx.contactId ?? null,
+          p_name: ctx.contactName ?? null, p_activity: "interest", p_message: ctx.incomingText ?? null
+        });
+        if (error) throw error;
+        return { success: true, message: "Interesse registado no CRM.", data: { id: data } };
       }
 
       // Check existing contact

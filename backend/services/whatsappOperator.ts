@@ -79,7 +79,7 @@ async function operatorReply(transport: OperatorTransport, userId: string, jid: 
 
   if (command === "agenda") {
     const results = await Promise.all([
-      supabaseAdmin.from("scheduled_messages").select("scheduled_at,contacts!inner(name,user_id)")
+      supabaseAdmin.from("scheduled_messages").select("scheduled_at,target_type,group_name,contacts(name,user_id)")
         .eq("user_id", userId).eq("contacts.user_id", userId).eq("status", "pending").order("scheduled_at").limit(5),
       supabaseAdmin.from("scheduled_status").select("scheduled_at")
         .eq("user_id", userId).eq("status", "pending").order("scheduled_at").limit(5),
@@ -93,7 +93,7 @@ async function operatorReply(transport: OperatorTransport, userId: string, jid: 
       date = new Intl.DateTimeFormat("pt-MZ", { dateStyle: "short", timeStyle: "short", timeZone: "Africa/Maputo" });
     }
     const lines = [
-      ...(results[0].data ?? []).map((row) => ({ at: row.scheduled_at, name: (Array.isArray(row.contacts) ? row.contacts[0] : row.contacts)?.name || "Mensagem" })),
+      ...(results[0].data ?? []).map((row) => ({ at: row.scheduled_at, name: row.target_type === "group" ? row.group_name || "Anúncio de grupo" : (Array.isArray(row.contacts) ? row.contacts[0] : row.contacts)?.name || "Mensagem" })),
       ...(results[1].data ?? []).map((row) => ({ at: row.scheduled_at, name: "WhatsApp Status" }))
     ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).slice(0, 5)
       .map(({ at, name }) => `• ${date.format(new Date(at))} · ${name}`);

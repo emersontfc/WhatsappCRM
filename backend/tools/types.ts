@@ -7,6 +7,10 @@ export interface ToolContext {
   role: UserRole;
   whatsappManager: any;
   userPhone?: string;
+  contactId?: string;
+  contactName?: string;
+  messageId?: string;
+  incomingText?: string;
 }
 
 export interface ToolParameterProperty {

@@ -32,7 +32,17 @@ export const qualifyLeadTool: ToolDefinition = {
   },
   execute: async (args: { phone?: string; interestLevel?: string; tag?: string; notes?: string }, ctx: ToolContext): Promise<ToolResult> => {
     try {
-      const targetPhone = (args.phone || ctx.phone).replace(/\D/g, "");
+      const targetPhone = (ctx.role === "admin" ? (args.phone || ctx.phone) : ctx.phone).replace(/\D/g, "");
+      if (!/^\d{8,15}$/.test(targetPhone)) {
+        return { success: false, message: "Não foi possível identificar o telefone do contacto." };
+      }
+      if (ctx.role === "lead") {
+        const { error } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
+          p_user: ctx.userId, p_phone: targetPhone, p_contact: ctx.contactId ?? null,
+          p_name: ctx.contactName ?? null, p_activity: "interest", p_message: ctx.incomingText ?? null
+        });
+        if (error) throw error;
+      }
 
       // 1. Fetch contact
       const { data: contacts } = await supabaseAdmin

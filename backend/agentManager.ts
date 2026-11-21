@@ -317,7 +317,7 @@ Use 'createMarketingCampaign' quando solicitado para preparar disparos direciona
 Você possui autonomia comercial: pode consultar o catálogo com 'getProductsCatalog', criar pedidos com 'createOrder', receber comprovativos com 'submitPaymentProof', consultar status com 'getOrderStatus' e qualificar leads com 'qualifyLead'.`;
     }
 
-    roleHeader = `VOCÊ É O AGENTEX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nAjude o cliente com cordialidade, precisão e integridade.`;
+    roleHeader = `VOCÊ É O AGENTEX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Crie o pedido apenas após aceitação explícita da compra.\nAjude o cliente com cordialidade, precisão e integridade.`;
     baseInstruction = agent.instructions || "Você é um assistente útil, ágil e inteligente.";
   }
 
@@ -516,7 +516,7 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
   return formatted;
 }
 
-export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false) {
+export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false, sourceMessageId?: string) {
   try {
     console.log(`[AI Engine] Checking agents for ${userId}, text: "${text}" (isSelfMessage: ${isSelfMessage})`);
     const { data: agents, error } = await supabaseAdmin
@@ -556,7 +556,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     if (isLid && cleanSenderLid) {
       const { data: byLid } = await supabaseAdmin
         .from("contacts")
-        .select("id, ai_paused, name, tags")
+        .select("id, ai_paused, name, phone, tags")
         .eq("user_id", userId)
         .eq("lid", cleanSenderLid)
         .maybeSingle();
@@ -569,7 +569,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
       const { data: contacts } = await supabaseAdmin
         .from("contacts")
-        .select("id, ai_paused, name, tags")
+        .select("id, ai_paused, name, phone, tags")
         .eq("user_id", userId)
         .or(`phone.eq.${cleanSenderPhone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
         .limit(1);
@@ -614,6 +614,9 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
                     (Boolean(myPhone) && cleanSenderPhone === myPhone);
 
     const role: UserRole = isOwner ? "admin" : "lead";
+    const linkedPhone = String(contactData?.phone || "").replace(/\D/g, "");
+    const toolPhone = cleanSenderPhone || (linkedPhone !== cleanSenderLid ? linkedPhone : "");
+
 
     console.log(`[AI Engine] Message evaluation for ${jid}:`);
     console.log(`  - cleanSenderPhone: ${cleanSenderPhone}, isSelf: ${isSelfMessage}`);
@@ -748,11 +751,15 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
           console.log(`[AI Engine] Executing Tool: "${parsed.tool}" for role "${role}" with args:`, JSON.stringify(parsed.args));
           const toolResult = await executeToolByName(parsed.tool, parsed.args || {}, {
             userId,
-            phone: cleanSenderPhone,
+            phone: toolPhone,
             jid,
             role,
             whatsappManager,
-            userPhone: myPhone
+            userPhone: myPhone,
+            contactId: contactData?.id,
+            contactName: contactData?.name,
+            messageId: sourceMessageId,
+            incomingText: text
           });
 
           if (toolResult) {
