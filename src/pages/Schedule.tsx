@@ -63,6 +63,7 @@ export default function Schedule() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedType = searchParams.get("new");
+  const requestedGroup = searchParams.get("group");
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
   const [groups, setGroups] = useState<Array<{ id: string; subject: string }>>([]);
   const [groupError, setGroupError] = useState(false);
@@ -105,14 +106,17 @@ export default function Schedule() {
 
   useEffect(() => {
     if (requestedType !== "group" && requestedType !== "status" && requestedType !== "contact") return;
-    setNewMessage((previous) => ({ ...previous, target_type: requestedType }));
+    const group = requestedType === "group" && requestedGroup && /^\d+(?:-\d+)?@g\.us$/.test(requestedGroup)
+      ? requestedGroup : undefined;
+    setNewMessage((previous) => ({ ...previous, target_type: requestedType, group_jid: group }));
     setIsAdding(true);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("new");
+      next.delete("group");
       return next;
     }, { replace: true });
-  }, [requestedType, setSearchParams]);
+  }, [requestedType, requestedGroup, setSearchParams]);
 
   useEffect(() => {
     if (!isAdding || newMessage.target_type !== "group") return;
@@ -357,6 +361,10 @@ export default function Schedule() {
 
     if (newMessage.target_type === "group" && (!newMessage.group_jid || !newMessage.message?.trim() || newMessage.media_url)) {
       toast.error("Seleciona um grupo e escreve o anúncio de texto.");
+      return;
+    }
+    if (newMessage.target_type === "group" && !groups.some((group) => group.id === newMessage.group_jid)) {
+      toast.error("O grupo precisa de estar disponível na lista do WhatsApp.");
       return;
     }
 

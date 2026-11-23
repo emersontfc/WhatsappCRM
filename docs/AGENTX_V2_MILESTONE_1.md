@@ -101,6 +101,11 @@ antiga `phone`, mantém o histórico e aplica o isolamento entre contas na agend
 - Em **Grupos**, active as regras de cada grupo e configure as boas-vindas. A remoção de
   mensagens exige uma conta administradora e preserva as mensagens dos administradores.
   O histórico mostra o resultado recebido do WhatsApp.
+- Selecione um grupo para pesquisar membros, publicar um anúncio ou abrir o agendamento
+  com o grupo selecionado. A conta administradora pode alterar o nome e a descrição,
+  limitar quem escreve ou edita, ativar aprovação de novos membros e decidir os pedidos.
+  Em **Convites e pedidos de entrada**, pode copiar o link ou revogá-lo e gerar outro.
+  Se a privacidade impedir adicionar alguém pelo número, o WhatsApp exige um convite.
 - Em **Disparos Programados**, selecione **Status** ou **Anúncio de grupo** e escolha
   uma publicação única, diária ou semanal. Os anúncios de grupo aceitam texto e exigem
   que a conta ligada possa publicar. O envio confirmado cria uma única ocorrência futura.

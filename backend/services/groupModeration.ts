@@ -60,29 +60,30 @@ export function groupViolation(rules: GroupRules, history: Array<{ at: number; t
   return null;
 }
 
-function normalized(jid?: string | null) {
+export function normalizedGroupIdentity(jid?: string | null) {
   return jid?.toLowerCase().replace(/:\d+@/, "@").replace(/@c\.us$/, "@s.whatsapp.net");
 }
 
-export function groupRemovalDecision(group: GroupMetadata, senderIds: Array<string | null | undefined>, linkedIds: Array<string | null | undefined>) {
-  const match = (ids: Array<string | null | undefined>) => {
-    const candidates = new Set(ids.map(normalized).filter(Boolean));
-    return group.participants.find((person) => [person.id, person.lid, person.phoneNumber].map(normalized)
-      .some((id) => id && candidates.has(id)));
-  };
-  const sender = match(senderIds);
-  const isAdmin = (person?: GroupMetadata["participants"][number]) =>
-    Boolean(person?.admin || person?.isAdmin || person?.isSuperAdmin);
-  if (!sender) return "unverified_sender";
-  if (isAdmin(sender)) return "exempt";
-  return isAdmin(match(linkedIds)) ? "remove" : "no_permission";
+export function groupParticipant(group: GroupMetadata, ...ids: Array<string | null | undefined>) {
+  const candidates = new Set(ids.map(normalizedGroupIdentity).filter(Boolean));
+  return group.participants.find((person) => [person.id, person.lid, person.phoneNumber].map(normalizedGroupIdentity)
+    .some((id) => id && candidates.has(id)));
 }
 
-export function canPostInGroup(group: GroupMetadata, identity?: { id?: string; lid?: string }) {
-  const self = [normalized(identity?.id), normalized(identity?.lid)];
-  const linked = group.participants.find((member) =>
-    [member.id, member.lid, member.phoneNumber].map(normalized).some((id) => id && self.includes(id)));
-  return Boolean(linked && (!group.announce || linked.admin || linked.isAdmin || linked.isSuperAdmin));
+export function isGroupAdmin(person?: GroupMetadata["participants"][number]) {
+  return Boolean(person?.admin || person?.isAdmin || person?.isSuperAdmin);
+}
+
+export function groupRemovalDecision(group: GroupMetadata, senderIds: Array<string | null | undefined>, linkedIds: Array<string | null | undefined>) {
+  const sender = groupParticipant(group, ...senderIds);
+  if (!sender) return "unverified_sender";
+  if (isGroupAdmin(sender)) return "exempt";
+  return isGroupAdmin(groupParticipant(group, ...linkedIds)) ? "remove" : "no_permission";
+}
+
+export function canPostInGroup(group: GroupMetadata, identity?: { id?: string; lid?: string; phoneNumber?: string }) {
+  const linked = groupParticipant(group, identity?.id, identity?.lid, identity?.phoneNumber);
+  return Boolean(linked && (!group.announce || isGroupAdmin(linked)));
 }
 
 async function logEvent(userId: string, jid: string, rule: Violation | "welcome", outcome: Outcome) {
@@ -95,7 +96,7 @@ export async function moderateGroupMessage(socket: WASocket, userId: string, jid
   const rules = await rulesFor(userId, jid);
   if (!rules?.active || !(rules.anti_link || rules.anti_flood || rules.anti_spam)) return;
   const now = Date.now();
-  const senderKey = `${userId}:${jid}:${normalized(key.participantAlt || key.participant)}`;
+  const senderKey = `${userId}:${jid}:${normalizedGroupIdentity(key.participantAlt || key.participant)}`;
   const entries = (activity.get(senderKey) ?? []).filter((entry) => entry.at >= now - 30000).slice(-19);
   entries.push({ at: now, text: text.toLowerCase().trim().replace(/\s+/g, " ").slice(0, 500) });
   if (activity.size >= 3000 && !activity.has(senderKey)) activity.delete(activity.keys().next().value!);
@@ -125,8 +126,8 @@ export async function welcomeGroupParticipants(socket: WASocket, userId: string,
   const rules = await rulesFor(userId, jid);
   if (!rules?.active || !rules.welcome_msg) return;
   const now = Date.now();
-  const self = [normalized(socket.user?.id), normalized(socket.user?.lid)];
-  const members = [...new Set(participants.map(normalized))].filter((member): member is string =>
+  const self = [normalizedGroupIdentity(socket.user?.id), normalizedGroupIdentity(socket.user?.lid)];
+  const members = [...new Set(participants.map(normalizedGroupIdentity))].filter((member): member is string =>
     Boolean(member && /^\d+@(s\.whatsapp\.net|lid)$/.test(member) && !self.includes(member) &&
       (welcomes.get(`${userId}:${jid}:${member}`) ?? 0) < now - 60000)).slice(0, 20);
   if (!members.length) return;

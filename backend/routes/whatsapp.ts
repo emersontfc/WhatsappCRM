@@ -1,3 +1,4 @@
+import groupAdministrationRoutes from "./groups.ts";
 import { invalidateGroupRules, isGroupJid, readGroupRulePatch } from "../services/groupModeration.ts";
 import { dispatchScheduled } from "../services/scheduledDispatch.ts";
 import express from "express";
@@ -486,7 +487,7 @@ router.get("/groups", async (req: AuthRequest, res) => {
 
   try {
     const groupsObj = await whatsappManager.getGroups(userId);
-    const groups = Object.values(groupsObj || {});
+    const groups = Object.values(groupsObj || {}).map(({ id, subject, size }) => ({ id, subject, size }));
     res.json({ success: true, groups });
   } catch (err: any) {
     if (err.message === "WhatsApp não conectado") {
@@ -496,75 +497,7 @@ router.get("/groups", async (req: AuthRequest, res) => {
   }
 });
 
-router.get("/groups/:jid", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  const { jid } = req.params;
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
-
-  try {
-    const metadata = await whatsappManager.getGroupMetadata(userId, jid);
-    res.json({ success: true, metadata });
-  } catch (err: any) {
-    if (err.message === "WhatsApp não conectado") {
-      return res.json({ success: false, error: err.message });
-    }
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post("/groups/:jid/participants", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  const { jid } = req.params;
-  const { participants, action } = req.body; // action: 'add', 'remove', 'promote', 'demote'
-  
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
-  if (!participants || !action) return res.status(400).json({ error: "participants and action are required" });
-
-  try {
-    const result = await whatsappManager.updateGroupParticipants(userId, jid, participants, action);
-    res.json({ success: true, result });
-  } catch (err: any) {
-    if (err.message === "WhatsApp não conectado") {
-      return res.json({ success: false, error: err.message });
-    }
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post("/groups/:jid/subject", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  const { jid } = req.params;
-  const { subject } = req.body;
-  
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
-  if (!subject) return res.status(400).json({ error: "subject is required" });
-
-  try {
-    const result = await whatsappManager.updateGroupSubject(userId, jid, subject);
-    res.json({ success: true, result });
-  } catch (err: any) {
-    if (err.message === "WhatsApp não conectado") {
-      return res.json({ success: false, error: err.message });
-    }
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post("/groups/:jid/leave", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  const { jid } = req.params;
-  if (!userId) return res.status(401).json({ error: "Unauthorized" });
-
-  try {
-    const result = await whatsappManager.leaveGroup(userId, jid);
-    res.json({ success: true, result });
-  } catch (err: any) {
-    if (err.message === "WhatsApp não conectado") {
-      return res.json({ success: false, error: err.message });
-    }
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+router.use("/groups", groupAdministrationRoutes);
 
 router.get("/groups/:jid/rules", async (req: AuthRequest, res) => {
   const userId = req.user?.id;

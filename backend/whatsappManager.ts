@@ -5,6 +5,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   Contact as BaileysContact,
   downloadMediaMessage,
+  type WASocket,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
@@ -1092,34 +1093,54 @@ export class WhatsAppManager implements IWhatsAppTransport {
     }
   }
 
-  async getGroups(userId: string) {
+  private async groupSocket(userId: string): Promise<WASocket> {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
-    return await session.socket.groupFetchAllParticipating();
+    return session.socket;
+  }
+
+  async getGroups(userId: string) {
+    return (await this.groupSocket(userId)).groupFetchAllParticipating();
   }
 
   async getGroupMetadata(userId: string, jid: string) {
-    const session = await this.ensureConnection(userId);
-    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
-    return await session.socket.groupMetadata(jid);
+    return (await this.groupSocket(userId)).groupMetadata(jid);
   }
 
   async updateGroupParticipants(userId: string, jid: string, participants: string[], action: "add" | "remove" | "promote" | "demote") {
-    const session = await this.ensureConnection(userId);
-    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
-    return await session.socket.groupParticipantsUpdate(jid, participants, action);
+    return (await this.groupSocket(userId)).groupParticipantsUpdate(jid, participants, action);
   }
 
   async updateGroupSubject(userId: string, jid: string, subject: string) {
-    const session = await this.ensureConnection(userId);
-    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
-    return await session.socket.groupUpdateSubject(jid, subject);
+    return (await this.groupSocket(userId)).groupUpdateSubject(jid, subject);
+  }
+
+  async updateGroupDescription(userId: string, jid: string, description: string) {
+    return (await this.groupSocket(userId)).groupUpdateDescription(jid, description);
+  }
+
+  async updateGroupAccess(userId: string, jid: string, field: "announce" | "restrict" | "joinApprovalMode", enabled: boolean) {
+    const socket = await this.groupSocket(userId);
+    if (field === "joinApprovalMode") return socket.groupJoinApprovalMode(jid, enabled ? "on" : "off");
+    if (field === "announce") return socket.groupSettingUpdate(jid, enabled ? "announcement" : "not_announcement");
+    return socket.groupSettingUpdate(jid, enabled ? "locked" : "unlocked");
+  }
+
+  async getGroupInvite(userId: string, jid: string, reset = false) {
+    const socket = await this.groupSocket(userId);
+    return reset ? socket.groupRevokeInvite(jid) : socket.groupInviteCode(jid);
+  }
+
+  async getGroupJoinRequests(userId: string, jid: string) {
+    return (await this.groupSocket(userId)).groupRequestParticipantsList(jid);
+  }
+
+  async reviewGroupJoinRequest(userId: string, jid: string, participant: string, action: "approve" | "reject") {
+    return (await this.groupSocket(userId)).groupRequestParticipantsUpdate(jid, [participant], action);
   }
 
   async leaveGroup(userId: string, jid: string) {
-    const session = await this.ensureConnection(userId);
-    if (!session || session.status !== "connected") throw new Error("WhatsApp não conectado");
-    return await session.socket.groupLeave(jid);
+    return (await this.groupSocket(userId)).groupLeave(jid);
   }
 
   async pauseSession(userId: string) {

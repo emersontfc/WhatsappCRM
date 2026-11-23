@@ -5,37 +5,45 @@ import {
   Shield, 
   UserMinus, 
   UserPlus, 
-  Settings, 
-  MoreVertical, 
-  AlertCircle,
-  CheckCircle2,
-  XCircle,
   MessageSquare,
   Info,
   ArrowLeft,
-  Trash2,
   Lock,
-  Unlock,
   ShieldAlert,
   ShieldCheck,
   LogOut,
   Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { apiFetch } from '../lib/api';
+import { GroupControls, type EditableGroup, type GroupPermissions } from '../components/GroupControls';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 
-interface Group {
+interface GroupSummary {
   id: string;
   subject: string;
-  participants: any[];
-  creation?: number;
-  owner?: string;
-  desc?: string;
+  size?: number;
 }
 
+interface Member {
+  id: string;
+  name?: string;
+  notify?: string;
+  phoneNumber?: string;
+  admin?: "admin" | "superadmin" | null;
+  isAdmin?: boolean;
+  isSuperAdmin?: boolean;
+}
+
+interface Group extends EditableGroup { participants: Member[]; permissions: GroupPermissions }
+type MemberAction = "add" | "remove" | "promote" | "demote";
 type GroupEvent = { id: number; rule: string; outcome: string; created_at: string };
 
+const memberActions = { add: "Adicionar membro", remove: "Remover do grupo", promote: "Promover a administrador", demote: "Remover função de administrador" };
+const memberLabel = (member: Member) => member.name || member.notify || (member.phoneNumber ?? member.id).split("@")[0];
 const defaultRules = { anti_link: false, anti_spam: false, anti_flood: false, welcome_msg: "", active: true };
 const ruleNames: Record<string, string> = { link: "Link", spam: "Spam", flood: "Flood", welcome: "Boas-vindas" };
 const outcomes: Record<string, string> = {
@@ -44,8 +52,9 @@ const outcomes: Record<string, string> = {
 };
 
 export default function Groups() {
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<"offline" | "unavailable" | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [groupRules, setGroupRules] = useState(defaultRules);
@@ -53,12 +62,25 @@ export default function Groups() {
   const [rulesReady, setRulesReady] = useState(false);
   const [savingRules, setSavingRules] = useState(false);
   const [eventsUnavailable, setEventsUnavailable] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [newMember, setNewMember] = useState("");
+  const [memberBusy, setMemberBusy] = useState(false);
+  const [memberAction, setMemberAction] = useState<{ member: Member; action: MemberAction } | null>(null);
+  const [leaveConfirm, setLeaveConfirm] = useState(false);
+  const detailRequest = useRef(0);
+  const detailTarget = useRef<string | null>(null);
+  const groupPanel = useRef<HTMLDivElement>(null);
   const groupId = selectedGroup?.id;
   const groupIdRef = useRef(groupId);
   groupIdRef.current = groupId;
 
   useEffect(() => {
+    setMemberSearch("");
+    setNewMember("");
+    setMemberAction(null);
+    setLeaveConfirm(false);
     if (!groupId) return;
+    if (window.matchMedia("(max-width: 1023px)").matches) groupPanel.current?.scrollIntoView({ block: "start" });
     let active = true;
     setRulesReady(false);
     setGroupEvents([]);
@@ -90,46 +112,39 @@ export default function Groups() {
     try {
       setLoading(true);
       const data = await apiFetch('/api/whatsapp/groups');
-      if (data.success) {
-        setGroups(data.groups);
-      } else {
-        if (data.error === 'WhatsApp não conectado') {
-          toast.error('Conecte o WhatsApp na aba "WhatsApp" para ver os grupos');
-        } else {
-          toast.error(data.error || 'Falha ao carregar grupos');
-        }
-      }
-    } catch (err: any) {
-      if (err.message && err.message.includes('WhatsApp não conectado')) {
-        toast.error('Conecte o WhatsApp na aba "WhatsApp" para ver os grupos');
-      } else {
-        toast.error('Erro ao conectar ao servidor');
-      }
+      if (!data.success || !Array.isArray(data.groups)) throw new Error(data.error || 'Lista de grupos indisponível.');
+      setGroups(data.groups);
+      setListError(null);
+    } catch (error) {
+      setListError(error instanceof Error && error.message.includes('WhatsApp não conectado') ? "offline" : "unavailable");
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchGroupDetails = async (jid: string) => {
+  const fetchGroupDetails = async (jid: string, refreshing = false) => {
+    if (refreshing && detailTarget.current !== jid) return;
+    detailTarget.current = jid;
+    const request = ++detailRequest.current;
     try {
-      const data = await apiFetch(`/api/whatsapp/groups/${jid}`);
-      if (data.success) {
-        setSelectedGroup(data.metadata);
-
-      } else {
-        if (data.error === 'WhatsApp não conectado') {
-          toast.error('Conecte o WhatsApp na aba "WhatsApp"');
-        } else {
-          toast.error(data.error || 'Falha ao carregar detalhes do grupo');
-        }
-      }
-    } catch (err: any) {
-      if (err.message && err.message.includes('WhatsApp não conectado')) {
-        toast.error('Conecte o WhatsApp na aba "WhatsApp"');
-      } else {
-        toast.error('Erro ao carregar detalhes do grupo');
+      const data = await apiFetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}`);
+      if (request !== detailRequest.current) return;
+      if (!data.success || !data.metadata || !data.permissions) throw new Error(data.error || 'Detalhes do grupo indisponíveis.');
+      setSelectedGroup({ ...data.metadata, permissions: data.permissions });
+      setGroups((previous) => previous.map((item) => item.id === jid
+        ? { ...item, subject: data.metadata.subject, size: data.metadata.participants.length } : item));
+    } catch (error) {
+      if (request === detailRequest.current) {
+        detailTarget.current = groupIdRef.current ?? null;
+        toast.error(error instanceof Error ? error.message : 'Erro ao carregar detalhes do grupo.');
       }
     }
+  };
+
+  const closeGroup = () => {
+    ++detailRequest.current;
+    detailTarget.current = null;
+    setSelectedGroup(null);
   };
 
   const saveRules = async (newRules: Partial<typeof defaultRules>) => {
@@ -151,51 +166,43 @@ export default function Groups() {
     }
   };
 
-  const handleParticipantAction = async (participantJid: string, action: 'add' | 'remove' | 'promote' | 'demote') => {
-    if (!selectedGroup) return;
-    
-    const actionLabel = action === 'remove' ? 'remover' : action === 'promote' ? 'promover' : 'despromover';
-    
-    // Using toast as a simple confirmation for now to avoid iFrame blocks
-    toast.info(`Processando: ${actionLabel} participante...`);
-
+  const handleParticipantAction = async (participant: string, action: MemberAction) => {
+    if (!selectedGroup?.permissions.manage || memberBusy) return;
+    const jid = selectedGroup.id;
+    setMemberBusy(true);
     try {
-      const data = await apiFetch(`/api/whatsapp/groups/${selectedGroup.id}/participants`, {
-        method: 'POST',
-        body: JSON.stringify({
-          participants: [participantJid],
-          action
-        })
+      const data = await apiFetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/participants`, {
+        method: 'POST', body: JSON.stringify({ participants: [participant], action })
       });
-      if (data.success) {
-        toast.success(`Participante ${actionLabel} com sucesso`);
-        fetchGroupDetails(selectedGroup.id);
-      } else {
-        toast.error(data.error || `Falha ao ${actionLabel} participante`);
+      if (data.success !== true) throw new Error(data.error || 'O WhatsApp não confirmou a operação.');
+      if (groupIdRef.current === jid) {
+        setNewMember("");
+        setMemberAction(null);
+        await fetchGroupDetails(jid, true);
       }
-    } catch (err) {
-      toast.error('Erro ao processar solicitação');
+      toast.success(action === "add" ? "Membro adicionado." : "Membro atualizado no WhatsApp.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao atualizar o membro.');
+      await fetchGroupDetails(jid, true);
+    } finally {
+      setMemberBusy(false);
     }
   };
 
   const handleLeaveGroup = async () => {
-    if (!selectedGroup) return;
-    
-    toast.info('Saindo do grupo...');
-
+    if (!selectedGroup || memberBusy) return;
+    const jid = selectedGroup.id;
+    setMemberBusy(true);
     try {
-      const data = await apiFetch(`/api/whatsapp/groups/${selectedGroup.id}/leave`, {
-        method: 'POST'
-      });
-      if (data.success) {
-        toast.success('Você saiu do grupo');
-        setSelectedGroup(null);
-        fetchGroups();
-      } else {
-        toast.error(data.error || 'Falha ao sair do grupo');
-      }
-    } catch (err) {
-      toast.error('Erro ao processar solicitação');
+      const data = await apiFetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/leave`, { method: 'POST' });
+      if (!data.success) throw new Error(data.error || 'O WhatsApp não confirmou a saída.');
+      if (groupIdRef.current === jid) closeGroup();
+      toast.success('A conta ligada saiu do grupo.');
+      await fetchGroups();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao sair do grupo.');
+    } finally {
+      setMemberBusy(false);
     }
   };
 
@@ -210,6 +217,8 @@ export default function Groups() {
   const filteredGroups = (groups || []).filter(g => 
     g.subject && g.subject.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const members = selectedGroup?.participants.filter((member) =>
+    `${memberLabel(member)} ${member.phoneNumber ?? ""} ${member.id}`.toLowerCase().includes(memberSearch.trim().toLowerCase())) ?? [];
 
   return (
     <div className="p-4 sm:p-8 max-w-7xl mx-auto min-screen transition-colors duration-500">
@@ -220,6 +229,7 @@ export default function Groups() {
         </div>
         <button 
           onClick={fetchGroups}
+          disabled={loading}
           className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors text-slate-600 font-medium shadow-sm"
         >
           <Users className="w-4 h-4" />
@@ -229,7 +239,7 @@ export default function Groups() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Sidebar: Group List */}
-        <div className="lg:col-span-4 space-y-4">
+        <div className={`lg:col-span-4 space-y-4 ${selectedGroup ? "hidden lg:block" : ""}`}>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
@@ -246,12 +256,16 @@ export default function Groups() {
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Seus Grupos ({filteredGroups.length})</span>
             </div>
             <div className="max-h-[600px] overflow-y-auto">
+              {!loading && listError && <div role="status" className="border-b border-amber-100 bg-amber-50 p-3 text-sm text-amber-900">
+                {listError === "offline" ? <Link to="/dashboard#ligar-whatsapp" className="font-semibold underline">Liga o WhatsApp para ver os grupos</Link>
+                  : "Não foi possível atualizar os grupos. Tenta atualizar a lista."}
+              </div>}
               {loading ? (
                 <div className="p-8 text-center">
                   <div className="animate-spin w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full mx-auto mb-2"></div>
                   <p className="text-sm text-slate-400">Carregando grupos...</p>
                 </div>
-              ) : filteredGroups.length === 0 ? (
+              ) : filteredGroups.length === 0 && !listError ? (
                 <div className="p-8 text-center text-slate-400">
                   <Users className="w-8 h-8 mx-auto mb-2 opacity-20" />
                   <p className="text-sm">Nenhum grupo encontrado</p>
@@ -268,7 +282,7 @@ export default function Groups() {
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold text-slate-900 truncate">{group.subject}</h3>
-                      <p className="text-xs text-slate-500 truncate">{group.id}</p>
+                      {group.size !== undefined && <p className="text-xs text-slate-500">{group.size} membros</p>}
                     </div>
                   </button>
                 ))
@@ -278,7 +292,7 @@ export default function Groups() {
         </div>
 
         {/* Main Content: Group Details & Rules */}
-        <div className="lg:col-span-8">
+        <div className="lg:col-span-8" ref={groupPanel}>
           <AnimatePresence mode="wait">
             {selectedGroup ? (
               <motion.div
@@ -292,7 +306,8 @@ export default function Groups() {
                 <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm relative overflow-hidden">
                   <div className="absolute top-0 right-0 p-4">
                     <button 
-                      onClick={() => setSelectedGroup(null)}
+                      onClick={closeGroup}
+                      aria-label="Fechar detalhes do grupo"
                       className="p-2 hover:bg-slate-100 rounded-full text-slate-400 transition-colors"
                     >
                       <ArrowLeft className="w-5 h-5" />
@@ -303,9 +318,9 @@ export default function Groups() {
                     <div className="w-16 h-16 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
                       <Users className="w-8 h-8" />
                     </div>
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-900">{selectedGroup.subject}</h2>
-                      <p className="text-slate-500 text-sm mt-1">{selectedGroup.desc || 'Sem descrição'}</p>
+                    <div className="min-w-0 pr-8">
+                      <h2 className="break-words text-xl font-bold text-slate-900 sm:text-2xl">{selectedGroup.subject}</h2>
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-500">{selectedGroup.desc || 'Sem descrição'}</p>
                       <div className="flex flex-wrap gap-2 mt-4">
                         <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-medium flex items-center gap-1">
                           <Users className="w-3 h-3" />
@@ -313,10 +328,10 @@ export default function Groups() {
                         </span>
                         <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium flex items-center gap-1">
                           <Shield className="w-3 h-3" />
-                          Admin Ativo
+                          {selectedGroup.permissions.manage ? "Administrador" : "Membro"}
                         </span>
                         <button 
-                          onClick={handleLeaveGroup}
+                          onClick={() => setLeaveConfirm(true)}
                           className="px-3 py-1 bg-red-50 text-red-600 hover:bg-red-100 rounded-full text-xs font-bold flex items-center gap-1 transition-colors"
                         >
                           <LogOut className="w-3 h-3" />
@@ -325,7 +340,17 @@ export default function Groups() {
                       </div>
                     </div>
                   </div>
+                  {leaveConfirm && <div className="mt-3 rounded-xl bg-red-50 p-3 text-sm" role="group" aria-label="Confirmar saída">
+                    <p>A conta ligada vai sair de <strong>{selectedGroup.subject}</strong>.</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setLeaveConfirm(false)}>Cancelar</Button>
+                      <Button size="sm" variant="danger" disabled={memberBusy} onClick={() => void handleLeaveGroup()}>Confirmar saída</Button>
+                    </div>
+                  </div>}
                 </div>
+
+                <GroupControls group={selectedGroup} permissions={selectedGroup.permissions}
+                  refresh={() => fetchGroupDetails(selectedGroup.id, true)} />
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Participants List */}
@@ -336,46 +361,58 @@ export default function Groups() {
                         Participantes
                       </h3>
                     </div>
+                    <div className="space-y-2 p-3">
+                      <Input aria-label="Procurar membros" placeholder="Procurar por nome ou número" value={memberSearch}
+                        onChange={(event) => setMemberSearch(event.target.value)} />
+                      {selectedGroup.permissions.manage && <form className="flex flex-wrap gap-2" onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleParticipantAction(newMember, "add");
+                      }}>
+                        <Input className="min-w-32 flex-1" aria-label="Número de WhatsApp do novo membro" type="tel" maxLength={32}
+                          placeholder="Número com indicativo" value={newMember} onChange={(event) => setNewMember(event.target.value)} />
+                        <Button type="submit" variant="outline" className="gap-1" disabled={memberBusy || !newMember.trim()}>
+                          <UserPlus size={15} /> Adicionar
+                        </Button>
+                      </form>}
+                      {memberAction && <div role="group" aria-label="Confirmar alteração de membro" className="rounded-lg bg-amber-50 p-2 text-sm">
+                        <p>{memberActions[memberAction.action]} ({memberLabel(memberAction.member)})?</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" onClick={() => setMemberAction(null)}>Cancelar</Button>
+                          <Button size="sm" disabled={memberBusy} variant={memberAction.action === "remove" ? "danger" : "primary"}
+                            onClick={() => void handleParticipantAction(memberAction.member.id, memberAction.action)}>Confirmar</Button>
+                        </div>
+                      </div>}
+                    </div>
                     <div className="flex-1 max-h-[400px] overflow-y-auto p-2 space-y-1">
-                      {selectedGroup.participants?.map((p: any) => (
+                      {members.length === 0 && <p className="p-3 text-sm text-slate-500">Nenhum membro encontrado.</p>}
+                      {members.map((p) => {
+                        const owner = p.admin === "superadmin" || p.isSuperAdmin;
+                        const admin = owner || p.admin === "admin" || p.isAdmin;
+                        const ownAccount = p.id === selectedGroup.permissions.selfId;
+                        return (
                         <div key={p.id} className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-xl transition-colors group">
                           <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 text-xs font-bold">
-                              {p.id.substring(0, 2)}
+                            <div aria-hidden="true" className="h-8 w-8 shrink-0 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xs font-bold">
+                              {memberLabel(p).substring(0, 2).toUpperCase()}
                             </div>
                             <div className="truncate">
-                              <p className="text-sm font-medium text-slate-900 truncate">{p.id.split('@')[0]}</p>
-                              {p.admin && <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Admin</span>}
+                              <p className="text-sm font-medium text-slate-900 truncate">{memberLabel(p)}</p>
+                              {(admin || ownAccount) && <span className="text-xs text-emerald-700">{[owner ? "Criador" : admin ? "Administrador" : null, ownAccount ? "Conta ligada" : null].filter(Boolean).join(" · ")}</span>}
                             </div>
                           </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                            {p.admin ? (
-                              <button
-                                onClick={() => handleParticipantAction(p.id, 'demote')}
-                                className="p-2 text-amber-500 hover:bg-amber-50 rounded-lg transition-colors"
-                                title="Remover Admin"
-                              >
-                                <Shield className="w-4 h-4" />
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleParticipantAction(p.id, 'promote')}
-                                className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors"
-                                title="Promover a Admin"
-                              >
-                                <ShieldCheck className="w-4 h-4" />
-                              </button>
-                            )}
-                            <button 
-                              onClick={() => handleParticipantAction(p.id, 'remove')}
-                              className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                              title="Remover do grupo"
-                            >
-                              <UserMinus className="w-4 h-4" />
-                            </button>
-                          </div>
+                          {selectedGroup.permissions.manage && !owner && !ownAccount && <div className="flex items-center gap-1">
+                            <Button size="icon" variant="ghost" disabled={memberBusy} title={memberActions[admin ? "demote" : "promote"]}
+                              aria-label={`${memberActions[admin ? "demote" : "promote"]}: ${memberLabel(p)}`}
+                              onClick={() => setMemberAction({ member: p, action: admin ? "demote" : "promote" })}>
+                              {admin ? <Shield size={16} /> : <ShieldCheck size={16} />}
+                            </Button>
+                            <Button size="icon" variant="ghost" disabled={memberBusy} title={memberActions.remove}
+                              aria-label={`${memberActions.remove}: ${memberLabel(p)}`}
+                              onClick={() => setMemberAction({ member: p, action: "remove" })}><UserMinus size={16} /></Button>
+                          </div>}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
