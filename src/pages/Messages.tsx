@@ -37,7 +37,7 @@ import { Input } from "../components/ui/Input";
 import { Card } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { cn } from "../lib/utils";
-import { apiFetch } from "../lib/api";
+import { ApiError, apiFetch } from "../lib/api";
 import { mergeMessage } from "../lib/chatMessages";
 import { useActivation } from "../lib/useActivation";
 import { VoiceRecorder } from "../components/VoiceRecorder";
@@ -59,6 +59,22 @@ interface Agent {
 }
 
 type ConversationFilter = "all" | "unread" | "ai" | "human" | "leads";
+
+async function loadConversations(signal?: AbortSignal): Promise<Contact[]> {
+  const result = await apiFetch("/api/whatsapp/chats", { signal, timeout: 12000 });
+  if (result?.success !== true || !Array.isArray(result.chats)) throw new Error("Lista de conversas indisponível.");
+  return result.chats;
+}
+
+function isDirectConversation(contact: Contact) {
+  const phone = contact.phone ?? "";
+  const lid = contact.lid ?? "";
+  const phoneDigits = phone.replace(/\D/g, "");
+  const lidDigits = lid.replace(/\D/g, "");
+  if (/@(g\.us|broadcast|newsletter)$/.test(phone) || /@(g\.us|broadcast|newsletter)$/.test(lid) ||
+      phoneDigits.startsWith("120363") || lidDigits.startsWith("120363")) return false;
+  return (phoneDigits.length >= 7 && phoneDigits.length <= 18) || lidDigits.length >= 5;
+}
 
 const getInitials = (name: string) => {
   return name
@@ -207,6 +223,8 @@ export default function Messages() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [contactsError, setContactsError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [newMessage, setNewMessage] = useState("");
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<ConversationFilter>("all");
@@ -261,17 +279,10 @@ export default function Messages() {
             if (data.length) setSelectedAgentId(data[0].id);
           }).catch((error) => console.error("Agents unavailable:", error));
 
-        // Initial contacts fetch (all contacts without exclusion)
-        const { data: initialContacts, error: contactsError } = await supabase
-          .from("contacts")
-          .select("*")
-          .eq("user_id", uId)
-          .order("last_message_at", { ascending: false, nullsFirst: false });
-
-        if (contactsError) throw contactsError;
-
-        if (isMounted && initialContacts) {
+        const initialContacts = await loadConversations();
+        if (isMounted) {
           setContacts(initialContacts);
+          setContactsError(null);
 
           // Deep link support: check for phone or contactId in query params
           const phoneParam = searchParams.get("phone");
@@ -281,7 +292,7 @@ export default function Messages() {
           if (contactIdParam) {
             targetContact = initialContacts.find(c => c.id === contactIdParam);
           } else if (phoneParam) {
-            targetContact = initialContacts.find(c => c.phone.includes(phoneParam) || phoneParam.includes(c.phone));
+            targetContact = initialContacts.find(c => c.phone && (c.phone.includes(phoneParam) || phoneParam.includes(c.phone)));
           }
 
           if (targetContact) {
@@ -291,8 +302,8 @@ export default function Messages() {
           }
         }
 
-      } catch (err) {
-        console.error("Messages init failed:", err);
+      } catch {
+        if (isMounted) setContactsError("Não foi possível carregar as conversas. A lista será consultada novamente.");
       }
     };
 
@@ -302,22 +313,23 @@ export default function Messages() {
 
   useEffect(() => {
     if (!userId) return;
-    let active = true;
+    const controller = new AbortController();
     let refreshing = false;
-    const refresh = async () => {
-      if (!active || refreshing || document.hidden) return;
+    const sync = async () => {
+      if (controller.signal.aborted || refreshing || document.hidden) return;
       refreshing = true;
       try {
-        const { data } = await supabase.from("contacts").select("*").eq("user_id", userId)
-          .order("last_message_at", { ascending: false, nullsFirst: false });
-        if (active && data) {
+        const data = await loadConversations(controller.signal);
+        if (!controller.signal.aborted) {
           setContacts((current) => JSON.stringify(current) === JSON.stringify(data) ? current : data);
+          setContactsError(null);
         }
+      } catch {
+        if (!controller.signal.aborted) setContactsError("Não foi possível carregar as conversas. A lista será consultada novamente.");
       } finally {
         refreshing = false;
       }
     };
-    const sync = () => { void refresh().catch((error) => console.error("Contact synchronization failed:", error)); };
     const channel = supabase.channel(`messages-contacts-${userId}`)
       .on("postgres_changes", {
         event: "*", schema: "public", table: "contacts", filter: `user_id=eq.${userId}`
@@ -326,7 +338,7 @@ export default function Messages() {
     const poll = window.setInterval(sync, 2000);
     document.addEventListener("visibilitychange", sync);
     return () => {
-      active = false;
+      controller.abort();
       window.clearInterval(poll);
       document.removeEventListener("visibilitychange", sync);
       void supabase.removeChannel(channel);
@@ -340,8 +352,10 @@ export default function Messages() {
     let active = true;
     let refreshing = false;
     let revision = 0;
+    const controller = new AbortController();
 
     setMessages([]);
+    setHistoryError(null);
     setCurrentLead(null);
     setIsNearBottom(true);
     setContactNotes(selectedContact.notes || "");
@@ -363,11 +377,12 @@ export default function Messages() {
       refreshing = true;
       const startedAt = revision;
       try {
-        const { data } = await supabase.from("messages").select("*")
-          .eq("user_id", userId).eq("contact_id", contactId)
-          .order("timestamp", { ascending: false }).order("id", { ascending: false }).limit(1000);
-        if (active && data && startedAt === revision) {
-          const ordered = data.reverse() as Message[];
+        const result = await apiFetch(`/api/whatsapp/chats/${contactId}/messages`, { signal: controller.signal, timeout: 12000 });
+        if (!active) return;
+        if (result?.success !== true || !Array.isArray(result.messages)) throw new Error("Histórico indisponível.");
+        setHistoryError(null);
+        if (startedAt === revision) {
+          const ordered: Message[] = result.messages;
           setMessages((current) => {
             const savedIds = new Set(ordered.map((message) => message.msg_id).filter(Boolean));
             const pending = current.filter((message) =>
@@ -376,11 +391,13 @@ export default function Messages() {
             return JSON.stringify(current) === JSON.stringify(next) ? current : next;
           });
         }
+      } catch {
+        if (active) setHistoryError("Não foi possível consultar o histórico. A conversa será consultada novamente.");
       } finally {
         refreshing = false;
       }
     };
-    const sync = () => { void refresh().catch((error) => console.error("Chat synchronization failed:", error)); };
+    const sync = () => { void refresh(); };
     const channel = supabase.channel(`messages-chat-${userId}-${contactId}`)
       .on("postgres_changes", {
         event: "INSERT", schema: "public", table: "messages", filter: `user_id=eq.${userId}`
@@ -396,6 +413,7 @@ export default function Messages() {
     document.addEventListener("visibilitychange", sync);
     return () => {
       active = false;
+      controller.abort();
       window.clearInterval(poll);
       document.removeEventListener("visibilitychange", sync);
       void supabase.removeChannel(channel);
@@ -512,7 +530,7 @@ export default function Messages() {
       return;
     }
 
-    const tempId = `temp-${Date.now()}`;
+    const tempId = `temp-${crypto.randomUUID()}`;
     const optimisticMsg: any = {
       id: tempId,
       user_id: userId,
@@ -534,41 +552,10 @@ export default function Messages() {
     setIsRecording(false);
     setShowQuickReplies(false);
 
-    // 🚀 2. Instant optimistic update to sidebar contacts list
-    setContacts(prev => {
-      const updated = prev.map(c => {
-        if (c.id === selectedContact.id) {
-          return {
-            ...c,
-            last_message_at: optimisticMsg.timestamp,
-            last_message_text: optimisticMsg.text,
-          };
-        }
-        return c;
-      });
-      const active = updated.find(c => c.id === selectedContact.id);
-      const rest = updated.filter(c => c.id !== selectedContact.id);
-      return active ? [active, ...rest] : updated;
-    });
-
-    // 🚀 3. Send over network in background
     try {
-      let targetJid = "";
-      if (selectedContact.lid && (!selectedContact.phone || selectedContact.phone === selectedContact.lid)) {
-        const cleanLid = selectedContact.lid.replace("@lid", "").replace(/\D/g, "");
-        targetJid = `${cleanLid}@lid`;
-      } else if (selectedContact.phone) {
-        let clean = selectedContact.phone.replace(/\D/g, "");
-        if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
-          clean = `258${clean}`;
-        }
-        targetJid = clean.startsWith("120363") ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
-      }
-
       const response = await apiFetch(`/api/whatsapp/send`, {
         method: "POST",
         body: JSON.stringify({
-          jid: targetJid,
           contactId: selectedContact.id,
           text: textToSend,
           mediaUrl,
@@ -579,9 +566,28 @@ export default function Messages() {
         }),
       });
 
-      if (!response.success) {
-        throw new Error(response.error || "Falha ao enviar mensagem");
+      if (response?.success !== true || !response.result?.key?.id) {
+        throw new Error(response?.error || "Envio por confirmar. Verifica no WhatsApp antes de repetir.");
       }
+      if (response.historySaved === false) {
+        toast.warning("O WhatsApp aceitou a mensagem. A confirmação no histórico ainda está pendente.");
+      }
+
+      setContacts(prev => {
+        const updated = prev.map(c => {
+          if (c.id === selectedContact.id) {
+            return {
+              ...c,
+              last_message_at: optimisticMsg.timestamp,
+              last_message_text: optimisticMsg.text,
+            };
+          }
+          return c;
+        });
+        const active = updated.find(c => c.id === selectedContact.id);
+        const rest = updated.filter(c => c.id !== selectedContact.id);
+        return active ? [active, ...rest] : updated;
+      });
 
       // Mark optimistic message as sent or replace with backend saved message
       if (response.message) {
@@ -603,10 +609,11 @@ export default function Messages() {
       console.error("Failed to send message:", err);
       // Remove failed optimistic message and restore input text
       setMessages(prev => prev.filter(m => m.id !== tempId));
-      if (!mediaUrl && textToSend && textOverride === undefined) {
-        setNewMessage(textToSend);
+      const definitivelyRejected = err instanceof ApiError && err.status !== undefined && err.status < 500;
+      if (definitivelyRejected && !mediaUrl && textToSend && textOverride === undefined) {
+        setNewMessage((draft) => draft || textToSend);
       }
-      toast.error(err.message || "Erro ao enviar mensagem.");
+      toast.error(definitivelyRejected ? err.message : "Envio por confirmar. Verifica no WhatsApp antes de repetir.");
     }
   };
 
@@ -784,23 +791,7 @@ export default function Messages() {
 
   // Filter Contacts for left column (Direct 1-on-1 Messages only - groups belong strictly in /groups)
   const filteredContacts = contacts.filter((c) => {
-    const cleanPhone = (c.phone || "").replace(/\D/g, "");
-    const cleanLid = (c.lid || "").replace(/\D/g, "");
-
-    // Exclude group/broadcast
-    if (
-      (c.phone && (c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanPhone.startsWith("120363"))) ||
-      (c.lid && (c.lid.includes("@g.us") || c.lid.includes("@broadcast") || cleanLid.startsWith("120363")))
-    ) {
-      return false;
-    }
-
-    // Must have either a valid phone (>= 7 digits) or a valid LID (>= 5 digits)
-    const hasValidPhone = cleanPhone.length >= 7 && cleanPhone.length <= 18;
-    const hasValidLid = cleanLid.length >= 5;
-    if (!hasValidPhone && !hasValidLid) {
-      return false;
-    }
+    if (!isDirectConversation(c)) return false;
 
     const term = search.toLowerCase().trim();
     const matchesSearch = !term ||
@@ -851,10 +842,7 @@ export default function Messages() {
                 activeFilter === "all" ? "bg-slate-900 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               )}
             >
-              Todas ({contacts.filter(c => {
-                const p = (c.phone || "").replace(/\D/g, "");
-                return !p.startsWith("120363") && !c.phone.includes("@g.us") && !c.phone.includes("@broadcast") && !c.phone.includes("@newsletter") && p.length >= 7 && p.length <= 18;
-              }).length})
+              Todas ({contacts.filter(isDirectConversation).length})
             </button>
             <button
               onClick={() => setActiveFilter("unread")}
@@ -891,6 +879,7 @@ export default function Messages() {
 
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto min-h-0 space-y-1 p-2 custom-scrollbar">
+          {contactsError && <p className="p-2 text-sm text-amber-800" role="status">{contactsError}</p>}
           {filteredContacts.length > 0 ? (
             filteredContacts.map((contact) => {
               const isSelected = selectedContact?.id === contact.id;
@@ -1103,9 +1092,12 @@ export default function Messages() {
             {/* Mensagens Body */}
             <div
               ref={messagesContainerRef}
+              role="log"
+              aria-label="Histórico da conversa"
               onScroll={handleMessagesScroll}
               className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-2 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
             >
+              {historyError && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800" role="status">{historyError}</p>}
               {messages.length > 0 ? (
                 messages.map((msg) => {
                   const isOut = msg.type === "outbound";
@@ -1335,6 +1327,7 @@ export default function Messages() {
                   />
                   <Button
                     type="submit"
+                    aria-label="Enviar mensagem"
                     size="icon"
                     className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md shadow-emerald-600/20"
                     disabled={loading || !newMessage.trim() || !isActivated}

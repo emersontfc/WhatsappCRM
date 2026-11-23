@@ -1,0 +1,39 @@
+CREATE ROLE anon;
+CREATE ROLE authenticated;
+CREATE ROLE service_role BYPASSRLS;
+
+CREATE TABLE public.users (id uuid PRIMARY KEY, email text, role text, plan text);
+CREATE TABLE public.plans (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text);
+CREATE TABLE public.subscriptions (user_id uuid PRIMARY KEY, messages_used integer DEFAULT 0, created_at timestamptz DEFAULT now());
+CREATE TABLE public.contacts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
+  name text, phone text, lid text, tags text[], notes text, unread_count integer DEFAULT 0,
+  last_message_at timestamptz, last_message_text text, ai_paused boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(), UNIQUE(user_id, phone)
+);
+CREATE TABLE public.messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
+  contact_id uuid REFERENCES public.contacts(id) ON DELETE CASCADE, type text, text text, msg_id text,
+  timestamp timestamptz, media_url text, media_type text, media_mimetype text, media_filename text, is_read boolean,
+  is_automated boolean DEFAULT false
+);
+CREATE UNIQUE INDEX fixture_unique_message ON public.messages(user_id, msg_id) WHERE msg_id IS NOT NULL AND msg_id != '';
+ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY fixture_profile ON public.users FOR SELECT TO authenticated
+  USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT SELECT ON public.users TO authenticated;
+
+INSERT INTO public.users VALUES
+  ('00000000-0000-4000-8000-000000000001', 'loja-a@example.invalid', 'admin', 'Admin'),
+  ('00000000-0000-4000-8000-000000000002', 'loja-b@example.invalid', 'admin', 'Admin');
+INSERT INTO public.subscriptions (user_id) SELECT id FROM public.users;
+INSERT INTO public.contacts (id, user_id, name, phone, lid, tags) VALUES
+  ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000001', 'Contacto com LID', NULL, '45678123456', '{}'),
+  ('00000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000002', 'Cliente da outra loja', '258870000001', NULL, '{}');
+INSERT INTO public.messages (user_id, contact_id, type, text, msg_id, timestamp)
+VALUES ('00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000022',
+        'inbound', 'Mensagem privada da outra loja', 'other-store-message', now());

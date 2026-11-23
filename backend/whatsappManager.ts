@@ -183,10 +183,6 @@ export class WhatsAppManager implements IWhatsAppTransport {
           await this.log(userId, "success", "WhatsApp conectado com sucesso!");
           onUpdate?.("connected");
 
-          // Clean up orphan contacts from older sessions asynchronously
-          this.cleanOrphanContactsFromPreviousSessions(userId).catch(e => {
-            console.error("[WhatsApp] Post-connection cleanup error:", e);
-          });
         }
 
         if (connection === "close") {
@@ -407,7 +403,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
     explicitMediaUrl?: string, 
     explicitMediaType?: string, 
     explicitMimetype?: string, 
-    explicitFilename?: string
+    explicitFilename?: string,
+    verifiedContactId?: string
   ): Promise<any> {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -454,8 +451,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
       const pushName = msg.pushName || "";
       const effectiveAltJid = altJid || msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
 
-      let contactId: string | null = null;
-      if (!isGroupOrBroadcast) {
+      let contactId = isGroupOrBroadcast ? null : verifiedContactId ?? null;
+      if (!isGroupOrBroadcast && !contactId) {
         const cId = await this.getOrCreateContact(userId, jid, pushName, effectiveAltJid);
         if (cId && cId !== "unknown") {
           contactId = cId;
@@ -567,6 +564,11 @@ export class WhatsAppManager implements IWhatsAppTransport {
         }).select().maybeSingle();
 
         if (insertError) {
+          if (insertError.code === "23505" && msgId) {
+            const { data: existing } = await supabaseAdmin.from("messages").select("*")
+              .eq("user_id", userId).eq("msg_id", msgId).maybeSingle();
+            if (existing) return existing;
+          }
           console.error(`[WhatsApp] Error persisting message for user ${userId}, msg_id ${msgId}:`, insertError.message);
         } else {
           savedMsg = inserted;
@@ -575,7 +577,9 @@ export class WhatsAppManager implements IWhatsAppTransport {
         console.error(`[WhatsApp] Database insert exception for msg ${msgId}:`, err.message);
       }
 
-      // Update contact metadata
+      if (!savedMsg) return null;
+
+      // Update contact metadata after persisting the message.
       if (contactId) {
         try {
           await supabaseAdmin
@@ -584,7 +588,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
               last_message_at: validTimestamp,
               last_message_text: text.substring(0, 100)
             })
-            .eq("id", contactId);
+            .eq("id", contactId).eq("user_id", userId);
         } catch (updateErr: any) {
           console.warn("[WhatsApp] Could not update contact last_message:", updateErr.message);
         }
@@ -595,13 +599,13 @@ export class WhatsAppManager implements IWhatsAppTransport {
             const { data: currentContact } = await supabaseAdmin
               .from("contacts")
               .select("unread_count")
-              .eq("id", contactId)
+              .eq("id", contactId).eq("user_id", userId)
               .maybeSingle();
             
             await supabaseAdmin
               .from("contacts")
               .update({ unread_count: (currentContact?.unread_count || 0) + 1 })
-              .eq("id", contactId);
+              .eq("id", contactId).eq("user_id", userId);
           } catch (unreadErr: any) {
             console.warn("[WhatsApp] Could not increment unread_count:", unreadErr.message);
           }
@@ -963,7 +967,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
     return this.sessions.get(userId);
   }
 
-  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number, mimetype?: string, fileName?: string) {
+  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number, mimetype?: string, fileName?: string, verifiedContactId?: string) {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") {
       throw new Error("WhatsApp session not connected.");
@@ -1053,7 +1057,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
     // Sync the sent message back to DB if it's not a status
     let savedMsg: any = null;
-    if (result && !isStatus) {
+    if (result?.key?.id && !isStatus) {
       savedMsg = await this.syncMessage(
         userId, 
         {
@@ -1076,7 +1080,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
         mediaUrl,
         mediaType,
         mimetype,
-        fileName
+        fileName,
+        verifiedContactId
       );
     }
 

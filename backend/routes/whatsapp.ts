@@ -1,6 +1,6 @@
 import groupAdministrationRoutes from "./groups.ts";
 import { invalidateGroupRules, isGroupJid, readGroupRulePatch } from "../services/groupModeration.ts";
-import { dispatchScheduled } from "../services/scheduledDispatch.ts";
+import { dispatchScheduled, scheduledContactJid } from "../services/scheduledDispatch.ts";
 import express from "express";
 import { whatsappManager } from "../whatsappManager.ts";
 import { AuthRequest } from "../middleware/auth.ts";
@@ -8,6 +8,7 @@ import { getPlan } from "../lib/plan.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 const router = express.Router();
+const contactUuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 // Debug middleware for this router
 router.use((req, res, next) => {
@@ -64,13 +65,33 @@ router.get(["/chats", "/chats/"], async (req: AuthRequest, res) => {
       .from("contacts")
       .select("*")
       .eq("user_id", userId)
-      .order("last_message_at", { ascending: false, nullsFirst: false });
+      .order("last_message_at", { ascending: false, nullsFirst: false })
+      .abortSignal(AbortSignal.timeout(8000));
 
     if (error) throw error;
-    res.json({ success: true, chats: contacts });
+    res.set("Cache-Control", "no-store").json({ success: true, chats: contacts ?? [] });
   } catch (err: any) {
-    console.error("[WhatsApp Sync] Error for user", userId, ":", err);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("[WhatsApp] Failed to list conversations", err?.code);
+    res.status(503).json({ success: false, error: "Não foi possível consultar as conversas. Tenta novamente." });
+  }
+});
+
+router.get("/chats/:contactId/messages", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const { contactId } = req.params;
+  if (!userId) return res.status(401).json({ error: "Inicia sessão para ver a conversa." });
+  if (!contactUuid.test(contactId)) return res.status(400).json({ error: "Conversa inválida." });
+
+  try {
+    const { data, error } = await supabaseAdmin.from("messages").select("*")
+      .eq("user_id", userId).eq("contact_id", contactId)
+      .order("timestamp", { ascending: false }).order("id", { ascending: false })
+      .limit(1000).abortSignal(AbortSignal.timeout(8000));
+    if (error) throw error;
+    return res.set("Cache-Control", "no-store").json({ success: true, messages: (data ?? []).reverse() });
+  } catch (error) {
+    console.error("[WhatsApp] Failed to load conversation", (error as { code?: string })?.code);
+    return res.status(503).json({ error: "Não foi possível consultar o histórico. Tenta novamente." });
   }
 });
 
@@ -337,18 +358,32 @@ router.get("/me", (req: AuthRequest, res) => {
 
 router.post("/send", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  let { jid, text, to, mediaUrl, mediaType, duration, contactId } = req.body;
+  const { jid, text, to, mediaUrl, mediaType, duration, contactId, mimetype, fileName } = req.body ?? {};
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const plan = await getPlan(userId);
   if (!plan) return res.status(403).json({ success: false, error: "Plan not found" });
 
-  // Handle both 'jid' and 'to' for backward compatibility
-  if (!jid && to) jid = to;
+  const messageText = typeof text === "string" ? text : "";
+  let formattedJid = jid || to;
+  if ((!formattedJid && !contactId) || (!messageText.trim() && !mediaUrl)) {
+    return res.status(400).json({ success: false, error: "Seleciona um destino e escreve uma mensagem ou anexa um ficheiro." });
+  }
 
-  if (!jid || (!text && !mediaUrl)) {
-    return res.status(400).json({ success: false, error: "jid and (text or mediaUrl) are required" });
+  if (contactId) {
+    if (typeof contactId !== "string" || !contactUuid.test(contactId)) {
+      return res.status(400).json({ success: false, error: "Conversa inválida." });
+    }
+    const { data: contact, error } = await supabaseAdmin.from("contacts")
+      .select("id,phone,lid").eq("id", contactId).eq("user_id", userId)
+      .abortSignal(AbortSignal.timeout(8000)).maybeSingle();
+    if (error) return res.status(503).json({ success: false, error: "Não foi possível verificar o contacto." });
+    if (!contact) return res.status(404).json({ success: false, error: "Conversa indisponível nesta conta." });
+
+    const groupJid = `${contact.phone?.replace(/\D/g, "") ?? ""}@g.us`;
+    formattedJid = groupJid.startsWith("120363") && isGroupJid(groupJid) ? groupJid : scheduledContactJid(contact);
+    if (!formattedJid) return res.status(400).json({ success: false, error: "O contacto ainda não tem um destino válido no WhatsApp." });
   }
 
   // Enforce max messages per day
@@ -370,51 +405,14 @@ router.post("/send", async (req: AuthRequest, res) => {
     });
   }
 
-  let resolvedContactId = contactId;
-  let contactRecord: any = null;
-  if (resolvedContactId) {
-    const { data: c } = await supabaseAdmin
-      .from("contacts")
-      .select("id, phone, lid")
-      .eq("id", resolvedContactId)
-      .eq("user_id", userId)
-      .maybeSingle();
-    contactRecord = c;
-  }
-
-  // Determine formatted JID
-  let formattedJid = jid;
-  if (contactRecord) {
-    if (contactRecord.lid && (!contactRecord.phone || contactRecord.phone === contactRecord.lid)) {
-      const cleanLid = contactRecord.lid.replace("@lid", "").replace(/\D/g, "");
-      formattedJid = `${cleanLid}@lid`;
-    } else if (contactRecord.phone) {
-      let clean = contactRecord.phone.replace(/\D/g, "");
-      if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
-        clean = `258${clean}`;
-      }
-      formattedJid = clean.startsWith("120363") ? `${clean}@g.us` : `${clean}@s.whatsapp.net`;
-    }
-  }
-
-  if (!formattedJid) {
-    let cleanDigits = (jid || "").replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@newsletter|@lid/g, "").replace(/\D/g, "");
-    if (cleanDigits.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanDigits.slice(0, 2))) {
-      cleanDigits = `258${cleanDigits}`;
-    }
-    const isLid = (jid || "").includes("@lid") || (cleanDigits.length === 15 && !cleanDigits.startsWith("258"));
-    if (cleanDigits.startsWith("120363") || (jid || "").includes("@g.us")) {
-      formattedJid = `${cleanDigits}@g.us`;
-    } else if (isLid) {
-      formattedJid = `${cleanDigits}@lid`;
-    } else {
-      formattedJid = `${cleanDigits}@s.whatsapp.net`;
-    }
-  }
-
   try {
-    const result = await whatsappManager.sendMessage(userId, formattedJid, text || "", mediaUrl, mediaType, duration);
-    
+    const result = await whatsappManager.sendMessage(
+      userId, formattedJid, messageText, mediaUrl, mediaType, duration, mimetype, fileName, contactId
+    );
+    if (!result?.key?.id) {
+      return res.status(502).json({ success: false, error: "Envio por confirmar. Verifica no WhatsApp antes de repetir." });
+    }
+
     // Increment usage
     await supabaseAdmin
       .from("subscriptions")
@@ -432,17 +430,14 @@ router.post("/send", async (req: AuthRequest, res) => {
       savedMessage = existing;
     }
 
-    if (savedMessage?.contact_id) {
-      resolvedContactId = savedMessage.contact_id;
-    }
-
-    res.json({ success: true, result, message: savedMessage, contact_id: resolvedContactId });
+    res.json({ success: true, result, message: savedMessage, historySaved: Boolean(savedMessage),
+      contact_id: savedMessage?.contact_id ?? contactId });
   } catch (err: any) {
     console.error("Failed to send message:", err);
     if (err.message && err.message.includes("WhatsApp session not connected")) {
-      return res.json({ success: false, error: err.message });
+      return res.status(409).json({ success: false, error: "Liga o WhatsApp no painel antes de enviar." });
     }
-    res.status(500).json({ success: false, error: err.message });
+    res.status(502).json({ success: false, error: "Envio por confirmar. Verifica no WhatsApp antes de repetir." });
   }
 });
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import { 
   Bot, 
   X, 
@@ -38,6 +39,7 @@ const QUICK_PROMPTS = [
 ];
 
 export function AgentexCopilot() {
+  const { pathname } = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<CopilotMessage[]>(() => {
     try {
@@ -175,7 +177,8 @@ export function AgentexCopilot() {
       <button
         onClick={() => setIsOpen(true)}
         className={cn(
-          "fixed bottom-5 right-5 z-40 flex items-center gap-2.5 px-4 py-3 rounded-2xl",
+          "fixed right-5 z-40 flex items-center gap-2.5 px-4 py-3 rounded-2xl",
+          pathname.replace(/\/$/, "") === "/messages" ? "bottom-20" : "bottom-5",
           "bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 text-white font-bold text-xs uppercase tracking-wider",
           "shadow-xl shadow-emerald-600/30 hover:shadow-2xl hover:shadow-emerald-600/40 hover:scale-105 active:scale-95",
           "transition-all duration-300 cursor-pointer border border-emerald-400/40 backdrop-blur-sm group",

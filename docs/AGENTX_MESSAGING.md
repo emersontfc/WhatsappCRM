@@ -94,3 +94,22 @@ Melhorias implementadas em `src/pages/Messages.tsx`:
      - `[Assumir Conversa]` pausa a IA nesta conversa específica (`contacts.ai_paused = true`).
      - `[Retomar IA]` devolve a conversa ao agente autónomo (`contacts.ai_paused = false`).
    - `handleAgentMessage` respeita rigorosamente a flag `ai_paused` e não interfere nas conversas em atendimento humano.
+
+## Validação da caixa de entrada para o piloto de vendas
+
+O primeiro percurso do piloto é receber uma mensagem direta, responder pelo painel e abrir a mesma conversa depois de reiniciar o AgentX. O painel consulta contactos e histórico pela API autenticada. Uma resposta aceite no WhatsApp tem um identificador de envio. A API também indica se a mensagem ficou guardada no histórico.
+
+Execute o teste isolado da API e da persistência com Docker e as dependências do projeto instaladas.
+
+```bash
+bash tests/integration/run-agentx-inbox.sh
+```
+
+Para incluir o login, a caixa de entrada em largura de telemóvel e a resposta no painel, compile o frontend e execute com Playwright disponível e Chromium instalado.
+
+```bash
+npm run build
+AGENTX_INBOX_BROWSER=1 bash tests/integration/run-agentx-inbox.sh
+```
+
+O teste cria PostgreSQL e PostgREST descartáveis e inicia o servidor real do AgentX duas vezes. Verifica contas distintas, receção, envio, histórico e reentrega do mesmo evento sem duplicar a mensagem. A sessão de login e o transporte WhatsApp são simulados. O ensaio com números reais requer um ambiente separado e uma conta WhatsApp de teste.
