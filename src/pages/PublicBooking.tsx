@@ -483,11 +483,12 @@ export default function PublicBooking() {
                 </div>
 
                 <div>
-                  <label className="block mb-1">Observações ou Sintomas (Opcional)</label>
+                  <label className="block mb-1">Observações de horário (opcional)</label>
                   <textarea
                     rows={2}
-                    placeholder="Alguma informação importante para a consulta..."
+                    placeholder="Ex.: Prefiro ser atendido de manhã."
                     value={notes}
+                    maxLength={500}
                     onChange={(e) => setNotes(e.target.value)}
                     className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                   />

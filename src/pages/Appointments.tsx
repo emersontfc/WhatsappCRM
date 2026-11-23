@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { fetchBusinessProfile } from "../lib/niches";
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -21,6 +24,7 @@ import {
   MessageCircle,
   Share2,
   CalendarCheck,
+  BellRing,
   Check,
   Phone,
   Sparkles
@@ -68,6 +72,8 @@ interface Appointment {
   end_time: string;
   status: "scheduled" | "confirmed" | "completed" | "cancelled";
   notes?: string;
+  reminder_24h_sent?: boolean | null;
+  reminder_2h_sent?: boolean | null;
   services?: Service;
   professionals?: Professional;
 }
@@ -83,7 +89,28 @@ const DAY_LABELS: Record<string, string> = {
 };
 
 export default function Appointments() {
-  const [activeTab, setActiveTab] = useState<"agenda" | "services" | "professionals" | "share">("agenda");
+  const [params, setParams] = useSearchParams();
+  const requestedTab = params.get("tab");
+  const activeTab = requestedTab === "services" || requestedTab === "professionals" ||
+    requestedTab === "share" || requestedTab === "reminders" ? requestedTab : "agenda";
+  const setActiveTab = (next: string) => setParams((current) => {
+    const updated = new URLSearchParams(current);
+    updated.set("tab", next);
+    updated.delete("new");
+    return updated;
+  });
+  const [profile, setProfile] = useState("general");
+  const clinic = params.get("context") === "clinic" || (!params.get("context") && profile === "clinic");
+  const salon = params.get("context") === "salon" || (!params.get("context") && profile === "services");
+  const appointmentLabel = clinic ? "consulta" : salon ? "atendimento" : "marcação";
+  const customerLabel = clinic ? "paciente" : "cliente";
+  const [timeZone, setTimeZone] = useState("Africa/Maputo");
+  const today = formatInTimeZone(new Date(), timeZone, "yyyy-MM-dd");
+  const [sendingReminder, setSendingReminder] = useState<string | null>(null);
+  const [confirmReminder, setConfirmReminder] = useState<string | null>(null);
+  const [whatsapp, setWhatsapp] = useState<"checking" | "connected" | "disconnected" | "unavailable">("checking");
+  const [reminderAppointments, setReminderAppointments] = useState<Appointment[] | null>(null);
+  const [remindersUnavailable, setRemindersUnavailable] = useState(false);
   const [userId, setUserId] = useState<string>("");
   const [loading, setLoading] = useState(true);
 
@@ -93,7 +120,7 @@ export default function Appointments() {
   const [professionals, setProfessionals] = useState<Professional[]>([]);
 
   // Filters & State
-  const [filterDate, setFilterDate] = useState<string>(new Date().toISOString().split("T")[0]);
+  const [filterDate, setFilterDate] = useState<string>(today);
   const [filterProf, setFilterProf] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -110,7 +137,7 @@ export default function Appointments() {
     customer_phone: "",
     service_id: "",
     professional_id: "",
-    appointment_date: new Date().toISOString().split("T")[0],
+    appointment_date: today,
     start_time: "09:00",
     notes: ""
   });
@@ -140,7 +167,51 @@ export default function Appointments() {
 
   useEffect(() => {
     loadInitialData();
+    let active = true;
+    void fetchBusinessProfile().then(({ type, timezone }) => {
+      if (!active) return;
+      setProfile(type);
+      try {
+        const localDate = formatInTimeZone(Date.now(), timezone, "yyyy-MM-dd");
+        setTimeZone(timezone);
+        setFilterDate((current) => current === today ? localDate : current);
+        setAppForm((current) => current.appointment_date === today ? { ...current, appointment_date: localDate } : current);
+      } catch { /* Invalid profiles use the default time zone. */ }
+    });
+    return () => { active = false; };
   }, []);
+
+  const newAppointment = params.get("new") === "appointment";
+  useEffect(() => {
+    if (!newAppointment) return;
+    setShowAppModal(true);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("new");
+      return next;
+    }, { replace: true });
+  }, [newAppointment, setParams]);
+
+  useEffect(() => {
+    if (activeTab !== "reminders") return;
+    let active = true;
+    setReminderAppointments(null);
+    const refresh = () => {
+      if (document.hidden) return;
+      void apiFetch("/api/whatsapp/status")
+        .then(({ status }) => { if (active) setWhatsapp(status === "connected" ? "connected" : "disconnected"); })
+        .catch(() => { if (active) setWhatsapp("unavailable"); });
+      void apiFetch(`/api/appointments?startDate=${today}`)
+        .then(({ success, data }) => {
+          if (!success) throw new Error("Agenda indisponível");
+          if (active) { setReminderAppointments(data ?? []); setRemindersUnavailable(false); }
+        })
+        .catch(() => { if (active) setRemindersUnavailable(true); });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [activeTab, today]);
 
   const loadInitialData = async () => {
     setLoading(true);
@@ -171,6 +242,20 @@ export default function Appointments() {
       if (res.success) setAppointments(res.data || []);
     } catch (_) {}
   };
+
+  async function sendReminder(id: string) {
+    if (sendingReminder) return;
+    setSendingReminder(id);
+    try {
+      await apiFetch(`/api/appointments/${id}/reminder`, { method: "POST" });
+      toast.success("Lembrete aceite pelo WhatsApp.");
+      setConfirmReminder(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível enviar o lembrete.");
+    } finally {
+      setSendingReminder(null);
+    }
+  }
 
   // Status updates
   const handleUpdateStatus = async (appId: string, newStatus: Appointment["status"]) => {
@@ -215,14 +300,19 @@ export default function Appointments() {
         body: JSON.stringify(appForm)
       });
       if (res.success) {
-        toast.success("Consulta agendada com sucesso!");
+        toast.success("Marcação guardada.");
         setShowAppModal(false);
+        setFilterDate(appForm.appointment_date);
+        setFilterProf("all");
+        setFilterStatus("all");
+        setSearchQuery("");
+        if (activeTab !== "agenda") setActiveTab("agenda");
         setAppForm({
           customer_name: "",
           customer_phone: "",
           service_id: "",
           professional_id: "",
-          appointment_date: new Date().toISOString().split("T")[0],
+          appointment_date: today,
           start_time: "09:00",
           notes: ""
         });
@@ -357,9 +447,15 @@ export default function Appointments() {
   };
 
   // Metrics
-  const totalToday = appointments.filter(a => a.appointment_date === new Date().toISOString().split("T")[0]).length;
-  const confirmedToday = appointments.filter(a => a.appointment_date === new Date().toISOString().split("T")[0] && a.status === "confirmed").length;
+  const totalToday = appointments.filter(a => a.appointment_date === today).length;
+  const confirmedToday = appointments.filter(a => a.appointment_date === today && a.status === "confirmed").length;
   const pendingCount = appointments.filter(a => a.status === "scheduled").length;
+
+  const upcoming = (reminderAppointments ?? []).filter((appointment) =>
+    (appointment.status === "scheduled" || appointment.status === "confirmed") &&
+    fromZonedTime(`${appointment.appointment_date}T${appointment.start_time}`, timeZone).getTime() > Date.now());
+  const hasService = services.some((service) => service.active);
+  const hasProfessional = professionals.some((professional) => professional.active);
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto animate-in fade-in duration-300">
@@ -368,17 +464,11 @@ export default function Appointments() {
         <div className="absolute top-0 right-0 w-96 h-96 bg-white/10 rounded-full blur-3xl pointer-events-none" />
         
         <div className="relative z-10 space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-white/20 text-white backdrop-blur-md">
-              Módulo de Saúde & Serviços
-            </span>
-            <Sparkles size={16} className="text-amber-300 animate-pulse" />
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-            Agenda & Gestão de Consultas
+          <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
+            {clinic ? "Receção da clínica" : salon ? "Agenda do salão" : "Marcações e lembretes"}
           </h1>
-          <p className="text-emerald-100 text-xs sm:text-sm max-w-xl leading-relaxed">
-            Organize horários, envie lembretes automáticos no WhatsApp e compartilhe seu link de auto-agendamento com pacientes e clientes.
+          <p className="max-w-xl text-sm leading-relaxed text-emerald-100">
+            Define os serviços e horários, partilha o link de marcação e acompanha os avisos por WhatsApp.
           </p>
         </div>
 
@@ -393,10 +483,21 @@ export default function Appointments() {
             onClick={() => setShowAppModal(true)}
             className="bg-white text-emerald-800 hover:bg-emerald-50 rounded-2xl gap-2 font-bold shadow-lg"
           >
-            <Plus size={18} /> Nova Consulta
+            <Plus size={18} /> {clinic ? "Marcar consulta" : salon ? "Marcar atendimento" : "Nova marcação"}
           </Button>
         </div>
       </div>
+
+      {!loading && (!hasService || !hasProfessional) && (
+        <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-4 text-sm sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-slate-700">{!hasService
+            ? "Adiciona um serviço ativo para que os clientes possam marcar pelo link."
+            : "Adiciona profissionais se quiseres oferecer horários por pessoa."}</p>
+          <Button variant="outline" size="sm" onClick={() => setActiveTab(hasService ? "professionals" : "services")}>
+            {hasService ? "Definir horários da equipa" : "Configurar serviços"}
+          </Button>
+        </div>
+      )}
 
       {/* Metrics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -405,7 +506,7 @@ export default function Appointments() {
             <CalendarIcon size={24} />
           </div>
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Consultas Hoje</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Marcações de hoje</p>
             <p className="text-2xl font-black text-slate-800">{totalToday}</p>
           </div>
         </div>
@@ -415,7 +516,7 @@ export default function Appointments() {
             <CheckCircle2 size={24} />
           </div>
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Confirmadas Hoje</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Confirmadas hoje</p>
             <p className="text-2xl font-black text-teal-700">{confirmedToday}</p>
           </div>
         </div>
@@ -473,6 +574,11 @@ export default function Appointments() {
         >
           <Share2 size={16} /> Link de Auto-Agendamento
         </button>
+        <button type="button" onClick={() => setActiveTab("reminders")} aria-pressed={activeTab === "reminders"}
+          className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3 pb-3 text-sm font-bold ${activeTab === "reminders"
+            ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-600 hover:text-slate-900"}`}>
+          <BellRing size={16} aria-hidden="true" /> Lembretes
+        </button>
       </div>
 
       {/* TAB 1: AGENDA */}
@@ -493,7 +599,7 @@ export default function Appointments() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setFilterDate(new Date().toISOString().split("T")[0])}
+                  onClick={() => setFilterDate(today)}
                   className="h-6 px-2 text-[10px] font-bold text-emerald-600"
                 >
                   Hoje
@@ -630,7 +736,7 @@ export default function Appointments() {
                 <CalendarIcon size={40} className="mx-auto text-slate-300" />
                 <p className="text-sm font-semibold text-slate-600">Nenhum agendamento encontrado para esta data.</p>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                  Clique em "Nova Consulta" ou compartilhe o seu link público para os pacientes agendarem.
+                  Cria uma marcação ou partilha o link para receber pedidos de horário.
                 </p>
                 <Button
                   onClick={() => setShowAppModal(true)}
@@ -808,6 +914,42 @@ export default function Appointments() {
         </div>
       )}
 
+      {activeTab === "reminders" && (
+        <section aria-labelledby="reminders-heading" className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+          <div>
+            <h2 id="reminders-heading" className="text-lg font-bold text-slate-900">Lembretes das próximas marcações</h2>
+            <p className="mt-1 text-sm text-slate-600">Os avisos automáticos usam o fuso {timeZone}. A agenda tenta enviar até dois avisos, a partir de 24 h e 2 h antes, enquanto a marcação estiver ativa.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="font-medium">{{ checking: "A confirmar ligação ao WhatsApp…", connected: "WhatsApp ligado", disconnected: "WhatsApp desligado", unavailable: "Ligação ao WhatsApp por verificar" }[whatsapp]}</span>
+            {whatsapp !== "connected" && <Link to="/dashboard#ligar-whatsapp" className="font-semibold text-emerald-800 underline">Ver ligação</Link>}
+            <Link to="/settings?tab=niche" className="font-semibold text-emerald-800 underline">Definir fuso do negócio</Link>
+          </div>
+          {remindersUnavailable ? <p role="status">Não foi possível consultar os lembretes. A agenda tentará novamente.</p>
+          : !reminderAppointments ? <p role="status">A carregar marcações…</p> : upcoming.length === 0 ? (
+            <p className="rounded-xl bg-slate-50 p-3 text-sm">Sem marcações ativas no futuro.</p>
+          ) : <ul className="divide-y divide-slate-100">
+            {upcoming.map((item) => <li key={item.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <strong className="text-sm">{item.customer_name}</strong>
+                <p className="text-sm text-slate-600">{item.appointment_date.split("-").reverse().join("/")} · {item.start_time.slice(0, 5)}</p>
+                <p className="mt-1 text-sm text-slate-700">{item.customer_phone
+                  ? `24 h: ${item.reminder_24h_sent ? "Enviado" : "Sem envio"} · 2 h: ${item.reminder_2h_sent ? "Enviado" : "Sem envio"}`
+                  : "Sem número WhatsApp"}</p>
+              </div>
+              {confirmReminder === item.id ? <div className="grid gap-2">
+                <p className="text-sm">Enviar agora para {item.customer_phone}?</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => void sendReminder(item.id)} disabled={Boolean(sendingReminder) || whatsapp !== "connected"}>Confirmar envio</Button>
+                  <Button size="sm" variant="outline" onClick={() => setConfirmReminder(null)} disabled={Boolean(sendingReminder)}>Cancelar envio</Button>
+                </div>
+              </div> : item.customer_phone && <Button size="sm" variant="outline" disabled={whatsapp !== "connected" || Boolean(sendingReminder)}
+                onClick={() => setConfirmReminder(item.id)}>Enviar lembrete agora</Button>}
+            </li>)}
+          </ul>}
+        </section>
+      )}
+
       {/* TAB 4: SHARE LINK */}
       {activeTab === "share" && (
         <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto space-y-6 text-center">
@@ -816,7 +958,8 @@ export default function Appointments() {
           </div>
 
           <div className="space-y-1">
-            <h2 className="text-xl font-black text-slate-900">Seu Link de Auto-Agendamento Online</h2>
+            <h2 className="text-xl font-black text-slate-900">O teu link de marcação</h2>
+            {!hasService && <p className="text-sm font-medium text-amber-800">É preciso ter pelo menos um serviço ativo para aceitar marcações por este link.</p>}
             <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
               Envie esse link no WhatsApp, coloque na bio do seu Instagram ou imprima o QR Code no balcão da sua recepção.
             </p>
@@ -840,6 +983,7 @@ export default function Appointments() {
             />
             <Button
               onClick={copyBookingLink}
+              disabled={!hasService || !bookingUrl}
               className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs gap-1.5 font-bold shrink-0 shadow-sm"
             >
               {copiedLink ? <Check size={14} /> : <Copy size={14} />}
@@ -863,16 +1007,16 @@ export default function Appointments() {
       {/* MODAL: NOVA CONSULTA MANUAL */}
       {showAppModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-slate-100 space-y-4 animate-in zoom-in-95">
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-lg space-y-4 overflow-y-auto rounded-3xl border border-slate-100 bg-white p-4 shadow-2xl sm:p-6">
             <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="font-bold text-base text-slate-900">Agendar Nova Consulta</h3>
+              <h3 className="text-base font-bold text-slate-900">Marcar {appointmentLabel}</h3>
               <button onClick={() => setShowAppModal(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
 
             <form onSubmit={handleSaveAppointment} className="space-y-4 text-xs font-semibold text-slate-700">
               <div>
-                <label className="block mb-1">Nome do Paciente / Cliente *</label>
-                <input
+                <label htmlFor="appointment-customer" className="block mb-1">Nome do {customerLabel} *</label>
+                <input id="appointment-customer"
                   type="text"
                   required
                   placeholder="Ex: João Silva"
@@ -883,46 +1027,48 @@ export default function Appointments() {
               </div>
 
               <div>
-                <label className="block mb-1">WhatsApp do Paciente</label>
-                <input
-                  type="text"
+                <label htmlFor="appointment-phone" className="block mb-1">WhatsApp do {customerLabel}</label>
+                <input id="appointment-phone"
+                  type="tel"
+                  aria-describedby="appointment-phone-help"
                   placeholder="Ex: 841234567"
                   value={appForm.customer_phone}
                   onChange={e => setAppForm({...appForm, customer_phone: e.target.value})}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 />
+                <p id="appointment-phone-help" className="mt-1 text-xs font-normal text-slate-600">Adiciona o número para enviar lembretes por WhatsApp.</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block mb-1">Serviço / Procedimento</label>
-                  <select
+                  <label htmlFor="appointment-service" className="block mb-1">Serviço / Procedimento</label>
+                  <select id="appointment-service"
                     value={appForm.service_id}
                     onChange={e => setAppForm({...appForm, service_id: e.target.value})}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
                   >
                     <option value="">Selecione...</option>
-                    {services.map(s => <option key={s.id} value={s.id}>{s.name} ({s.price} MT)</option>)}
+                    {services.filter((service) => service.active).map(s => <option key={s.id} value={s.id}>{s.name} ({s.price} MT)</option>)}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block mb-1">Profissional Responsável</label>
-                  <select
+                  <label htmlFor="appointment-professional" className="block mb-1">Profissional Responsável</label>
+                  <select id="appointment-professional"
                     value={appForm.professional_id}
                     onChange={e => setAppForm({...appForm, professional_id: e.target.value})}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
                   >
                     <option value="">Selecione...</option>
-                    {professionals.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {professionals.filter((professional) => professional.active).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block mb-1">Data da Consulta *</label>
-                  <input
+                  <label htmlFor="appointment-date" className="block mb-1">Data *</label>
+                  <input id="appointment-date"
                     type="date"
                     required
                     value={appForm.appointment_date}
@@ -932,8 +1078,8 @@ export default function Appointments() {
                 </div>
 
                 <div>
-                  <label className="block mb-1">Horário de Início *</label>
-                  <input
+                  <label htmlFor="appointment-time" className="block mb-1">Horário de Início *</label>
+                  <input id="appointment-time"
                     type="time"
                     required
                     value={appForm.start_time}
@@ -944,10 +1090,10 @@ export default function Appointments() {
               </div>
 
               <div>
-                <label className="block mb-1">Observações Internas (Opcional)</label>
-                <textarea
+                <label htmlFor="appointment-notes" className="block mb-1">Observações Internas (Opcional)</label>
+                <textarea id="appointment-notes"
                   rows={2}
-                  placeholder="Ex: Primeira consulta, trazer exames..."
+                  placeholder="Ex: Preferência de horário"
                   value={appForm.notes}
                   onChange={e => setAppForm({...appForm, notes: e.target.value})}
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"

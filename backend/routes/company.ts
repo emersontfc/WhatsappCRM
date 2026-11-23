@@ -107,15 +107,26 @@ router.put("/profile", async (req: AuthRequest, res) => {
   const { name, type, description, timezone, settings } = req.body;
 
   const canonicalType = normalizeBusinessType(type);
-  const tz = timezone || "Africa/Maputo";
+  if (timezone !== undefined && (typeof timezone !== "string" || !timezone.trim() || timezone.length > 100)) {
+    return res.status(400).json({ success: false, error: "Fuso horário inválido." });
+  }
+  const suppliedZone = typeof timezone === "string" ? timezone.trim() : undefined;
+  if (suppliedZone) {
+    try {
+      new Intl.DateTimeFormat("pt-MZ", { timeZone: suppliedZone }).format();
+    } catch {
+      return res.status(400).json({ success: false, error: "Fuso horário inválido." });
+    }
+  }
 
   try {
     const { data: existing } = await supabaseAdmin
       .from("company_profile")
-      .select("id, type")
+      .select("id, type, timezone")
       .eq("user_id", userId)
       .maybeSingle();
 
+    const tz = suppliedZone ?? existing?.timezone ?? "Africa/Maputo";
     let result;
     if (existing) {
       const { data, error } = await supabaseAdmin

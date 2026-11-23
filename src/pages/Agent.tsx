@@ -1,6 +1,7 @@
 import { WhatsAppOperatorCard } from "../components/WhatsAppOperatorCard";
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { CalendarCheck } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { 
   Bot, 
   Zap, 
@@ -44,6 +45,7 @@ interface AgentConfig {
 
 export default function Agent() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const { isActivated, planDetails, loading: activationLoading } = useActivation();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -199,6 +201,12 @@ export default function Agent() {
       toast.error(err.message || "Erro ao alterar status do agente.");
     }
   };
+
+  useEffect(() => {
+    if (!loading && !activationLoading && params.get("focus") === "specialization") {
+      document.getElementById("especializacao")?.scrollIntoView({ block: "start" });
+    }
+  }, [loading, activationLoading, params]);
 
   if (activationLoading || loading) {
     return (
@@ -480,7 +488,7 @@ export default function Agent() {
           </Card>
 
           {/* Especialização do Agente */}
-          <Card>
+          <Card id="especializacao" className="scroll-mt-4">
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Sparkles className="text-emerald-600" size={20} />
@@ -493,7 +501,8 @@ export default function Agent() {
                 {[
                   { id: "multifuncional", name: "Multifuncional", desc: "Universal: Vendas, pagamentos, suporte e CRM", icon: Sparkles },
                   { id: "vendas", name: "Agente de Vendas", desc: "Catálogo, pedidos e fechamento comercial", icon: ShoppingCart },
-                  { id: "pagamentos", name: "Agente de Pagamentos", desc: "Leitura de comprovativos M-Pesa/e-Mola", icon: DollarSign },
+                  { id: "pagamentos", name: "Agente de Pagamentos", desc: "Recebe comprovativos e encaminha para revisão humana", icon: DollarSign },
+                  { id: "agendamentos", name: "Receção e marcações", desc: "Apresenta serviços e partilha o link de marcação", icon: CalendarCheck },
                   { id: "leads", name: "Gestão de Leads", desc: "Qualificação, pontuação e funil CRM", icon: Target },
                   { id: "marketing", name: "Agente de Marketing", desc: "Disparos e campanhas segmentadas", icon: Megaphone },
                   { id: "atendimento", name: "Atendimento & SAC", desc: "Dúvidas frequentes e suporte ao cliente", icon: Bot },
@@ -501,6 +510,7 @@ export default function Agent() {
                   <button
                     key={spec.id}
                     type="button"
+                    aria-pressed={config.specialization === spec.id}
                     onClick={() => setConfig({ ...config, specialization: spec.id as any })}
                     className={cn(
                       "p-3.5 rounded-xl border-2 text-left transition-all hover:border-emerald-300",

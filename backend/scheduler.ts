@@ -1,4 +1,5 @@
-import { dispatchScheduled } from "./services/scheduledDispatch.ts";
+import { appointmentReminderDue, appointmentReminderMessage, getAppointmentTimeZone } from "./services/appointmentReminders.ts";
+import { dispatchScheduled, scheduledContactJid } from "./services/scheduledDispatch.ts";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { whatsappManager } from "./whatsappManager.ts";
 
@@ -87,101 +88,47 @@ export function startScheduler() {
         }
       }
 
-      // 4. Process Automated Appointment Reminders (24h & 2h before)
+      // Appointments use the business time zone, irrespective of the container clock.
       try {
-        const todayStr = nowISO.split("T")[0];
-        const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-        const tomorrowStr = tomorrow.toISOString().split("T")[0];
-
-        // 4a. 24h Reminders: Appointments tomorrow that haven't received 24h reminder
-        const { data: apps24h } = await supabaseAdmin
-          .from("appointments")
-          .select(`
-            id, user_id, customer_name, customer_phone, appointment_date, start_time,
-            services (name),
-            professionals (name)
-          `)
-          .eq("appointment_date", tomorrowStr)
-          .eq("reminder_24h_sent", false)
-          .in("status", ["scheduled", "confirmed"])
-          .limit(10);
-
-        if (apps24h && apps24h.length > 0) {
-          console.log(`[Scheduler] Processing ${apps24h.length} 24h appointment reminders.`);
-          for (const app of apps24h) {
+        const firstDate = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+        const lastDate = new Date(now.getTime() + 2 * 86400000).toISOString().slice(0, 10);
+        const zones = new Map<string, Promise<string>>();
+        for (let offset = 0; ; offset += 100) {
+          const { data: appointments, error } = await supabaseAdmin.from("appointments")
+            .select("id,user_id,customer_phone,appointment_date,start_time,reminder_24h_sent,reminder_2h_sent")
+            .gte("appointment_date", firstDate).lte("appointment_date", lastDate)
+            .in("status", ["scheduled", "confirmed"]).not("customer_phone", "is", null)
+            .order("id").range(offset, offset + 99);
+          if (error) throw error;
+          for (const appointment of appointments) {
+            const jid = scheduledContactJid({ phone: appointment.customer_phone });
+            if (!jid) continue;
             try {
-              if (app.customer_phone) {
-                let clean = app.customer_phone.replace(/\D/g, "");
-                if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
-                  clean = `258${clean}`;
-                }
-                const jid = `${clean}@s.whatsapp.net`;
-                const serviceName = (app.services as any)?.name || "Consulta/Serviço";
-                const profName = (app.professionals as any)?.name ? ` com ${(app.professionals as any).name}` : "";
-
-                const reminderMsg = `🔔 *LEMBRETE DE CONSULTA AMANHÃ*\n\nOlá *${app.customer_name}*!\nLembramos do seu agendamento de *${serviceName}*${profName} amanhã às *${app.start_time}*.\n\nPor favor, responda com:\n1️⃣ para *CONFIRMAR*\n2️⃣ para *REAGENDAR*`;
-
-                await whatsappManager.sendMessage(app.user_id, jid, reminderMsg);
-                console.log(`[Scheduler] 24h appointment reminder sent to ${jid}`);
-              }
-              await supabaseAdmin.from("appointments").update({ reminder_24h_sent: true }).eq("id", app.id);
-            } catch (err: any) {
-              console.error(`[Scheduler] Failed to send 24h reminder for app ${app.id}:`, err.message);
+              if (!zones.has(appointment.user_id)) zones.set(appointment.user_id, getAppointmentTimeZone(appointment.user_id));
+              const timeZone = await zones.get(appointment.user_id)!;
+              const field = appointmentReminderDue(appointment, timeZone, now);
+              if (!field) continue;
+              const { data: current, error: readError } = await supabaseAdmin.from("appointments")
+                .select("id").eq("id", appointment.id).eq("user_id", appointment.user_id)
+                .eq("appointment_date", appointment.appointment_date).eq("start_time", appointment.start_time)
+                .eq("customer_phone", appointment.customer_phone)
+                .in("status", ["scheduled", "confirmed"]).or(`${field}.eq.false,${field}.is.null`).maybeSingle();
+              if (readError || !current) continue;
+              const result = await whatsappManager.sendMessage(appointment.user_id, jid, appointmentReminderMessage(appointment, timeZone));
+              if (!result?.key?.id) throw new Error("WhatsApp did not acknowledge the reminder");
+              const { error: updateError } = await supabaseAdmin.from("appointments").update({ [field]: true })
+                .eq("id", appointment.id).eq("user_id", appointment.user_id)
+                .eq("appointment_date", appointment.appointment_date).eq("start_time", appointment.start_time)
+                .eq("customer_phone", appointment.customer_phone);
+              if (updateError) throw updateError;
+            } catch (error) {
+              console.warn("[Scheduler] Appointment reminder not confirmed:", appointment.id, error);
             }
           }
+          if (appointments.length < 100) break;
         }
-
-        // 4b. 2h Reminders: Appointments today starting within 2 hours
-        const currentHours = now.getHours();
-        const currentMinutes = now.getMinutes();
-        const currentTotalMinutes = currentHours * 60 + currentMinutes;
-
-        const { data: appsToday } = await supabaseAdmin
-          .from("appointments")
-          .select(`
-            id, user_id, customer_name, customer_phone, appointment_date, start_time,
-            services (name),
-            professionals (name)
-          `)
-          .eq("appointment_date", todayStr)
-          .eq("reminder_2h_sent", false)
-          .in("status", ["scheduled", "confirmed"])
-          .limit(15);
-
-        if (appsToday && appsToday.length > 0) {
-          for (const app of appsToday) {
-            try {
-              const [ah, am] = (app.start_time || "00:00").split(":").map(Number);
-              const appTotalMinutes = ah * 60 + am;
-              const diffMinutes = appTotalMinutes - currentTotalMinutes;
-
-              // If appointment is between 30 and 150 minutes away (approx 2h before)
-              if (diffMinutes >= 0 && diffMinutes <= 150) {
-                if (app.customer_phone) {
-                  let clean = app.customer_phone.replace(/\D/g, "");
-                  if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
-                    clean = `258${clean}`;
-                  }
-                  const jid = `${clean}@s.whatsapp.net`;
-                  const serviceName = (app.services as any)?.name || "Consulta/Serviço";
-                  const profName = (app.professionals as any)?.name ? ` com ${(app.professionals as any).name}` : "";
-
-                  const reminderMsg = `⏰ *LEMBRETE: SUA CONSULTA É HOJE!*\n\nOlá *${app.customer_name}*!\nSua consulta de *${serviceName}*${profName} está agendada para hoje às *${app.start_time}*.\n\nEstamos preparando tudo para o seu atendimento. Até breve!`;
-
-                  await whatsappManager.sendMessage(app.user_id, jid, reminderMsg);
-                  console.log(`[Scheduler] 2h appointment reminder sent to ${jid}`);
-                }
-                await supabaseAdmin.from("appointments").update({ reminder_2h_sent: true }).eq("id", app.id);
-              }
-            } catch (err: any) {
-              console.error(`[Scheduler] Failed to send 2h reminder for app ${app.id}:`, err.message);
-            }
-          }
-        }
-      } catch (appReminderErr: any) {
-        if (!isSchemaError(appReminderErr)) {
-          console.error("[Scheduler] Error in appointment reminders:", appReminderErr.message);
-        }
+      } catch (error) {
+        if (!isSchemaError(error)) console.error("[Scheduler] Appointment reminder query failed:", error);
       }
 
       for (const item of pendingMessages ?? []) {

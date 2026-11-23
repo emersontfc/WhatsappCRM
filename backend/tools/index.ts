@@ -12,6 +12,7 @@ import { pauseAITool } from "./messaging/pauseAI.ts";
 import { resumeAITool } from "./messaging/resumeAI.ts";
 import { createKeywordAutomationTool } from "./automations/createKeywordAutomation.ts";
 import { createReminderFollowupTool } from "./automations/createReminderFollowup.ts";
+import { getBookingLinkTool } from "./automations/getBookingLink.ts";
 import { scheduleMessageTool } from "./automations/scheduleMessage.ts";
 import { listScheduledMessagesTool } from "./automations/listScheduledMessages.ts";
 import { cancelScheduledMessageTool } from "./automations/cancelScheduledMessage.ts";
@@ -41,6 +42,7 @@ export const ALL_TOOLS: ToolDefinition[] = [
   resumeAITool,
   createKeywordAutomationTool,
   createReminderFollowupTool,
+  getBookingLinkTool,
   scheduleMessageTool,
   listScheduledMessagesTool,
   cancelScheduledMessageTool,

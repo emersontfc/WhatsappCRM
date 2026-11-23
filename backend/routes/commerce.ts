@@ -202,7 +202,7 @@ router.get("/verifications", async (req: AuthRequest, res) => {
   try {
     const { data: verifications, error } = await supabaseAdmin
       .from("payment_verifications")
-      .select("*, orders(order_number, total_amount, customer_name, customer_phone)")
+      .select("*, orders(order_number, total_amount, currency, customer_name, customer_phone)")
       .eq("user_id", userId)
       .eq("status", "pending")
       .order("created_at", { ascending: false });

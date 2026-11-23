@@ -42,6 +42,8 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<"profile" | "niche" | "keys" | "users" | "plans" | "settings">(initialTab);
   const [currentNiche, setCurrentNiche] = useState<BusinessNiche>(getStoredNiche);
   const [isSavingNiche, setIsSavingNiche] = useState(false);
+  const [timeZone, setTimeZone] = useState("Africa/Maputo");
+  const [savingTimeZone, setSavingTimeZone] = useState(false);
   const [newKey, setNewKey] = useState({ duration: "30", plan: "Premium" });
   const [plans, setPlans] = useState<any[]>([]);
   const [globalSettings, setGlobalSettings] = useState<any>({
@@ -54,9 +56,32 @@ export default function Settings() {
     fetchBusinessProfile().then(profile => {
       if (profile?.type) {
         setCurrentNiche(profile.type);
+        setTimeZone(profile.timezone);
       }
     });
   }, []);
+
+  async function saveTimeZone(event: React.FormEvent) {
+    event.preventDefault();
+    const next = timeZone.trim();
+    try {
+      if (!next) throw new Error("Empty time zone");
+      new Intl.DateTimeFormat("pt-MZ", { timeZone: next }).format();
+    } catch {
+      toast.error("Indica um fuso válido, por exemplo Africa/Maputo.");
+      return;
+    }
+    setSavingTimeZone(true);
+    try {
+      if (!await saveBusinessProfile(currentNiche, undefined, next)) throw new Error("Profile write failed");
+      setTimeZone(next);
+      toast.success("Fuso do negócio guardado.");
+    } catch {
+      toast.error("Não foi possível guardar o fuso. Tenta novamente.");
+    } finally {
+      setSavingTimeZone(false);
+    }
+  }
 
   const handleSelectNiche = async (nKey: BusinessNiche) => {
     setIsSavingNiche(true);
@@ -595,9 +620,26 @@ export default function Settings() {
                   <h2 className="text-xl font-black text-slate-900 tracking-tight">Segmento & Modo do Negócio</h2>
                 </div>
                 <p className="text-xs sm:text-sm text-slate-500 max-w-2xl">
-                  Personalize o CRM para o modelo da sua empresa. Ao escolher um segmento, seu Dashboard, indicadores principais (KPIs), ações rápidas e o foco do atendimento se adaptam automaticamente.
+                  O perfil do negócio sugere um percurso na página Início. A função e as instruções do agente são configuradas em Agente IA.
                 </p>
               </div>
+
+              <form onSubmit={saveTimeZone} className="grid gap-2 rounded-2xl border border-slate-200 bg-white p-4 sm:flex sm:items-end">
+                <label className="grid flex-1 gap-1 text-sm font-semibold">Fuso horário do negócio
+                  <input value={timeZone} onChange={(event) => setTimeZone(event.target.value)}
+                    list="agentx-time-zones" required maxLength={100}
+                    className="h-10 rounded-xl border border-slate-300 px-3 font-normal" />
+                  <datalist id="agentx-time-zones">
+                    {[...new Set(["Africa/Maputo", "Africa/Johannesburg", "Africa/Luanda", Intl.DateTimeFormat().resolvedOptions().timeZone])].map((zone) =>
+                      <option value={zone} key={zone} />
+                    )}
+                  </datalist>
+                  <span className="text-xs font-normal text-slate-600">Usado na agenda e nos lembretes.</span>
+                </label>
+                <Button type="submit" disabled={savingTimeZone || isSavingNiche}>
+                  {savingTimeZone ? "A guardar…" : "Guardar fuso"}
+                </Button>
+              </form>
 
               {/* 4 Niche Cards Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -696,7 +738,7 @@ export default function Settings() {
                     Modo Ativo: {NICHE_CONFIGS[currentNiche].label}
                   </p>
                   <p className="text-xs text-slate-600">
-                    Seu Dashboard exibirá os indicadores de <strong>{NICHE_CONFIGS[currentNiche].kpi1.label}</strong> e <strong>{NICHE_CONFIGS[currentNiche].kpi2.label}</strong> com ações rápidas voltadas para este segmento.
+                    Abre a página Início para escolher a tarefa que queres realizar.
                   </p>
                 </div>
 
@@ -704,7 +746,7 @@ export default function Settings() {
                   onClick={() => navigate("/")}
                   className="rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs gap-2 shrink-0 h-10 px-4 shadow-sm shadow-emerald-600/20"
                 >
-                  <span>Ver no Dashboard</span>
+                  <span>Abrir Início</span>
                   <ArrowRight size={14} />
                 </Button>
               </div>

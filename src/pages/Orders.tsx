@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { 
   ShoppingCart, 
   Package, 
@@ -73,11 +73,14 @@ interface Verification {
   sender_phone?: string;
   proof_type: string;
   proof_raw_text?: string;
+  proof_media_url?: string;
+  currency?: string;
   confidence_score: number;
   created_at: string;
   orders?: {
     order_number: string;
     total_amount: number;
+    currency?: string;
     customer_name: string;
     customer_phone: string;
   };
@@ -95,8 +98,29 @@ interface TimelineEvent {
   };
 }
 
+function safeProofUrl(value: string) {
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.protocol === "https:" || (url.protocol === "http:" && url.origin === window.location.origin) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Orders() {
-  const [activeTab, setActiveTab] = useState<"orders" | "verifications" | "products" | "timeline">("orders");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get("tab");
+  const activeTab = tab === "verifications" || tab === "products" || tab === "timeline" ? tab : "orders";
+  const setActiveTab = (next: string) => setSearchParams({ tab: next });
+  const [approval, setApproval] = useState<{ id: string; number: string; amount: number; currency: string } | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [approvalError, setApprovalError] = useState("");
+  const approvalDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (approval && approvalDialog.current && !approvalDialog.current.open) approvalDialog.current.showModal();
+  }, [approval]);
+
+  const [proofsUnavailable, setProofsUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -123,24 +147,20 @@ export default function Orders() {
 
   const fetchData = async () => {
     setLoading(true);
-    try {
-      const [ordRes, prodRes, verRes, timeRes] = await Promise.all([
-        apiFetch("/api/commerce/orders"),
-        apiFetch("/api/commerce/products"),
-        apiFetch("/api/commerce/verifications"),
-        apiFetch("/api/commerce/operations-feed")
-      ]);
-
-      if (ordRes.success) setOrders(ordRes.data || []);
-      if (prodRes.success) setProducts(prodRes.data || []);
-      if (verRes.success) setVerifications(verRes.data || []);
-      if (timeRes.success) setTimeline(timeRes.data || []);
-    } catch (err: any) {
-      console.error("Error loading commerce data:", err);
-      toast.error(`Erro ao carregar dados: ${err.message}`);
-    } finally {
-      setLoading(false);
+    const [ordersResult, productsResult, proofsResult, timelineResult] = await Promise.allSettled([
+      apiFetch("/api/commerce/orders"), apiFetch("/api/commerce/products"),
+      apiFetch("/api/commerce/verifications"), apiFetch("/api/commerce/operations-feed")
+    ]);
+    if (ordersResult.status === "fulfilled" && ordersResult.value.success) setOrders(ordersResult.value.data || []);
+    if (productsResult.status === "fulfilled" && productsResult.value.success) setProducts(productsResult.value.data || []);
+    const proofsLoaded = proofsResult.status === "fulfilled" && proofsResult.value.success;
+    setProofsUnavailable(!proofsLoaded);
+    if (proofsResult.status === "fulfilled" && proofsResult.value.success) setVerifications(proofsResult.value.data || []);
+    if (timelineResult.status === "fulfilled" && timelineResult.value.success) setTimeline(timelineResult.value.data || []);
+    if ([ordersResult, productsResult, timelineResult].some((entry) => entry.status === "rejected")) {
+      toast.error("Alguns dados comerciais estão indisponíveis.");
     }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -207,24 +227,39 @@ export default function Orders() {
     }
   };
 
-  const handleApproveOrder = async (orderId: string) => {
-    if (!window.confirm("Confirmaste no prestador o recebimento do montante e da moeda deste pedido?")) return;
+  function reviewOrder(id: string) {
+    const order = orders.find((item) => item.id === id);
+    const proof = verifications.find((item) => item.order_id === id)?.orders;
+    const current = order ?? proof;
+    if (!current) {
+      toast.error("Não foi possível consultar o pedido. Atualiza a lista antes de aprovar.");
+      return;
+    }
+    setApprovalError("");
+    setApproval({ id, number: current.order_number, amount: current.total_amount, currency: current.currency || "MT" });
+  }
+
+  async function approveOrder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!approval || approving || new FormData(event.currentTarget).get("verified") !== "on") return;
+    setApproving(true);
+    setApprovalError("");
     try {
-      toast.info("Aprovando pedido e iniciando entrega digital...");
-      const res = await apiFetch(`/api/commerce/orders/${orderId}/approve`, {
+      const res = await apiFetch(`/api/commerce/orders/${approval.id}/approve`, {
         method: "POST",
         body: JSON.stringify({ settlementVerified: true, notes: "Liquidação conferida no prestador pelo responsável da conta." })
       });
-
-      if (res.success) {
-        if (res.fulfillment?.delivered) toast.success("Pagamento confirmado e envio aceite pelo WhatsApp.");
-        else toast.info(res.fulfillment?.message || "Pagamento confirmado. Entrega pendente.");
-        fetchData();
-      }
-    } catch (err: any) {
-      toast.error(`Falha ao aprovar: ${err.message}`);
+      if (!res.success) throw new Error(res.error || "Não foi possível confirmar o pagamento.");
+      if (res.fulfillment?.delivered) toast.success("Pagamento confirmado e envio aceite pelo WhatsApp.");
+      else toast.info(res.fulfillment?.message || "Pagamento confirmado. Entrega pendente.");
+      setApproval(null);
+      void fetchData();
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : "Não foi possível confirmar o pagamento.");
+    } finally {
+      setApproving(false);
     }
-  };
+  }
 
   const retryDelivery = async (id: string) => {
     try {
@@ -310,10 +345,10 @@ export default function Orders() {
         <div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
             <ShoppingCart className="text-emerald-600" size={32} />
-            Vendas & Operações Comerciais
+            Catálogo e pedidos
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Gestão de pedidos, catálogo de produtos, conferência de comprovativos e entrega automatizada.
+            Adiciona os produtos que o agente pode apresentar e acompanha as vendas até à entrega.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -524,7 +559,7 @@ export default function Orders() {
                               <>
                                 <Button
                                   size="sm"
-                                  onClick={() => handleApproveOrder(order.id)}
+                                  onClick={() => reviewOrder(order.id)}
                                   className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1 text-xs px-2.5 h-8"
                                 >
                                   <Check size={14} /> Aprovar
@@ -554,7 +589,19 @@ export default function Orders() {
       {/* Tab 2: Verifications (Comprovativos) */}
       {activeTab === "verifications" && (
         <div className="space-y-4">
-          {verifications.length === 0 ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
+            <h2 className="font-bold text-slate-900">Confirmar comprovativos de vendas</h2>
+            <p className="mt-1 text-slate-700">Abre o extrato do prestador, confere a referência, o valor e a moeda do pedido, e regista a decisão.</p>
+            <Link to="/digital-orders?view=review" className="mt-2 inline-block font-semibold text-emerald-800 underline">
+              Rever comprovativos de pedidos digitais
+            </Link>
+          </div>
+          {loading ? <p role="status">A carregar comprovativos…</p> : proofsUnavailable ? (
+            <div role="status" className="rounded-xl border p-4">
+              <p className="mb-2 text-sm">Não foi possível consultar os comprovativos.</p>
+              <Button size="sm" onClick={fetchData}>Tentar novamente</Button>
+            </div>
+          ) : verifications.length === 0 ? (
             <Card className="border-dashed border-2 py-12 text-center text-slate-400">
               <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-500" />
               <p className="font-bold text-slate-700 text-lg">Tudo em dia!</p>
@@ -583,10 +630,10 @@ export default function Orders() {
                   <CardContent className="space-y-4">
                     <div className="bg-white p-3 rounded-xl border border-slate-100">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valor do Comprovativo</p>
-                      <p className="text-2xl font-black text-emerald-600">{ver.amount} MT</p>
+                      <p className="text-2xl font-black text-emerald-600">{ver.amount} {ver.currency || "MT"}</p>
                       {ver.orders && (
                         <p className="text-xs text-slate-500 mt-1">
-                          Correspondente ao Pedido: <span className="font-bold text-slate-900">{ver.orders.order_number}</span> (Total: {ver.orders.total_amount} MT)
+                          Correspondente ao Pedido: <span className="font-bold text-slate-900">{ver.orders.order_number}</span> (Total: {ver.orders.total_amount} {ver.orders.currency || "MT"})
                         </p>
                       )}
                     </div>
@@ -597,13 +644,20 @@ export default function Orders() {
                       </div>
                     )}
 
+                    {ver.proof_media_url && safeProofUrl(ver.proof_media_url) && (
+                      <a href={safeProofUrl(ver.proof_media_url)!} target="_blank" rel="noopener noreferrer"
+                        className="inline-block text-sm font-semibold text-emerald-800 underline">
+                        Abrir comprovativo anexado
+                      </a>
+                    )}
+                    {!ver.order_id && <p className="text-sm text-amber-800">Este comprovativo ainda não tem um pedido associado.</p>}
                     <div className="flex gap-3 pt-2">
                       {ver.order_id && (
                         <Button
-                          onClick={() => handleApproveOrder(ver.order_id!)}
+                          onClick={() => reviewOrder(ver.order_id!)}
                           className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-bold"
                         >
-                          <Check size={18} /> Validar e Entregar
+                          <Check size={18} /> Rever e aprovar
                         </Button>
                       )}
                       {ver.order_id && (
@@ -627,6 +681,11 @@ export default function Orders() {
       {/* Tab 3: Products Catalog */}
       {activeTab === "products" && (
         <div className="space-y-4">
+          {!loading && products.length === 0 && <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-5">
+            <h2 className="font-bold text-slate-900">Adiciona o primeiro produto</h2>
+            <p className="my-2 text-sm text-slate-600">O agente consulta os produtos ativos deste catálogo para apresentar preços no WhatsApp.</p>
+            <Button onClick={() => setShowProductModal(true)}>Adicionar produto</Button>
+          </div>}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {products.map(prod => (
               <Card key={prod.id} className="border border-slate-100 shadow-sm flex flex-col justify-between">
@@ -696,6 +755,28 @@ export default function Orders() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {approval && (
+        <dialog ref={approvalDialog} aria-labelledby="approval-title"
+          onCancel={(event) => { event.preventDefault(); if (!approving) setApproval(null); }}
+          className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
+          <form onSubmit={approveOrder} className="grid gap-4">
+            <div>
+              <h2 id="approval-title" className="text-lg font-bold">Confirmar pagamento</h2>
+              <p className="mt-1 text-sm text-slate-600">Pedido {approval.number} · {approval.amount} {approval.currency}</p>
+            </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input className="mt-1" type="checkbox" name="verified" required disabled={approving} />
+              Confirmei no prestador a referência, o valor e a moeda recebida.
+            </label>
+            {approvalError && <p role="alert" className="text-sm text-red-700">{approvalError}</p>}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="outline" disabled={approving} onClick={() => setApproval(null)}>Cancelar</Button>
+              <Button type="submit" disabled={approving}>{approving ? "A confirmar…" : "Confirmar pagamento"}</Button>
+            </div>
+          </form>
+        </dialog>
       )}
 
       {/* New Product Modal */}

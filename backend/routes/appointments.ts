@@ -1,3 +1,5 @@
+import { appointmentInstant, appointmentReminderMessage, getAppointmentTimeZone } from "../services/appointmentReminders.ts";
+import { scheduledContactJid } from "../services/scheduledDispatch.ts";
 import express from "express";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
@@ -56,13 +58,10 @@ function calculateSlots(
     }
 
     const slotStartStr = formatMinutes(slotStart);
-    const slotEndStr = formatMinutes(slotEnd);
-
-    // Check existing appointment conflict
     const hasConflict = existingAppointments.some((app) => {
-      const appStart = app.start_time;
-      const appEnd = app.end_time || formatMinutes(parseToMinutes(app.start_time) + duration);
-      return slotStartStr < appEnd && slotEndStr > appStart;
+      const appStart = parseToMinutes(app.start_time);
+      const appEnd = app.end_time ? parseToMinutes(app.end_time) : appStart + duration;
+      return slotStart < appEnd && slotEnd > appStart;
     });
 
     if (!hasConflict) {
@@ -86,14 +85,14 @@ router.get("/public/info/:userId", async (req, res) => {
     // Fetch user profile
     const { data: userProfile } = await supabaseAdmin
       .from("users")
-      .select("id, name, email")
+      .select("id, name")
       .eq("id", userId)
       .single();
 
     // Fetch active services
     const { data: services } = await supabaseAdmin
       .from("services")
-      .select("*")
+      .select("id,name,description,duration_minutes,price")
       .eq("user_id", userId)
       .eq("active", true)
       .order("name", { ascending: true });
@@ -101,7 +100,7 @@ router.get("/public/info/:userId", async (req, res) => {
     // Fetch active professionals
     const { data: professionals } = await supabaseAdmin
       .from("professionals")
-      .select("*")
+      .select("id,name,role,working_days,start_time,end_time")
       .eq("user_id", userId)
       .eq("active", true)
       .order("name", { ascending: true });
@@ -109,7 +108,7 @@ router.get("/public/info/:userId", async (req, res) => {
     res.json({
       success: true,
       data: {
-        business: userProfile || { id: userId, name: "Consultório / Clínica" },
+        business: userProfile || { id: userId, name: "Marcações" },
         services: services || [],
         professionals: professionals || []
       }
@@ -135,8 +134,9 @@ router.get("/public/slots", async (req, res) => {
       const { data: service } = await supabaseAdmin
         .from("services")
         .select("duration_minutes")
-        .eq("id", serviceId as string)
+        .eq("id", serviceId as string).eq("user_id", userId as string).eq("active", true)
         .maybeSingle();
+      if (!service) return res.status(404).json({ success: false, error: "Serviço indisponível." });
       if (service?.duration_minutes) durationMinutes = service.duration_minutes;
     }
 
@@ -151,8 +151,9 @@ router.get("/public/slots", async (req, res) => {
       const { data: prof } = await supabaseAdmin
         .from("professionals")
         .select("*")
-        .eq("id", professionalId as string)
+        .eq("id", professionalId as string).eq("user_id", userId as string).eq("active", true)
         .maybeSingle();
+      if (!prof) return res.status(404).json({ success: false, error: "Profissional indisponível." });
       if (prof) {
         if (prof.working_days && prof.working_days.length > 0) workingDays = prof.working_days;
         if (prof.start_time) startTime = prof.start_time;
@@ -187,7 +188,11 @@ router.get("/public/slots", async (req, res) => {
       existingApps || []
     );
 
-    res.json({ success: true, slots, durationMinutes });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) return res.status(400).json({ success: false, error: "Data inválida." });
+    const timeZone = await getAppointmentTimeZone(String(userId));
+    const available = slots.filter((time) =>
+      appointmentInstant({ appointment_date: String(date), start_time: time }, timeZone).getTime() > Date.now());
+    res.json({ success: true, slots: available, durationMinutes });
   } catch (err: any) {
     console.error("[Appointments] Error in /public/slots:", err);
     res.status(500).json({ success: false, error: err.message });
@@ -220,22 +225,35 @@ router.post("/public/book", async (req, res) => {
 
     // Get service details
     let durationMinutes = 30;
-    let serviceName = "Consulta";
     if (serviceId) {
       const { data: service } = await supabaseAdmin
         .from("services")
         .select("name, duration_minutes, price")
-        .eq("id", serviceId)
+        .eq("id", serviceId).eq("user_id", userId).eq("active", true)
         .maybeSingle();
+      if (!service) return res.status(404).json({ success: false, error: "Serviço indisponível." });
       if (service) {
-        serviceName = service.name;
         durationMinutes = service.duration_minutes || 30;
       }
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !scheduledContactJid({ phone: cleanPhone })) {
+      return res.status(400).json({ success: false, error: "Data, horário ou telefone inválido." });
+    }
+    if (professionalId) {
+      const { data: professional, error } = await supabaseAdmin.from("professionals").select("id")
+        .eq("id", professionalId).eq("user_id", userId).eq("active", true).maybeSingle();
+      if (error) throw error;
+      if (!professional) return res.status(404).json({ success: false, error: "Profissional indisponível." });
     }
 
     // Calculate end time
     const [h, m] = startTime.split(":").map(Number);
     const endMinutes = h * 60 + m + durationMinutes;
+    if (endMinutes > 24 * 60 || !(appointmentInstant({ appointment_date: appointmentDate, start_time: startTime },
+      await getAppointmentTimeZone(userId)).getTime() > Date.now())) {
+      return res.status(400).json({ success: false, error: "Escolhe um horário futuro dentro do dia de atendimento." });
+    }
     const endTime = `${Math.floor(endMinutes / 60).toString().padStart(2, "0")}:${(endMinutes % 60).toString().padStart(2, "0")}`;
 
     // Verify slot is still available
@@ -245,13 +263,14 @@ router.post("/public/book", async (req, res) => {
       .eq("user_id", userId)
       .eq("appointment_date", appointmentDate)
       .neq("status", "cancelled")
-      .or(`and(start_time.lte.${startTime},end_time.gt.${startTime}),and(start_time.lt.${endTime},end_time.gte.${endTime})`);
+      .lt("start_time", endTime).gt("end_time", startTime);
 
     if (professionalId) {
       conflictQuery = conflictQuery.eq("professional_id", professionalId);
     }
 
-    const { data: conflicts } = await conflictQuery;
+    const { data: conflicts, error: conflictError } = await conflictQuery;
+    if (conflictError) throw conflictError;
     if (conflicts && conflicts.length > 0) {
       return res.status(409).json({ success: false, error: "Este horário acabou de ser reservado. Por favor, escolha outro horário." });
     }
@@ -279,17 +298,6 @@ router.post("/public/book", async (req, res) => {
         .select("id")
         .single();
       if (newContact) contactId = newContact.id;
-    }
-
-    // Fetch professional name
-    let professionalName = "Profissional Responsável";
-    if (professionalId) {
-      const { data: prof } = await supabaseAdmin
-        .from("professionals")
-        .select("name")
-        .eq("id", professionalId)
-        .maybeSingle();
-      if (prof?.name) professionalName = prof.name;
     }
 
     // Create appointment
@@ -327,7 +335,7 @@ router.post("/public/book", async (req, res) => {
         year: "numeric"
       });
 
-      const confirmText = `✅ *AGENDAMENTO CONFIRMADO!*\n\nOlá *${customerName}*,\nSua consulta/serviço foi agendado com sucesso!\n\n📋 *Serviço:* ${serviceName}\n👤 *Profissional:* ${professionalName}\n📅 *Data:* ${dateFormatted}\n⏰ *Horário:* ${startTime} às ${endTime}\n\n_Enviaremos um lembrete antes do horário. Se precisar reagendar ou tiver dúvidas, basta responder a esta mensagem!_`;
+      const confirmText = `Recebemos o teu pedido de marcação para ${dateFormatted}, às ${startTime}. Se precisares de alterar o horário, responde a esta mensagem para falar com a equipa.`;
 
       await whatsappManager.sendMessage(userId, jid, confirmText);
       console.log(`[Appointments] WhatsApp confirmation sent to ${jid}`);
@@ -451,15 +459,43 @@ router.post("/", async (req, res) => {
   }
 });
 
+router.post("/:id/reminder", async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { data, error } = await supabaseAdmin.from("appointments")
+      .select("appointment_date,start_time,customer_phone,status")
+      .eq("id", req.params.id).eq("user_id", userId).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Marcação não encontrada." });
+    const jid = scheduledContactJid({ phone: data.customer_phone });
+    const timeZone = await getAppointmentTimeZone(userId);
+    const instant = appointmentInstant(data, timeZone).getTime();
+    if (!jid || !["scheduled", "confirmed"].includes(data.status) || !(instant > Date.now())) {
+      return res.status(409).json({ error: "A marcação precisa de estar ativa, no futuro e ter um número WhatsApp válido." });
+    }
+    const sent = await whatsappManager.sendMessage(userId, jid, appointmentReminderMessage(data, timeZone));
+    if (!sent?.key?.id) {
+      return res.status(503).json({ error: "O WhatsApp não confirmou o envio. Consulta a conversa antes de tentar novamente." });
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    const offline = error instanceof Error && error.message === "WhatsApp session not connected.";
+    return res.status(503).json({ error: offline
+      ? "Liga o WhatsApp antes de enviar o lembrete."
+      : "Não foi possível confirmar o envio. Consulta a conversa antes de tentar novamente." });
+  }
+});
+
 router.put("/:id", async (req, res) => {
   try {
     const userId = (req as any).user.id;
     const { id } = req.params;
     const updates = req.body;
+    const { user_id: _account, ...fields } = updates;
 
     const { data, error } = await supabaseAdmin
       .from("appointments")
-      .update(updates)
+      .update(fields)
       .eq("id", id)
       .eq("user_id", userId)
       .select(`

@@ -144,25 +144,25 @@ export default function Layout({ children }: LayoutProps) {
     {
       title: "Principal",
       items: [
-        { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
+        { name: "Início", path: "/dashboard", icon: LayoutDashboard },
         { name: "Mensagens", path: "/messages", icon: MessageCircle },
-        { name: "Vendas & Pedidos", path: "/orders", icon: ShoppingCart },
+        { name: "Marcações e lembretes", path: "/appointments", icon: CalendarCheck },
+      ]
+    },
+    {
+      title: "Vendas e clientes",
+      items: [
+        { name: "Catálogo e pedidos", path: "/orders", icon: ShoppingCart },
         { name: "Pedidos digitais", path: "/digital-orders", icon: ShoppingCart },
-        { name: "Agenda & Consultas", path: "/appointments", icon: CalendarCheck },
-        { name: "Disparos Programados", path: "/schedule", icon: Clock, premiumOnly: true },
+        { name: "Leads", path: "/leads", icon: UserPlus },
+        { name: "Contactos", path: "/contacts", icon: Users },
       ]
     },
     {
-      title: "Audiência",
+      title: "WhatsApp e automações",
       items: [
-        { name: "Leads (Funil)", path: "/leads", icon: UserPlus },
-        { name: "Contatos", path: "/contacts", icon: Users },
         { name: "Grupos", path: "/groups", icon: Users2, premiumOnly: true },
-      ]
-    },
-    {
-      title: "Automação & IA",
-      items: [
+        { name: "Mensagens e publicações", path: "/schedule", icon: Clock, premiumOnly: true },
         { name: "Agente IA", path: "/agent", icon: Bot, premiumOnly: true },
         { name: "Automações", path: "/automations", icon: Zap },
         { name: "Menu Inteligente", path: "/menu-builder", icon: Hash, premiumOnly: true },

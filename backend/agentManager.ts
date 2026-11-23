@@ -301,6 +301,9 @@ Seja ágil, prestativo e direto.`;
 2. Quando o cliente demonstrar intenção clara de compra, use 'createOrder' para registrar o pedido no sistema e gerar as instruções de pagamento (M-Pesa/e-Mola/Banco).
 3. Se o cliente enviar comprovativo ou código de transação, use 'submitPaymentProof'.
 4. NUNCA invente preços ou produtos que não constem no catálogo real.`;
+    } else if (specialization === "agendamentos") {
+      specGuide = `\nESPECIALIZAÇÃO: RECEÇÃO E MARCAÇÕES.
+Para dúvidas sobre serviços, pedidos de marcação ou disponibilidade, consulta 'get_booking_link'. O cliente escolhe o serviço e o horário no link. Encaminha alterações de marcação para a equipa. Nunca confirmes uma data sem registo nem prestes aconselhamento médico.`;
     } else if (specialization === "pagamentos") {
       specGuide = `\nESPECIALIZAÇÃO: AGENTE DE PAGAMENTOS.
 1. Use 'submitPaymentProof' quando o cliente fornecer dados de transferência ou comprovativo.
@@ -765,7 +768,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
           if (toolResult) {
             actionResult = toolResult;
             const formatted = formatToolOutputForWhatsApp(parsed.tool, toolResult);
-            if (["getProductsCatalog", "createOrder"].includes(parsed.tool) || !finalReply.trim()) {
+            if (["getProductsCatalog", "createOrder", "get_booking_link"].includes(parsed.tool) || !finalReply.trim()) {
               finalReply = formatted;
             } else {
               finalReply = `${finalReply}\n\n${formatted}`;

@@ -1,6 +1,6 @@
 import { WhatsAppOperatorCard } from "../components/WhatsAppOperatorCard";
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -60,6 +60,8 @@ interface Contact {
 
 export default function Schedule() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedType = searchParams.get("new");
   const [messages, setMessages] = useState<ScheduledMessage[]>([]);
   const [groups, setGroups] = useState<Array<{ id: string; subject: string }>>([]);
   const [groupError, setGroupError] = useState(false);
@@ -99,6 +101,17 @@ export default function Schedule() {
     target_type: "contact",
     scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
   });
+
+  useEffect(() => {
+    if (requestedType !== "group" && requestedType !== "status" && requestedType !== "contact") return;
+    setNewMessage((previous) => ({ ...previous, target_type: requestedType }));
+    setIsAdding(true);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("new");
+      return next;
+    }, { replace: true });
+  }, [requestedType, setSearchParams]);
 
   useEffect(() => {
     if (!isAdding || newMessage.target_type !== "group") return;
@@ -600,9 +613,9 @@ export default function Schedule() {
       )}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">Agendamentos</h2>
+          <h2 className="text-2xl font-bold text-slate-900">Mensagens e publicações</h2>
           <div className="flex items-center gap-2 text-slate-500">
-            <p>Programe mensagens para serem enviadas no futuro.</p>
+            <p>Agenda mensagens, Status e anúncios de grupo no WhatsApp.</p>
             <span className="h-1 w-1 rounded-full bg-slate-300" />
             <div className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
               <Clock size={12} />

@@ -1,3 +1,4 @@
+import { Link, useSearchParams } from "react-router-dom";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/Button";
@@ -103,6 +104,30 @@ function receipt(order: Order) {
   saveFile(new Blob([content], { type: "text/plain;charset=utf-8" }), `pagamento-${order.id}.txt`);
 }
 
+function ProofDecision({ submit }: { submit: (data: FormData) => Promise<void> }) {
+  const [decision, setDecision] = useState("");
+  return <ActionForm label={decision === "reject" ? "Rejeitar comprovativo" : "Confirmar pagamento"} submit={submit}>
+    <label className="grid gap-1 text-sm font-medium">Decisão
+      <select className={field} name="decision" required value={decision} onChange={(event) => setDecision(event.target.value)}>
+        <option value="">Selecionar decisão</option>
+        <option value="approve">Aprovar pagamento</option>
+        <option value="reject">Rejeitar comprovativo</option>
+      </select>
+    </label>
+    {decision === "approve" && <>
+      <label>Método do pagamento<select className={field} name="method" required defaultValue="">
+        <option value="">Selecionar método</option><option value="mpesa">M-Pesa</option>
+        <option value="emola">e-Mola</option><option value="bank_transfer">Transferência bancária</option><option value="other">Outro</option>
+      </select></label>
+      <label>Referência oficial confirmada no prestador<Input name="reference" maxLength={100} required /></label>
+      <label className="flex items-start gap-2"><input type="checkbox" name="verified" required className="mt-1" />
+        Confirmei o recebimento, o montante e a moeda no prestador.
+      </label>
+    </>}
+    {decision === "reject" && <label>Motivo da rejeição<textarea className={field} name="note" maxLength={1000} required /></label>}
+  </ActionForm>;
+}
+
 function ReviewQueue({ id }: { id: string }) {
   const [proofs, setProofs] = useState<Proof[]>([]);
   const [state, setState] = useState("A carregar…");
@@ -129,18 +154,16 @@ function ReviewQueue({ id }: { id: string }) {
     const decision = data.get("decision");
     const reference = data.get("reference");
     const note = data.get("note");
-    try {
-      await write(`/${id}/payment-proofs/${proof.id}/review`, {
-        decision, note, settlementVerified: data.get("verified") === "on",
-        settlementMethod: data.get("method"), settlementReference: reference
-      });
-      toast.success(decision === "approve" ? "Pagamento confirmado" : "Comprovativo rejeitado");
-    } finally {
-      setRevision((value) => value + 1);
-    }
+    await write(`/${id}/payment-proofs/${proof.id}/review`, {
+      decision, note: note ?? undefined, settlementVerified: data.get("verified") === "on",
+      settlementMethod: data.get("method"), settlementReference: reference
+    });
+    toast.success(decision === "approve" ? "Pagamento confirmado" : "Comprovativo rejeitado");
+    setRevision((value) => value + 1);
   }
 
-  return <Section title="Revisão financeira">
+  return <Section title="Comprovativos por rever">
+    <p className="text-sm text-slate-600">Confere a liquidação no prestador antes de registar a decisão.</p>
     <Button variant="outline" onClick={() => setRevision((value) => value + 1)}>Atualizar fila</Button>
     {state ? <p role="status">{state}</p> : proofs.length === 0 && <p>Sem comprovativos pendentes.</p>}
     {!state && proofs.map((proof) => <article className="grid gap-3 rounded-lg border p-4" key={proof.id}>
@@ -161,20 +184,7 @@ function ReviewQueue({ id }: { id: string }) {
           toast.error("Não foi possível obter o comprovativo.");
         }
       }}>Descarregar comprovativo</Button>}
-      <ActionForm label="Registar decisão" submit={(data) => review(proof, data)}>
-        <label>Decisão<select className={field} name="decision" required defaultValue="">
-          <option value="" disabled>Selecionar</option><option value="approve">Aprovar</option><option value="reject">Rejeitar</option>
-        </select></label>
-        <label>Método de liquidação<select className={field} name="method">
-          <option value="">Selecionar para aprovação</option><option value="mpesa">M-Pesa</option>
-          <option value="emola">e-Mola</option><option value="bank_transfer">Transferência bancária</option><option value="other">Outro</option>
-        </select></label>
-        <label>Referência oficial do pagamento<Input name="reference" maxLength={100} /></label>
-        <label className="flex items-start gap-2"><input type="checkbox" name="verified" className="mt-1" />
-          Confirmei o recebimento, o montante e a moeda no prestador.
-        </label>
-        <label>Observação (obrigatória na rejeição)<textarea className={field} name="note" maxLength={1000} /></label>
-      </ActionForm>
+      <ProofDecision submit={(data) => review(proof, data)} />
     </article>)}
   </Section>;
 }
@@ -211,16 +221,20 @@ function SalesForms({ id }: { id: string }) {
 }
 
 export default function DigitalOrders({ accountId }: { accountId: string }) {
+  const [params] = useSearchParams();
+  const reviewOnly = params.get("view") === "review";
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [selected, setSelected] = useState("");
   const [message, setMessage] = useState("A carregar…");
   const [revision, setRevision] = useState(0);
-  const organization = organizations.find((item) => item.organization_id === selected);
+  const availableOrganizations = reviewOnly ? organizations.filter((item) => ["owner", "finance_admin"].includes(item.role)) : organizations;
+  const organization = availableOrganizations.find((item) => item.organization_id === selected) ?? availableOrganizations[0];
+  const organizationId = organization?.organization_id ?? "";
 
   useEffect(() => {
     let active = true;
-    Promise.all([apiFetch(api + "/organizations"), apiFetch(api + "/my-orders")])
+    Promise.all([apiFetch(api + "/organizations"), reviewOnly ? Promise.resolve({ data: [] }) : apiFetch(api + "/my-orders")])
       .then(([memberships, purchases]) => {
         if (!active) return;
         setOrganizations(memberships.data);
@@ -232,8 +246,26 @@ export default function DigitalOrders({ accountId }: { accountId: string }) {
         if (active) setMessage("Não foi possível carregar os pedidos e as empresas.");
       });
     return () => { active = false; };
-  }, [revision]);
+  }, [revision, reviewOnly]);
   const refresh = () => setRevision((value) => value + 1);
+
+  if (reviewOnly) return <div className="mx-auto grid max-w-4xl gap-4 p-4 sm:p-6">
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <h1 className="text-2xl font-bold">Confirmar pagamentos digitais</h1>
+      <Link to="/orders?tab=verifications" className="text-sm font-semibold text-emerald-800 underline">Comprovativos de vendas</Link>
+    </header>
+    {message && <p role="status">{message}</p>}
+    {!message && !organization && <Section title="Sem acesso a uma fila de pagamentos">
+      <p className="text-sm">Pede ao titular da empresa para te atribuir acesso financeiro. Se és o titular, abre Pedidos digitais para gerir a empresa.</p>
+      <Link to="/digital-orders" className="text-sm font-semibold text-emerald-800 underline">Abrir Pedidos digitais</Link>
+    </Section>}
+    {!message && organization && <>
+      <label className="max-w-sm text-sm font-medium">Empresa<select className={field} value={organizationId} onChange={(event) => setSelected(event.target.value)}>
+        {availableOrganizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations.name}</option>)}
+      </select></label>
+      <ReviewQueue key={organizationId} id={organizationId} />
+    </>}
+  </div>;
 
   return <div className="mx-auto grid max-w-5xl gap-5 p-4 sm:p-6">
     <header className="flex flex-wrap items-center justify-between gap-3">

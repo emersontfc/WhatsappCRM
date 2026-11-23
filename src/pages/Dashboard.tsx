@@ -1,5 +1,6 @@
+import { Workflows } from "../components/Workflows";
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   QrCode, 
@@ -218,6 +219,7 @@ const ConnectionStatusBadge = ({ status }: { status: string | null }) => {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { hash } = useLocation();
   const { isActivated, plan, planDetails, loading: activationLoading } = useActivation();
   const [status, setStatus] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
@@ -249,7 +251,6 @@ export default function Dashboard() {
   const [niche, setNiche] = useState<BusinessNiche>(getStoredNiche);
   const [chartMetric, setChartMetric] = useState<"messages" | "leads">("messages");
   const [messagesUsed, setMessagesUsed] = useState(0);
-  const [pipelineTotal, setPipelineTotal] = useState(0);
   const [weeklyActivity, setWeeklyActivity] = useState<{ day: string; count: number; dateStr: string }[]>([]);
 
   useEffect(() => {
@@ -529,15 +530,6 @@ useEffect(() => {
         .eq("user_id", userId)
         .limit(1);
         
-      // Pipeline value calculation
-      const { data: leadsWithVal } = await supabase
-        .from("leads")
-        .select("value")
-        .eq("user_id", userId);
-
-      const totalVal = (leadsWithVal || []).reduce((acc: number, curr: any) => acc + (Number(curr.value) || 0), 0);
-      setPipelineTotal(totalVal);
-
       // Messages used today
       const { data: subData } = await supabase
         .from("subscriptions")
@@ -934,37 +926,16 @@ useEffect(() => {
   const currentMessagesUsed = messagesUsed || stats.messages;
   const usagePercentage = Math.min(100, Math.round((currentMessagesUsed / dailyMessageLimit) * 100));
 
-  // Dynamic KPI values tailored to the active niche
-  const isClinic = niche === "clinic" || niche === "clinica";
-  const isRetail = niche === "retail" || niche === "vendas";
-  const isServices = niche === "services" || niche === "servicos";
-  const isRestaurant = niche === "restaurant";
+  const { kpi1, kpi2, kpi3 } = NICHE_CONFIGS.general;
+  const Kpi1Icon = kpi1.icon;
+  const Kpi2Icon = kpi2.icon;
+  const Kpi3Icon = kpi3.icon;
 
-  const kpi1Value = isRetail
-    ? (pipelineTotal > 0 ? `${pipelineTotal.toLocaleString()} MZN` : `${stats.leads} Leads`)
-    : isClinic
-    ? `${stats.leads} Pacientes`
-    : isServices
-    ? `${stats.leads} Agendamentos`
-    : isRestaurant
-    ? `${stats.leads} Pedidos`
-    : stats.leads.toString();
-
-  const kpi2Value = isClinic
-    ? `${stats.messages} Atendimentos`
-    : isRetail
-    ? `${stats.messages} Negociações`
-    : isServices
-    ? `${stats.messages} Sessões`
-    : isRestaurant
-    ? `${stats.messages} Clientes`
-    : stats.messages.toString();
-
-  const kpi3Value = stats.actions.toString();
-
-  const Kpi1Icon = currentNicheConfig.kpi1.icon;
-  const Kpi2Icon = currentNicheConfig.kpi2.icon;
-  const Kpi3Icon = currentNicheConfig.kpi3.icon;
+  useEffect(() => {
+    if (!activationLoading && hash === "#ligar-whatsapp") {
+      document.getElementById("ligar-whatsapp")?.scrollIntoView({ block: "start" });
+    }
+  }, [activationLoading, hash]);
 
   if (activationLoading) {
     return (
@@ -988,7 +959,7 @@ useEffect(() => {
                 type="button"
                 onClick={() => navigate("/settings?tab=niche")}
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] sm:text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300 transition-all shadow-xs cursor-pointer group"
-                title="Modo ativo. Clique para alterar o segmento do negócio nas Definições"
+                title="Alterar o perfil do negócio nas Definições"
               >
                 <currentNicheConfig.icon size={13} className="text-emerald-600 group-hover:scale-110 transition-transform" />
                 <span>{currentNicheConfig.badge}</span>
@@ -1051,51 +1022,21 @@ useEffect(() => {
           </div>
         </div>
 
-        {/* Niche Quick Actions Bar */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5 sm:flex-wrap w-full">
-          <span className="text-[11px] sm:text-xs font-bold uppercase tracking-wider text-slate-400 mr-1 flex items-center gap-1 shrink-0">
-            <Zap size={13} className="text-amber-500" /> Ações:
-          </span>
-          {currentNicheConfig.quickActions.map((qa, idx) => {
-            const QAIcon = qa.icon;
-            return (
-              <Button
-                key={idx}
-                variant={qa.isPrimary ? "default" : "outline"}
-                size="sm"
-                onClick={() => {
-                  if (qa.path === "/schedule") navigate("/schedule");
-                  else if (qa.path === "/messages") navigate("/messages");
-                  else if (qa.path === "/leads") navigate("/leads");
-                  else if (qa.path === "/agent") navigate("/agent");
-                  else navigate(qa.path);
-                }}
-                className={cn(
-                  "rounded-xl text-xs font-bold h-8 sm:h-9 px-3 gap-1.5 transition-all shadow-xs shrink-0",
-                  qa.isPrimary 
-                    ? "bg-emerald-600 hover:bg-emerald-500 text-white" 
-                    : "border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/50 text-slate-700 bg-white"
-                )}
-              >
-                <QAIcon size={13} className={qa.isPrimary ? "text-white" : "text-emerald-600"} />
-                {qa.label}
-              </Button>
-            );
-          })}
-        </div>
       </div>
+
+      <Workflows accountId={userId} niche={niche} whatsappStatus={status} free={isFree} />
 
       {/* Stats Grid - 3 Dynamic Niche KPIs + WhatsApp Plan Limit */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         {/* KPI 1 */}
         <Card className="border-slate-100 shadow-xs hover:shadow-md transition-all group overflow-hidden bg-white">
           <div className="p-3 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <div className={cn("h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-xs", currentNicheConfig.kpi1.bg, currentNicheConfig.kpi1.color)}>
+            <div className={cn("h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-xs", kpi1.bg, kpi1.color)}>
               <Kpi1Icon size={18} className="sm:w-6 sm:h-6" />
             </div>
             <div className="min-w-0">
-              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 truncate mb-0.5">{currentNicheConfig.kpi1.label}</p>
-              <p className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">{kpi1Value}</p>
+              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 truncate mb-0.5">Contactos</p>
+              <p className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">{stats.contacts}</p>
             </div>
           </div>
         </Card>
@@ -1103,12 +1044,12 @@ useEffect(() => {
         {/* KPI 2 */}
         <Card className="border-slate-100 shadow-xs hover:shadow-md transition-all group overflow-hidden bg-white">
           <div className="p-3 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <div className={cn("h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-xs", currentNicheConfig.kpi2.bg, currentNicheConfig.kpi2.color)}>
+            <div className={cn("h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-xs", kpi2.bg, kpi2.color)}>
               <Kpi2Icon size={18} className="sm:w-6 sm:h-6" />
             </div>
             <div className="min-w-0">
-              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 truncate mb-0.5">{currentNicheConfig.kpi2.label}</p>
-              <p className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">{kpi2Value}</p>
+              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 truncate mb-0.5">Mensagens</p>
+              <p className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">{stats.messages}</p>
             </div>
           </div>
         </Card>
@@ -1116,12 +1057,12 @@ useEffect(() => {
         {/* KPI 3 */}
         <Card className="border-slate-100 shadow-xs hover:shadow-md transition-all group overflow-hidden bg-white">
           <div className="p-3 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <div className={cn("h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-xs", currentNicheConfig.kpi3.bg, currentNicheConfig.kpi3.color)}>
+            <div className={cn("h-9 w-9 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-xs", kpi3.bg, kpi3.color)}>
               <Kpi3Icon size={18} className="sm:w-6 sm:h-6" />
             </div>
             <div className="min-w-0">
-              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 truncate mb-0.5">{currentNicheConfig.kpi3.label}</p>
-              <p className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">{kpi3Value}</p>
+              <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 truncate mb-0.5">Ações do agente</p>
+              <p className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">{stats.actions}</p>
             </div>
           </div>
         </Card>
@@ -1195,7 +1136,7 @@ useEffect(() => {
                   )}
                 >
                   <Users size={12} />
-                  {isClinic ? "Pacientes" : isServices ? "Agendamentos" : "Leads"}
+                  Leads
                 </button>
               </div>
             </div>
@@ -1203,7 +1144,7 @@ useEffect(() => {
             <div className="p-3 sm:p-5 pt-2 sm:pt-3">
               <WeeklyActivityChart 
                 data={weeklyActivity} 
-                metricLabel={chartMetric === "messages" ? "Mensagens" : isClinic ? "Pacientes" : "Leads"} 
+                metricLabel={chartMetric === "messages" ? "Mensagens" : "Leads"}
               />
             </div>
           </Card>
@@ -1214,9 +1155,9 @@ useEffect(() => {
               <div>
                 <div className="flex items-center gap-2">
                   <currentNicheConfig.icon size={17} className="text-emerald-600 shrink-0" />
-                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">{currentNicheConfig.leadsTitle}</h3>
+                  <h3 className="font-bold text-slate-900 text-sm sm:text-base">Leads recentes</h3>
                 </div>
-                <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">{currentNicheConfig.leadsSubtitle}</p>
+                <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">Contactos com interesse registado</p>
               </div>
               <Button 
                 variant="ghost" 
@@ -1258,7 +1199,7 @@ useEffect(() => {
                               {displayName}
                             </p>
                             <span className="text-[9px] sm:text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100/80 shrink-0">
-                              {lead.intent || (isClinic ? "Consulta" : isServices ? "Agendamento" : isRetail ? "Venda" : "Negociação")}
+                              {lead.intent || "Interesse por qualificar"}
                             </span>
                           </div>
                           <p className="text-[11px] sm:text-xs text-slate-500 truncate italic">
@@ -1287,9 +1228,9 @@ useEffect(() => {
                     <currentNicheConfig.icon size={26} className="opacity-60" />
                   </div>
                   <div className="space-y-1 max-w-sm">
-                    <p className="text-sm font-bold text-slate-800">{currentNicheConfig.emptyLeadsText}</p>
+                    <p className="text-sm font-bold text-slate-800">Sem leads recentes</p>
                     <p className="text-xs text-slate-500">
-                      Assim que um cliente ou paciente enviar mensagem pelo WhatsApp, o assistente inteligente irá registrar aqui em tempo real.
+                      Os leads aparecem aqui quando a equipa ou o agente registam o interesse de um contacto.
                     </p>
                   </div>
                   <Button
@@ -1309,7 +1250,7 @@ useEffect(() => {
         {/* Right Column (lg:col-span-4 space-y-6) */}
         <div className="lg:col-span-4 space-y-6">
           {/* Enriched WhatsApp Connection Status Card */}
-          <Card className="border-slate-100 shadow-xs overflow-hidden bg-white">
+          <Card id="ligar-whatsapp" className="scroll-mt-4 border-slate-100 shadow-xs overflow-hidden bg-white">
             <CardHeader className="p-5 border-b border-slate-50">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base font-bold text-slate-900">Conexão WhatsApp</CardTitle>
@@ -1318,7 +1259,7 @@ useEffect(() => {
                 </Badge>
               </div>
               <CardDescription className="text-xs">
-                {status === "connected" ? "Conexão oficial ativa e sincronizada" : "Conecte sua conta do WhatsApp"}
+                {status === "connected" ? "WhatsApp ligado" : "Conecte sua conta do WhatsApp"}
               </CardDescription>
             </CardHeader>
             <CardContent className="p-5 flex flex-col items-center justify-center text-center">
