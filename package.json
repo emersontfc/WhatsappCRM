@@ -62,5 +62,8 @@
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "libsignal": "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67"
   }
 }
