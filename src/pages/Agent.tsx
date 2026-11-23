@@ -113,7 +113,8 @@ export default function Agent() {
   };
 
   const handleSave = async () => {
-    if (config.provider !== "gemini" && !config.api_key) {
+    const requiresOwnKey = config.provider !== "gemini" || (config.is_active && sharedGeminiConfigured === false);
+    if (requiresOwnKey && !config.api_key.trim()) {
       toast.error("Por favor, insira a API Key do provedor selecionado.");
       return;
     }
@@ -135,13 +136,8 @@ export default function Agent() {
         body: JSON.stringify(configToSave),
       });
 
-      if (response.success && response.data && response.data.id) {
-        setConfig(prev => ({
-          ...prev,
-          ...response.data,
-          api_key: response.data.api_key || "********"
-        }));
-      }
+      if (response?.success !== true || !response.data?.id) throw new Error("A API não confirmou a gravação do agente.");
+      setConfig(prev => ({ ...prev, ...response.data, api_key: response.data.api_key || "" }));
 
       toast.success("Configurações do Agente salvas com sucesso!");
     } catch (err: any) {
