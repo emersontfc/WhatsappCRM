@@ -68,8 +68,9 @@ printf 'A preparar a imagem %s com o AgentX em execução.\n' "$revision"
 docker build --build-arg "AGENTX_RELEASE=$commit" --label "org.opencontainers.image.revision=$commit" -t "$release_image" "$stage/source"
 
 if [[ -f "$stage/source/scripts/check-agentx-release.ts" ]]; then
+  # The caller may be streaming this script to Bash. Keep that stream away from Compose.
   if ! "${compose[@]}" -f "$stage/release.yml" run --rm --no-deps -T --pull never \
-    --entrypoint node agentx ./node_modules/tsx/dist/cli.mjs scripts/check-agentx-release.ts; then
+    --entrypoint node agentx ./node_modules/tsx/dist/cli.mjs scripts/check-agentx-release.ts </dev/null; then
     printf 'Publicação abortada antes de trocar a versão em execução.\n' >&2
     exit 1
   fi
