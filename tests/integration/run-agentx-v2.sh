@@ -81,6 +81,9 @@ SELECT public.test_assert(NOT has_function_privilege('authenticated', 'public.ag
  'platform schema check requires the server role');
 SQL
   cat tests/integration/schedule-compatibility.sql
+  cat supabase/migrations/23_agenda_dispatch.sql
+  cat supabase/migrations/23_agenda_dispatch.sql
+  cat tests/integration/agenda-dispatch.sql
   cat tests/integration/whatsapp-sales-and-recurrence.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 
