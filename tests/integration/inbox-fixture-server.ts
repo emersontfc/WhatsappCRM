@@ -1,5 +1,6 @@
 import { whatsappManager } from "../../backend/whatsappManager.ts";
 import { handleAgentMessage } from "../../backend/agentManager.ts";
+import { handleIncomingMessage } from "../../backend/automationManager.ts";
 
 // Only the WhatsApp transport is simulated. The app and its database client are unchanged.
 const owner = "00000000-0000-4000-8000-000000000001";
@@ -22,7 +23,9 @@ sessions.set(owner, { status: "connected", contactsMap, socket: {
   }
 } });
 
-process.on("message", async (message: { event: string; requestId: string; text?: string; messageId?: string }) => {
+process.on("message", async (message: {
+  event: string; requestId: string; text?: string; messageId?: string; jid?: string; altJid?: string;
+}) => {
   if (message.event === "unconfirmed") confirmSend = false;
   let ok = true;
   if (message.event === "incoming") {
@@ -34,15 +37,18 @@ process.on("message", async (message: { event: string; requestId: string; text?:
     });
     ok = Boolean(saved?.contact_id);
   }
-  if (message.event === "sales" && message.text && message.messageId) {
-    const jid = "258840000002@s.whatsapp.net";
+  if ((message.event === "sales" || message.event === "inbound") && message.text && message.messageId) {
+    const jid = message.jid || "258840000002@s.whatsapp.net";
     const saved = await whatsappManager.syncMessage(owner, {
       key: { id: message.messageId, remoteJid: jid, fromMe: false },
       message: { conversation: message.text }, pushName: "Cliente vendedor",
       messageTimestamp: Math.floor(Date.now() / 1000)
-    });
+    }, message.altJid);
     if (saved?.contact_id) {
-      await handleAgentMessage(whatsappManager, owner, jid, message.text, false, message.messageId, saved.contact_id);
+      const handled = await handleIncomingMessage(whatsappManager, owner, jid, message.text, false, saved.contact_id);
+      if (!handled && message.event === "sales") {
+        await handleAgentMessage(whatsappManager, owner, jid, message.text, false, message.messageId, saved.contact_id);
+      }
     } else {
       ok = false;
     }

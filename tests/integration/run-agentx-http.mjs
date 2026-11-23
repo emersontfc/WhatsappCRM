@@ -16,6 +16,9 @@ let workerCalls = 0;
 let brokenCrm = false;
 let missingContactMigration = false;
 let missingSellerMigration = false;
+let missingLeadColumn = false;
+let missingSellerContract = false;
+let sellerContractReady = true;
 
 const supabase = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -36,6 +39,13 @@ const supabase = createServer((req, res) => {
     }
     return res.end(JSON.stringify("258841234567"));
   }
+  if (url.pathname === "/rest/v1/rpc/agentx_seller_contract_ready") {
+    if (missingSellerContract) {
+      res.statusCode = 404;
+      return res.end(JSON.stringify({ code: "PGRST202", message: "Seller readiness contract missing" }));
+    }
+    return res.end(JSON.stringify(sellerContractReady));
+  }
   if (url.pathname === "/auth/v1/user" && req.headers.authorization === `Bearer ${fakeToken}`) {
     return res.end(JSON.stringify({ id: fakeUser, aud: "authenticated", app_metadata: {}, user_metadata: {} }));
   }
@@ -49,6 +59,10 @@ const supabase = createServer((req, res) => {
   if (url.pathname === "/rest/v1/agentx_seller_settings" && missingSellerMigration) {
     res.statusCode = 404;
     return res.end(JSON.stringify({ code: "PGRST205", message: "Seller migration is missing" }));
+  }
+  if (url.pathname === "/rest/v1/leads" && missingLeadColumn) {
+    res.statusCode = 400;
+    return res.end(JSON.stringify({ code: "42703", message: "column leads.last_action does not exist" }));
   }
   if (req.method === "GET" && url.pathname.startsWith("/rest/v1/")) return res.end("[]");
   res.statusCode = 404;
@@ -90,6 +104,19 @@ async function startApp() {
   throw new Error(`Server failed to start\n${logs}`);
 }
 
+async function assertDegradedReadiness() {
+  const degraded = await startApp();
+  try {
+    const liveness = await fetch(degraded.base + "/api/health");
+    const readiness = await fetch(degraded.base + "/api/ready");
+    assert.equal(liveness.status, 200);
+    assert.equal(readiness.status, 503);
+    assert.deepEqual(await readiness.json(), { ready: false, release: revision });
+  } finally {
+    await degraded.stop();
+  }
+}
+
 try {
   const misplacedKey = `fixture.${Buffer.from('{"role":"service_role"}').toString("base64url")}.fixture`;
   await assert.rejects(preflight({ ...appEnv, VITE_SUPABASE_ANON_KEY: misplacedKey }), (error) => {
@@ -113,6 +140,7 @@ try {
 
     const status = await (await request("/api/operations", true)).json();
     assert.equal(status.modules.crm, "ready");
+    assert.equal(status.modules.sales, "ready");
     assert.equal(status.modules.agenda, "migration_required");
     assert.equal(status.whatsapp, "disconnected");
     assert.equal(status.schedulerEnabled, false);
@@ -131,23 +159,25 @@ try {
   }
 
   missingSellerMigration = true;
-  await assert.rejects(preflight(), { code: 1, stderr: /migração 20/ });
+  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
   missingSellerMigration = false;
+  missingLeadColumn = true;
+  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  await assertDegradedReadiness();
+  missingLeadColumn = false;
+  missingSellerContract = true;
+  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  await assertDegradedReadiness();
+  missingSellerContract = false;
+  sellerContractReady = false;
+  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  sellerContractReady = true;
   missingContactMigration = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
   missingContactMigration = false;
   brokenCrm = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
-  const degraded = await startApp();
-  try {
-    const liveness = await fetch(degraded.base + "/api/health");
-    const readiness = await fetch(degraded.base + "/api/ready");
-    assert.equal(liveness.status, 200);
-    assert.equal(readiness.status, 503);
-    assert.deepEqual(await readiness.json(), { ready: false, release: revision });
-  } finally {
-    await degraded.stop();
-  }
+  await assertDegradedReadiness();
   console.log("AgentX production HTTP smoke passed (ready, degraded schema, auth and delivery worker)");
 } finally {
   supabase.closeAllConnections();

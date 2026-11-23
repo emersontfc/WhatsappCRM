@@ -12,6 +12,9 @@ import { setTimeout as delay } from "node:timers/promises";
 const owner = "00000000-0000-4000-8000-000000000001";
 const other = "00000000-0000-4000-8000-000000000002";
 const otherContact = "00000000-0000-4000-8000-000000000022";
+const previousLeadId = "00000000-0000-4000-8000-000000000031";
+const duplicateLeadId = "00000000-0000-4000-8000-000000000032";
+const foreignLeadId = "00000000-0000-4000-8000-000000000033";
 const password = "agentx-inbox-test-password";
 const rest = new URL(process.argv[2]);
 assert.equal(rest.hostname, "127.0.0.1");
@@ -57,8 +60,13 @@ const supabase = createServer(async (req, res) => {
     for await (const chunk of req) input += chunk;
     const message = JSON.parse(input).message.split("\nUSER:\n").at(-1);
     const buying = message.includes("comprar");
-    return res.end(JSON.stringify({ response: JSON.stringify({ tool: buying ? "createOrder" : "getProductsCatalog",
-      args: buying ? { productName: "Livro do piloto" } : { search: "Livro do piloto" } }) }));
+    const toolAnswer = message.includes("interesse")
+      ? { tool: "qualifyLEAD", args: { phone: "258870000001", interestLevel: "alto", tag: "Interessado no livro",
+          notes: message.includes("limite") ? "x".repeat(501) : "Prefere o PDF" } }
+      : { tool: buying ? "createOrder" : "getProductsCatalog",
+          ...(buying ? { reply: "O seu pedido já foi criado." } : {}),
+          args: buying ? { productName: "Livro do piloto", quantity: message.includes("quatro") ? 4 : 1 } : { search: "Livro do piloto" } };
+    return res.end(JSON.stringify({ response: JSON.stringify(toolAnswer) }));
   }
   if (req.url.startsWith("/storage/v1/object/") && req.method === "POST") {
     if (req.headers.authorization !== `Bearer ${serviceKey}`) return res.writeHead(403).end("{}");
@@ -150,6 +158,9 @@ try {
   }
 
   app = await start();
+  const readiness = await fetch(app.base + "/api/ready", { signal: AbortSignal.timeout(12000) });
+  assert.equal(readiness.status, 200);
+  assert.equal((await readiness.json()).ready, true);
   const api = (route, index = 0, body) => fetch(app.base + "/api" + route, {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...(index < 0 ? {} : { authorization: `Bearer ${userTokens[index]}` }) },
@@ -349,7 +360,8 @@ try {
   const product = (await productResponse.json()).data;
   assert.equal(storedObjects.size, 1);
 
-  const sell = (text, messageId) => app.simulate("sales", { text, messageId });
+  const identity = { jid: "109876543211124@lid", altJid: "258840000002@s.whatsapp.net" };
+  const sell = (text, messageId) => app.simulate("sales", { text, messageId, ...identity });
   const read = async (resource, filter = "") => {
     const response = await fetch(new URL("/" + resource + filter, rest), { headers: storageAuth });
     assert.equal(response.status, 200);
@@ -359,11 +371,47 @@ try {
   assert.equal(overview.readyProducts, 1);
   assert.equal(overview.agentActive, true);
   assert.equal(overview.whatsappConnected, true);
+  await app.simulate("inbound", { text: "Bom dia", messageId: "inbound-before-ai", ...identity });
+  const [passiveLead] = await read("leads", `?id=eq.${previousLeadId}`);
+  assert.ok(passiveLead.contact_id);
+  assert.equal(passiveLead.last_message, "Bom dia");
+  assert.equal(passiveLead.stage, "novo");
+  await app.simulate("inbound", { text: "Bom dia", messageId: "lid-without-phone", jid: "109876543211125@lid" });
+  const [lidContact] = await read("contacts", "?lid=eq.109876543211125");
+  assert.equal(lidContact.phone, null);
+  assert.deepEqual(await read("leads", `?contact_id=eq.${lidContact.id}`), []);
+
   await sell("Quanto custa o livro?", "catalogue-one");
   assert.match(app.outbound.at(-1).content.text, /Livro do piloto.*250 MT/);
   assert.doesNotMatch(app.outbound.at(-1).content.text, /fixture-file-access|agentx-product-files/);
-  const [lead] = await read("leads", "?phone=eq.258840000002");
-  assert.ok(lead.contact_id);
+  await sell("Tenho interesse no livro.", "qualify-one");
+  const [lead] = await read("leads", `?id=eq.${previousLeadId}`);
+  assert.equal(lead.contact_id, passiveLead.contact_id);
+  assert.equal(lead.interest_level, "alto");
+  assert.match(lead.notes, /Nota histórica da loja A/);
+  assert.match(lead.notes, /Prefere o PDF/);
+  assert.match(lead.last_action, /interesse|qualifica/i);
+  assert.match(app.outbound.at(-1).content.text, /Registei o teu interesse/);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /falha|last_action|qualifyLead/i);
+  const [qualifiedContact] = await read("contacts", `?id=eq.${lead.contact_id}`);
+  assert.ok(qualifiedContact.tags.includes("Interessado no livro"));
+  assert.equal((await read("leads", `?id=eq.${duplicateLeadId}`))[0].notes, "Nota do duplicado");
+  assert.equal((await read("leads", `?id=eq.${foreignLeadId}`))[0].notes, "Nota privada da loja B");
+  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, 2);
+  const readAsOther = await fetch(new URL("/leads?select=id", rest),
+    { headers: { authorization: `Bearer ${userTokens[1]}` } });
+  assert.equal(readAsOther.status, 200);
+  assert.deepEqual(await readAsOther.json(), [{ id: foreignLeadId }]);
+
+  await sell("Tenho interesse e indico uma nota no limite.", "qualify-note-limit");
+  const [updatedNotes] = await read("leads", `?id=eq.${previousLeadId}&select=notes`);
+  assert.match(updatedNotes.notes, /Prefere o PDF/);
+  assert.equal(updatedNotes.notes.split("\n").at(-1).length, 500);
+  await sell("Quero comprar quatro livros.", "insufficient-stock");
+  assert.match(app.outbound.at(-1).content.text, /indisponível na quantidade pedida/i);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /pedido já foi criado/i);
+  assert.deepEqual((await (await api(seller)).json()).data.orders, []);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
 
   await sell("Quero comprar o livro.", "purchase-one");
   const [order] = (await (await api(seller)).json()).data.orders;
@@ -414,6 +462,25 @@ try {
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
   assert.equal((await read("leads", `?id=eq.${lead.id}`))[0].stage, "venda_fechada");
   assert.equal((await (await api(seller)).json()).data.orders.find(({ id }) => id === order.id).status, "fulfilled");
+  const manual = { phone: "84 000 0002", contactId: lead.contact_id, name: "Cliente atualizado", value: 300 };
+  assert.equal((await api("/leads", -1, manual)).status, 401);
+  assert.equal((await api("/leads", 0, { ...manual, contactId: otherContact })).status, 404);
+  assert.equal((await api("/leads", 0, { ...manual, phone: "258850000000" })).status, 400);
+  const manualSave = await api("/leads", 0, { ...manual, userId: other });
+  assert.equal(manualSave.status, 200);
+  const manualLead = (await manualSave.json()).data;
+  assert.equal(manualLead.id, lead.id);
+  assert.equal(manualLead.stage, "venda_fechada");
+  assert.equal(manualLead.name, manual.name);
+  assert.equal(manualLead.value, manual.value);
+  assert.match(manualLead.notes, /Prefere o PDF/);
+  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, 2);
+  if (page) {
+    await page.goto(app.base + `/leads?id=${lead.id}`);
+    await page.getByRole("heading", { name: "Cliente atualizado", exact: true }).waitFor();
+    await page.getByText("Interesse · alto", { exact: true }).waitFor();
+    assert.match(await page.getByPlaceholder("Detalhes da proposta, condições negociadas, prazos...").inputValue(), /Prefere o PDF/);
+  }
 
   await sell("Quero comprar mais um livro.", "purchase-two");
   const secondOrder = (await (await api(seller)).json()).data.orders.find(({ id }) => id !== order.id);
@@ -426,7 +493,7 @@ try {
   assert.equal(app.outbound.filter((message) => message.content.text?.includes("fixture-file-access")).length, 1);
 
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
-  console.log("Seller flow passed: scoped settings, catalogue and lead, confirmed order, proof review, deduplicated settlement and a single file delivery");
+  console.log("Seller flow passed on the repaired legacy schema: scoped settings, LID-to-contact link, lead qualification, order, manual proof review, one settlement and one delivery");
 } finally {
   await browser?.close();
   await app?.stop();

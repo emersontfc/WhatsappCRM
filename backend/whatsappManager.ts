@@ -348,8 +348,6 @@ export class WhatsAppManager implements IWhatsAppTransport {
               continue;
             }
 
-            console.log(`[WhatsApp] Message from ${jid} (isMe: ${isMe}): "${text}"`);
-
             const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
             const saved = await this.syncMessage(userId, msg, altJid);
             if (isGroupJid(jid)) {
@@ -378,8 +376,9 @@ export class WhatsAppManager implements IWhatsAppTransport {
               continue;
             }
             if ((!isMe || (isSelfMessage && !text.startsWith("AgentX:"))) && text && !isGroupOrBroadcast) {
-              console.log(`[WhatsApp] Processing message for ${userId} (from: ${jid}, text: "${text}", isSelf: ${isSelfMessage})`);
-              const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
+              const isButton = Boolean(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage);
+              const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, isButton,
+                isMe ? null : saved?.contact_id);
               if (!handledByAutomation) {
                 await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined, saved?.contact_id);
               }

@@ -57,6 +57,7 @@ export interface Lead {
   last_message?: string;
   intent?: string;
   last_action?: string;
+  interest_level?: "alto" | "medio" | "baixo" | null;
   status?: string;
   stage: LeadStage;
   value?: number;

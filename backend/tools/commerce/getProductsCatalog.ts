@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "../../supabaseAdmin.ts";
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
+import { salesToolFailure } from "../../services/salesToolFailure.ts";
 
 export const getProductsCatalogTool: ToolDefinition = {
   name: "getProductsCatalog",
@@ -58,12 +59,8 @@ export const getProductsCatalogTool: ToolDefinition = {
           : undefined,
         data: formatted
       };
-    } catch (err: any) {
-      return {
-        success: false,
-        message: `Erro ao consultar catálogo: ${err.message}`,
-        error: err.message
-      };
+    } catch (error) {
+      return salesToolFailure("getProductsCatalog", error, "Não foi possível consultar o catálogo da loja.");
     }
   }
 };

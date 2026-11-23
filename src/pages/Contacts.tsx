@@ -362,79 +362,40 @@ export default function Contacts() {
 
   const handleCreateOrUpdateLeadStage = async (newStage: LeadStage) => {
     if (!selectedContact) return;
-    const userId = await getUserId();
-    if (!userId) return;
 
     try {
       const existingLead = leadsMap[selectedContact.id] || leadsMap[selectedContact.phone];
+      const { data } = await apiFetch("/api/leads", {
+        method: "POST",
+        body: JSON.stringify({ contactId: selectedContact.id, stage: newStage })
+      });
+      if (!data?.id) throw new Error("A API não confirmou a gravação da oportunidade.");
+      setLeadsMap((prev) => ({ ...prev, [selectedContact.id]: data, [data.phone]: data }));
       if (existingLead) {
-        const { error } = await supabase
-          .from("leads")
-          .update({ stage: newStage, updated_at: new Date().toISOString() })
-          .eq("id", existingLead.id);
-        if (error) throw error;
-        setLeadsMap(prev => ({ ...prev, [selectedContact.id]: { ...existingLead, stage: newStage }, [selectedContact.phone]: { ...existingLead, stage: newStage } }));
         toast.success(`Etapa alterada para "${LEAD_STAGES.find(s => s.id === newStage)?.label}"`);
       } else {
-        const { data: newL, error } = await supabase
-          .from("leads")
-          .insert({
-            user_id: userId,
-            contact_id: selectedContact.id,
-            phone: selectedContact.phone,
-            name: selectedContact.name,
-            stage: newStage,
-            created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-        if (error) throw error;
-        if (newL) {
-          setLeadsMap(prev => ({ ...prev, [selectedContact.id]: newL, [selectedContact.phone]: newL }));
-          toast.success("Lead criada no Pipeline!");
-        }
+        toast.success("Oportunidade guardada no funil.");
       }
     } catch (err) {
       console.error("Error updating lead stage:", err);
-      toast.error("Erro ao atualizar pipeline do lead.");
+      toast.error(err instanceof Error ? err.message : "Erro ao atualizar a oportunidade.");
     }
   };
 
   const handleQuickCreateLead = async (contact: Contact, e: React.MouseEvent) => {
     e.stopPropagation();
-    const userId = await getUserId();
-    if (!userId) {
-      toast.error("Sessão expirada. Faça login novamente.");
-      return;
-    }
 
     try {
       const display = getContactDisplay(contact);
       const leadName = display.isRealName ? contact.name : (contact.name || display.title);
 
-      const { data: newL, error } = await supabase
-        .from("leads")
-        .insert({
-          user_id: userId,
-          contact_id: contact.id,
-          phone: contact.phone,
-          name: leadName,
-          stage: "novo",
-          status: "new",
-          created_at: new Date().toISOString()
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      if (newL) {
-        setLeadsMap(prev => ({
-          ...prev,
-          [contact.id]: newL,
-          [contact.phone]: newL
-        }));
-        toast.success(`🎯 Lead criado no Funil para ${leadName}!`);
-      }
+      const { data } = await apiFetch("/api/leads", {
+        method: "POST",
+        body: JSON.stringify({ contactId: contact.id })
+      });
+      if (!data?.id) throw new Error("A API não confirmou a gravação da oportunidade.");
+      setLeadsMap((prev) => ({ ...prev, [contact.id]: data, [data.phone]: data }));
+      toast.success(`Oportunidade guardada para ${leadName}.`);
     } catch (err: any) {
       console.error("Error creating quick lead:", err);
       toast.error(err.message || "Erro ao criar lead.");

@@ -101,7 +101,8 @@ Responda em JSON:
  * Safely executes a tool by name with scope, anti-loop cooldown and audit logging
  */
 export async function executeToolByName(name: string, args: any, ctx: ToolContext): Promise<ToolResult> {
-  const tool = ALL_TOOLS.find(t => t.name === name);
+  const normalizedName = typeof name === "string" ? name.trim().toLowerCase() : "";
+  const tool = ALL_TOOLS.find(t => t.name.toLowerCase() === normalizedName);
 
   if (!tool) {
     console.warn(`[Tool Registry] Tool "${name}" not found.`);
@@ -114,14 +115,14 @@ export async function executeToolByName(name: string, args: any, ctx: ToolContex
     return { success: false, message: `Permissão negada: seu nível de acesso não permite usar "${name}".` };
   }
 
-  console.log(`[Tool Registry] Executing "${name}" for user ${ctx.userId} (Role: ${ctx.role}) with args:`, args);
+  console.log(`[Tool Registry] Executing "${tool.name}" for user ${ctx.userId} (Role: ${ctx.role})`);
 
   // 2. Audit logging
   try {
     await supabaseAdmin.from("agent_logs").insert({
       user_id: ctx.userId,
       phone: ctx.phone,
-      action: name,
+      action: tool.name,
       data: args || {},
       created_at: new Date().toISOString()
     });

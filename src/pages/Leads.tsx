@@ -226,11 +226,7 @@ export default function Leads() {
   // Create new manual lead
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
-    const userId = await getUserId();
-    if (!userId) return;
-
-    const cleanPhone = readContactPhone(newLeadPhone);
-    if (!cleanPhone) {
+    if (!readContactPhone(newLeadPhone)) {
       toast.error("Indica um número de telefone válido.");
       return;
     }
@@ -244,24 +240,18 @@ export default function Leads() {
       });
       if (!result?.data?.id) throw new Error("A API não confirmou a gravação do contacto.");
 
-      // 2. Insert or update lead
-      const numericVal = newLeadValue ? parseFloat(newLeadValue) : null;
-      const { error: lErr } = await supabase
-        .from("leads")
-        .upsert({
-          user_id: userId,
-          contact_id: result.data.id,
-          phone: cleanPhone,
-          name: newLeadName.trim() || null,
+      const saved = await apiFetch("/api/leads", {
+        method: "POST",
+        body: JSON.stringify({
+          contactId: result.data.id,
+          name: newLeadName,
           stage: newLeadStage,
-          value: numericVal,
-          notes: newLeadNotes.trim() || null,
-          status: newLeadStage === "venda_fechada" ? "closed" : newLeadStage === "perdido" ? "lost" : "active",
+          value: newLeadValue || null,
+          notes: newLeadNotes,
           source: "manual",
-          updated_at: new Date().toISOString()
-        }, { onConflict: "user_id,phone" });
-
-      if (lErr) throw lErr;
+        })
+      });
+      if (!saved?.data?.id) throw new Error("A API não confirmou a gravação da oportunidade.");
 
       toast.success("Oportunidade cadastrada com sucesso!");
       setIsNewLeadModalOpen(false);
@@ -909,6 +899,9 @@ export default function Leads() {
               {selectedLead.last_action && <p className="text-sm text-slate-700">
                 Última ação · {selectedLead.last_action}
               </p>}
+              {selectedLead.interest_level && <p className="text-sm text-slate-700">
+                Interesse · {selectedLead.interest_level === "medio" ? "médio" : selectedLead.interest_level}
+              </p>}
 
               {/* Last Message */}
               {selectedLead.last_message && (
@@ -986,6 +979,7 @@ export default function Leads() {
                 </label>
                 <Input
                   required
+                  maxLength={150}
                   placeholder="Ex: Carlos Machel ou Empresa XYZ"
                   value={newLeadName}
                   onChange={e => setNewLeadName(e.target.value)}
@@ -1030,6 +1024,8 @@ export default function Leads() {
                   <Input
                     type="number"
                     step="0.01"
+                    min="0"
+                    max="9999999999.99"
                     placeholder="Ex: 5000"
                     value={newLeadValue}
                     onChange={e => setNewLeadValue(e.target.value)}
@@ -1044,6 +1040,7 @@ export default function Leads() {
                 </label>
                 <textarea
                   rows={3}
+                  maxLength={3000}
                   placeholder="Interesse em produto X, orçamento enviado, origem anúncio Meta..."
                   value={newLeadNotes}
                   onChange={e => setNewLeadNotes(e.target.value)}

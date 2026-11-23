@@ -771,14 +771,20 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
           if (toolResult) {
             actionResult = toolResult;
-            const formatted = role === "lead" && ["createOrder", "submitPaymentProof"].includes(parsed.tool)
+            const isSalesWrite = ["createorder", "submitpaymentproof", "qualifylead", "create_lead"].includes(String(parsed.tool).trim().toLowerCase());
+            const formatted = role === "lead" && isSalesWrite
               ? toolResult.message : formatToolOutputForWhatsApp(parsed.tool, toolResult);
-            if (["getProductsCatalog", "createOrder", "submitPaymentProof", "get_booking_link"].includes(parsed.tool) || !finalReply.trim()) {
+            if ((role === "lead" && isSalesWrite) ||
+                ["getProductsCatalog", "createOrder", "submitPaymentProof", "get_booking_link"].includes(parsed.tool) || !finalReply.trim()) {
               finalReply = formatted;
             } else {
               finalReply = `${finalReply}\n\n${formatted}`;
             }
           }
+        } else if (parsed.action === "trigger_price_flow") {
+          const result = await executeToolByName("getProductsCatalog", {}, toolContext);
+          actionResult = result;
+          finalReply = formatToolOutputForWhatsApp("getProductsCatalog", result);
         } else if (parsed.action) {
           // 2. Legacy action execution fallback
           console.log(`[AI Engine] AI suggested legacy action: ${parsed.action} with intent: ${parsed.intent}`);
@@ -786,9 +792,13 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
             action: parsed.action,
             data: parsed.data || {},
             userId,
-            phone: cleanSenderPhone,
+            phone: toolPhone,
+            contactId: contactData?.id,
             intent: parsed.intent
           });
+          if (parsed.action === "create_lead") {
+            finalReply = actionResult.success ? "Registei o teu interesse." : "Não foi possível registar o interesse. Tenta novamente ou fala com a equipa.";
+          }
         }
       } else {
         // Plain text fallback: strip markdown json wrappers if present

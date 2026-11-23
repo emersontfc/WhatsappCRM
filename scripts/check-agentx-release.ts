@@ -20,7 +20,7 @@ async function check() {
   const [crm, sales] = await Promise.all([checks.check("crm"), checks.check("sales")]);
   if (crm === "migration_required") return "O Supabase respondeu, mas o esquema principal do CRM precisa de atualização.";
   if (crm !== "ready") return "O contentor não conseguiu consultar o CRM. Verifica a chave privada e a ligação ao Supabase.";
-  if (sales === "migration_required") return "O esquema das vendas precisa de atualização. Confirma a migração 20.";
+  if (sales === "migration_required") return "O esquema das vendas precisa de atualização. Confirma as migrações 20 e 21.";
   if (sales !== "ready") return "O contentor não conseguiu consultar o esquema das vendas.";
   return null;
 }
@@ -31,5 +31,5 @@ if (message) {
   console.error(`Pré-verificação falhou. ${message}`);
   process.exitCode = 1;
 } else {
-  console.log("Pré-verificação concluída. Configuração pública, compilação e leitura do CRM verificadas.");
+  console.log("Pré-verificação concluída. Configuração pública, compilação, CRM e vendas verificados.");
 }

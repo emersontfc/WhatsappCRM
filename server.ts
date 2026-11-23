@@ -7,6 +7,7 @@ import path from "path";
 import cors from "cors";
 import whatsappRoutes from "./backend/routes/whatsapp.ts";
 import contactRoutes from "./backend/routes/contacts.ts";
+import leadRoutes from "./backend/routes/leads.ts";
 import aiRoutes from "./backend/routes/ai.ts";
 import adminRoutes from "./backend/routes/admin.ts";
 import authRoutes from "./backend/routes/auth.ts";
@@ -559,6 +560,7 @@ async function startServer() {
   // API Routes
   app.use("/api/whatsapp", authenticate, whatsappRoutes);
   app.use("/api/contacts", authenticate, contactRoutes);
+  app.use("/api/leads", authenticate, leadRoutes);
   app.use("/api/auth", authRoutes);
   
   // Public Plans Route

@@ -364,11 +364,26 @@ export default function Messages() {
     setIsEditingName(false);
 
     setLeadLoading(true);
-    void Promise.resolve(supabase.from("leads").select("*").eq("user_id", userId)
-      .or(`contact_id.eq.${contactId},phone.eq.${selectedContact.phone}`).maybeSingle())
-      .then(({ data }) => { if (active) setCurrentLead(data ?? null); })
-      .catch((error) => console.error("Lead unavailable:", error))
-      .finally(() => { if (active) setLeadLoading(false); });
+    const loadLead = async () => {
+      try {
+        const linked = await supabase.from("leads").select("*").eq("user_id", userId).eq("contact_id", contactId)
+          .order("created_at", { ascending: true, nullsFirst: false }).order("id").limit(1).maybeSingle();
+        if (linked.error) throw linked.error;
+        let lead = linked.data;
+        if (!lead && selectedContact.phone) {
+          const byPhone = await supabase.from("leads").select("*").eq("user_id", userId).eq("phone", selectedContact.phone)
+            .order("created_at", { ascending: true, nullsFirst: false }).order("id").limit(1).maybeSingle();
+          if (byPhone.error) throw byPhone.error;
+          lead = byPhone.data;
+        }
+        if (active) setCurrentLead(lead);
+      } catch (error) {
+        console.error("Lead unavailable:", error);
+      } finally {
+        if (active) setLeadLoading(false);
+      }
+    };
+    void loadLead();
 
     void markConversationAsRead(contactId);
 
@@ -736,35 +751,12 @@ export default function Messages() {
   const handleUpdateLeadStage = async (newStage: LeadStage) => {
     if (!selectedContact || !userId) return;
     try {
-      if (currentLead) {
-        const { data, error } = await supabase
-          .from("leads")
-          .update({ stage: newStage, updated_at: new Date().toISOString() })
-          .eq("id", currentLead.id)
-          .select()
-          .single();
-
-        if (error) throw error;
-        setCurrentLead(data);
-      } else {
-        // Create lead
-        const { data, error } = await supabase
-          .from("leads")
-          .insert({
-            user_id: userId,
-            contact_id: selectedContact.id,
-            phone: selectedContact.phone,
-            name: selectedContact.name,
-            stage: newStage,
-            status: newStage === 'venda_fechada' ? 'qualified' : 'new',
-            created_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-        setCurrentLead(data);
-      }
+      const { data } = await apiFetch("/api/leads", {
+        method: "POST",
+        body: JSON.stringify({ contactId: selectedContact.id, stage: newStage })
+      });
+      if (!data?.id) throw new Error("A API não confirmou a gravação da oportunidade.");
+      setCurrentLead(data);
       toast.success("Estágio comercial atualizado!");
     } catch (e: any) {
       toast.error(e.message || "Erro ao atualizar estágio do lead");

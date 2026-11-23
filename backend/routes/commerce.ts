@@ -2,14 +2,16 @@ import express from "express";
 import multer from "multer";
 import { AuthRequest } from "../middleware/auth.ts";
 import { commerceService } from "../services/commerceService.ts";
-import { supabaseAdmin } from "../supabaseAdmin.ts";
+import { supabaseAdmin, supabaseAdminConfigured } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { parseSellerSettings, saveSellerSettings, sellerOverview } from "../services/sellerWorkspace.ts";
 import { isSellerMethod } from "../../shared/seller.ts";
+import { makePlatformChecks } from "../services/platformChecks.ts";
 
 import { PRODUCT_FILE_LIMIT, productFilename, storeProductFile } from "../services/catalogDeliverables.ts";
 
 const router = express.Router();
+const platform = makePlatformChecks(supabaseAdminConfigured);
 const upload = multer({ limits: { fileSize: PRODUCT_FILE_LIMIT, files: 1 } }).single("file");
 const productUpload: express.RequestHandler = (req, res, next) => {
   upload(req, res, (error) => {
@@ -25,12 +27,15 @@ router.get("/seller", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Inicia sessão para abrir o Vendedor." });
   try {
+    const sales = await platform.check("sales");
+    if (sales === "migration_required") {
+      return res.status(503).json({ error: "A instalação precisa das migrações 20 e 21 do Supabase. Pede ao administrador que atualize o esquema de vendas." });
+    }
+    if (sales !== "ready") return res.status(503).json({ error: "Não foi possível verificar a ligação ao esquema de vendas. Tenta atualizar." });
     const data = await sellerOverview(userId, whatsappManager.getSession(userId)?.status === "connected");
     return res.set("Cache-Control", "no-store").json({ success: true, data });
-  } catch (error) {
-    const code = (error as { code?: string })?.code;
-    return res.status(503).json({ error: code === "PGRST205" || code === "42P01"
-      ? "O Vendedor precisa da migração 20 no Supabase." : "Não foi possível consultar o Vendedor. Tenta atualizar." });
+  } catch {
+    return res.status(503).json({ error: "Não foi possível consultar o Vendedor. Tenta atualizar." });
   }
 });
 

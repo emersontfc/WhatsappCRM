@@ -1,74 +1,52 @@
 import { supabaseAdmin } from "./supabaseAdmin.ts";
+import { normalizeContactPhone } from "../shared/contactPhone.ts";
 
 // In-memory state for smart menus
 // Key: userId:jid, Value: { menuId: string, options: any[], timestamp: number }
 const menuStateCache = new Map<string, { menuId: string, options: any[], timestamp: number }>();
 
-export async function handleIncomingMessage(whatsappManager: any, userId: string, jid: string, text: string, isButton: boolean = false) {
+async function captureInboundLead(userId: string, contactId: string, jid: string, text: string) {
+  const incomingPhone = /@(?:s\.whatsapp\.net|c\.us)$/i.test(jid) ? normalizeContactPhone(jid) : null;
+  const incomingLid = /^(\d{5,20})(?::\d+)?@lid$/i.exec(jid)?.[1];
+  if (!incomingPhone && !incomingLid) return;
+
+  try {
+    const signal = AbortSignal.timeout(5_000);
+    const { data: contact, error } = await supabaseAdmin.from("contacts")
+      .select("id, name, phone, lid").eq("user_id", userId).eq("id", contactId)
+      .abortSignal(signal).maybeSingle();
+    if (error) throw error;
+    if (!contact) return;
+    const phone = normalizeContactPhone(contact.phone);
+    const storedLid = contact.lid?.split(/[:@]/)[0];
+    const matchesSender = incomingPhone ? phone === incomingPhone : incomingLid === storedLid;
+    if (!phone || !matchesSender || phone === normalizeContactPhone(storedLid)) return;
+
+    const { data: leadId, error: captureError } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
+      p_user: userId, p_phone: phone, p_contact: contact.id,
+      p_name: contact.name, p_activity: "inbound", p_message: text
+    }).abortSignal(signal);
+    if (captureError || !leadId) {
+      console.warn("[Automation] Lead capture unavailable:", captureError?.code || "no_result");
+    }
+  } catch (error) {
+    console.warn("[Automation] Lead capture unavailable:", (error as { code?: string })?.code || "request_failed");
+  }
+}
+
+export async function handleIncomingMessage(
+  whatsappManager: any, userId: string, jid: string, text: string, isButton = false, savedContactId?: string | null
+) {
   try {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(userId)) return false;
 
-    // 0. Capture Lead & Update Contact unread count (Only for real direct contacts, not groups or broadcast)
-    const phone = jid.split("@")[0];
-    const isGroupOrBroadcast = jid.includes("@g.us") || 
-                               jid.includes("@broadcast") || 
-                               jid.includes("@newsletter") || 
-                               jid.startsWith("120363");
-    
-    const cleanPhone = phone.replace(/\D/g, "");
-    // Valid direct contacts are non-group contacts with at least 8 digits
-    const isValidContact = !isGroupOrBroadcast && cleanPhone.length >= 8 && !cleanPhone.startsWith("120363");
-
-    let contactId: string | null = null;
-    if (isValidContact) {
-      try {
-        const phoneNo258 = cleanPhone.startsWith("258") ? cleanPhone.slice(3) : cleanPhone;
-        const phoneWith258 = cleanPhone.startsWith("258") ? cleanPhone : `258${cleanPhone}`;
-
-        const { data: contacts } = await supabaseAdmin
-          .from("contacts")
-          .select("id, name, unread_count")
-          .eq("user_id", userId)
-          .or(`phone.eq.${phone},phone.eq.${cleanPhone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-          .limit(1);
-
-        const contact = contacts?.[0] || null;
-
-        if (contact) {
-          contactId = contact.id;
-        }
-
-        // Upsert lead if it's a real phone number
-        if (cleanPhone.length <= 15) {
-          const { data: existingLead } = await supabaseAdmin
-            .from("leads")
-            .select("id, stage, status")
-            .eq("user_id", userId)
-            .eq("phone", phone)
-            .maybeSingle();
-
-          await supabaseAdmin.from("leads").upsert({
-            user_id: userId,
-            contact_id: contactId,
-            phone,
-            name: contact?.name || null,
-            stage: existingLead?.stage || "novo",
-            status: existingLead?.status || "novo",
-            last_message: text,
-            updated_at: new Date().toISOString()
-          }, { onConflict: "user_id,phone" });
-          console.log(`[Automation] Lead captured for contact: ${phone}`);
-        }
-      } catch (e) {
-        console.error("[Automation] Error capturing lead:", e);
-      }
-    }
+    if (savedContactId) await captureInboundLead(userId, savedContactId, jid, text);
 
     const normalizedText = text.trim().toLowerCase();
     let triggered = false;
     
-    console.log(`[Automation] Checking automations for user ${userId}, JID: ${jid}, text: "${normalizedText}"`);
+    console.log(`[Automation] Checking automations for user ${userId}`);
 
     // 0. Check if user is responding to a menu
     const stateKey = `${userId}:${jid}`;

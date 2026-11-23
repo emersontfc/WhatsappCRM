@@ -71,6 +71,8 @@ aprovações e pedidos que tenham sido criados entretanto.
 
 Aplique `supabase/migrations/20_seller_workspace.sql` depois das migrações 12, 14 e 19 e antes de publicar a versão. A atualização preserva o catálogo, os pedidos e os comprovativos existentes. A verificação antes da publicação exige o esquema novo. A versão anterior pode continuar a operar com as tabelas e colunas adicionadas.
 
+Em instalações que já receberam a migração 20, aplique `supabase/migrations/21_seller_lead_compatibility.sql`. Repare a base antes de publicar a aplicação. A migração adiciona os campos que o CRM antigo ainda possa não ter, como `leads.last_action`, e preserva os registos existentes. No SQL Editor, `select public.agentx_seller_contract_ready();` deve devolver `true`. O endpoint `/api/ready` da nova versão também valida o contrato de vendas.
+
 Abra **Vendedor** em `/seller`. Ligue o WhatsApp, ative um agente com perfil **Vendas** ou **Multifuncional**, publique um produto com stock e configure o destino de pagamento. Os produtos digitais precisam de um ficheiro privado ou conteúdo de entrega. O agente guarda as instruções de pagamento no pedido para que uma alteração posterior do destino só afete novos pedidos.
 
 O cliente pode enviar um SMS ou um comprovativo em texto pelo WhatsApp. Inclua o número do pedido se tiver mais de um aberto. A receção cria um comprovativo pendente e envia um aviso ao número indicado, se estiver configurado. O titular da conta abre o painel, confere o recebimento no prestador e introduz o método, a referência oficial e o montante. O mesmo pagamento confirmado só pode liquidar um pedido por conta e por método. A entrega digital usa um link temporário e a confirmação por WhatsApp.

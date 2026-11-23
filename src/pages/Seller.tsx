@@ -29,7 +29,10 @@ export default function Seller() {
     apiFetch("/api/commerce/seller", { signal: request.signal }).then(({ data }) => {
       setOverview(data);
     }).catch((failure) => {
-      if (!request.signal.aborted) setError(failure instanceof Error ? failure.message : "Não foi possível carregar o Vendedor.");
+      if (!request.signal.aborted) {
+        setOverview(null);
+        setError(failure instanceof Error ? failure.message : "Não foi possível carregar o Vendedor.");
+      }
     }).finally(() => {
       if (!request.signal.aborted) setLoading(false);
     });

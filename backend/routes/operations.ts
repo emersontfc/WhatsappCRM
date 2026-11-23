@@ -15,9 +15,9 @@ type Dependencies = {
 export function registerOperations(app: Express, deps: Dependencies) {
   const checks = makePlatformChecks(deps.databaseConfigured);
   app.get("/api/ready", async (_req, res) => {
-    const crm = await checks.check("crm");
+    const [crm, sales] = await Promise.all([checks.check("crm"), checks.check("sales")]);
     const frontend = deps.frontendReady();
-    const ready = crm === "ready" && frontend;
+    const ready = crm === "ready" && sales === "ready" && frontend;
     res.set("Cache-Control", "no-store").status(ready ? 200 : 503).json({ ready, release: deps.release });
   });
 

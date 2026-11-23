@@ -63,6 +63,7 @@ export class CommerceService {
       p_source_message: params.sourceMessageId ?? null
     });
     if (error) throw error;
+    if (!order?.id || !order?.order_number) throw new Error("Order write returned no identifier");
     return { order };
   }
 

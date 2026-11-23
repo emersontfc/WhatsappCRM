@@ -1,9 +1,11 @@
-import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
+import type { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { supabaseAdmin } from "../../supabaseAdmin.ts";
+import { normalizeContactPhone, readContactPhone } from "../../../shared/contactPhone.ts";
+import { salesToolFailure } from "../../services/salesToolFailure.ts";
 
 export const qualifyLeadTool: ToolDefinition = {
   name: "qualifyLead",
-  description: "Atualiza a pontuação de interesse, etiquetas (tags) e notas comerciais de um lead qualificado.",
+  description: "Regista o nível de interesse e as notas comerciais do lead e, se existir um contacto, acrescenta uma etiqueta.",
   category: "crm",
   allowedRoles: ["admin", "lead"],
   riskLevel: "low",
@@ -13,7 +15,7 @@ export const qualifyLeadTool: ToolDefinition = {
     properties: {
       phone: {
         type: "string",
-        description: "Telefone do lead a ser qualificado (se omitido, usa o do contato atual)"
+        description: "Telefone de outro lead para um comando do administrador. Em conversas com clientes usa o número da própria conversa."
       },
       interestLevel: {
         type: "string",
@@ -31,76 +33,34 @@ export const qualifyLeadTool: ToolDefinition = {
     }
   },
   execute: async (args: { phone?: string; interestLevel?: string; tag?: string; notes?: string }, ctx: ToolContext): Promise<ToolResult> => {
+    const conversationPhone = normalizeContactPhone(ctx.phone);
+    const targetPhone = ctx.role === "admin" && args.phone ? readContactPhone(args.phone) : conversationPhone;
+    if (!targetPhone) return { success: false, message: "Não foi possível identificar o telefone do contacto." };
+    if (args.interestLevel && !["alto", "medio", "baixo"].includes(args.interestLevel)) {
+      return { success: false, message: "Indica um nível de interesse alto, médio ou baixo." };
+    }
+    const inConversation = targetPhone === conversationPhone;
+    const tag = typeof args.tag === "string" ? args.tag.trim().slice(0, 64) : null;
+    const note = typeof args.notes === "string" ? args.notes.trim().slice(0, 500) : null;
     try {
-      const targetPhone = (ctx.role === "admin" ? (args.phone || ctx.phone) : ctx.phone).replace(/\D/g, "");
-      if (!/^\d{8,15}$/.test(targetPhone)) {
-        return { success: false, message: "Não foi possível identificar o telefone do contacto." };
-      }
-      if (ctx.role === "lead") {
-        const { error } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
-          p_user: ctx.userId, p_phone: targetPhone, p_contact: ctx.contactId ?? null,
-          p_name: ctx.contactName ?? null, p_activity: "interest", p_message: ctx.incomingText ?? null
-        });
-        if (error) throw error;
-      }
-
-      // 1. Fetch contact
-      const { data: contacts } = await supabaseAdmin
-        .from("contacts")
-        .select("id, name, tags, notes")
-        .eq("user_id", ctx.userId)
-        .or(`phone.eq.${targetPhone},phone.eq.258${targetPhone},phone.eq.${targetPhone.replace(/^258/, "")}`)
-        .limit(1);
-
-      const contact = contacts?.[0];
-
-      if (contact) {
-        const currentTags: string[] = Array.isArray(contact.tags) ? contact.tags : [];
-        const newTags = args.tag ? Array.from(new Set([...currentTags, args.tag])) : currentTags;
-        const currentNotes = contact.notes ? `${contact.notes}\n` : "";
-        const updatedNotes = args.notes ? `${currentNotes}[Qualificação]: ${args.notes} (${args.interestLevel || "normal"})` : contact.notes;
-
-        await supabaseAdmin
-          .from("contacts")
-          .update({
-            tags: newTags,
-            notes: updatedNotes
-          })
-          .eq("id", contact.id);
-      }
-
-      // 2. Update lead if exists
-      const { data: leads } = await supabaseAdmin
-        .from("leads")
-        .select("id, notes")
-        .eq("user_id", ctx.userId)
-        .eq("phone", targetPhone)
-        .limit(1);
-
-      if (leads && leads.length > 0) {
-        await supabaseAdmin
-          .from("leads")
-          .update({
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", leads[0].id);
-      }
-
+      const { data, error } = await supabaseAdmin.rpc("agentx_qualify_sales_lead", {
+        p_user: ctx.userId, p_phone: targetPhone, p_contact: inConversation ? ctx.contactId ?? null : null,
+        p_name: inConversation ? ctx.contactName ?? null : null,
+        p_message: ctx.role === "lead" ? ctx.incomingText ?? null : null,
+        p_interest: args.interestLevel || null, p_tag: tag || null, p_note: note || null
+      });
+      if (error) throw error;
+      if (!data?.id) throw new Error("Lead write returned no identifier");
       return {
         success: true,
-        message: `Lead ${targetPhone} qualificado com sucesso! Etiqueta "${args.tag || "N/A"}" registrada com nível de interesse ${args.interestLevel || "médio"}.`,
-        data: {
-          phone: targetPhone,
-          tag: args.tag,
-          interestLevel: args.interestLevel
-        }
+        message: ctx.role === "lead" ? "Registei o teu interesse." : "A qualificação do lead foi guardada.",
+        data
       };
-    } catch (err: any) {
-      return {
-        success: false,
-        message: `Erro ao qualificar lead: ${err.message}`,
-        error: err.message
-      };
+    } catch (error) {
+      const missingContact = (error as { code?: string } | null)?.code === "P0002";
+      return salesToolFailure("qualifyLead", error, missingContact
+        ? "Não encontrei um contacto com esse número nesta conta."
+        : "Não foi possível guardar o interesse. Tenta novamente ou fala com a equipa.");
     }
   }
 };

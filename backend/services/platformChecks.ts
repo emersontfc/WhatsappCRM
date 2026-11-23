@@ -7,7 +7,8 @@ const requirements = {
     ["scheduled_status", "id,user_id,caption,attempts,repeat_days,error"]],
   sales: [["products", "id,user_id,price,stock,deliverable_path"], ["orders", "id,user_id,status,lead_id,seller_payment"],
     ["order_items", "id,order_id,product_id"], ["payment_verifications", "id,user_id,order_id,source_message_id"],
-    ["leads", "id,user_id,stage"], ["agentx_seller_settings", "user_id,payment_method"], ["agentx_seller_settlements", "order_id"]],
+    ["contacts", "id,user_id,phone,tags"], ["leads", "id,user_id,phone,contact_id,name,stage,status,last_message,last_action,source,notes,interest_level,created_at,updated_at"],
+    ["agentx_seller_settings", "user_id,payment_method"], ["agentx_seller_settlements", "order_id"]],
   delivery: [["agentx_orders", "id,organization_id,status"], ["agentx_digital_deliveries", "organization_id,order_id"]],
   bookings: [["services", "id,user_id,active"], ["appointments", "id,user_id,appointment_date,reminder_24h_sent,reminder_2h_sent"]],
   groups: [["group_rules", "user_id,group_jid,active"], ["agentx_group_events", "id,user_id,group_jid,outcome"]]
@@ -36,6 +37,12 @@ export function makePlatformChecks(configured: boolean) {
         if (error?.code === "PGRST202" || error?.code === "42883") return "migration_required";
         if (error) return "unavailable";
         return data === "258841234567" ? "ready" : "migration_required";
+      }
+      if (module === "sales") {
+        const { data, error } = await supabaseAdmin.rpc("agentx_seller_contract_ready").abortSignal(signal);
+        if (isSchemaError(error?.code) || error?.code === "PGRST202" || error?.code === "42883") return "migration_required";
+        if (error || typeof data !== "boolean") return "unavailable";
+        return data ? "ready" : "migration_required";
       }
       if (module !== "agenda") return "ready";
 

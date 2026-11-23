@@ -54,6 +54,14 @@ describe("commerce catalog and private files", () => {
     expect(mocks.rpc).not.toHaveBeenCalled();
   });
 
+  it("reports a legacy schema failure without sending the SQL error to a customer", async () => {
+    mocks.from.mockReturnValue(query([{ id: "book", name: "Livro", price: 30, stock: 2 }]));
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: "42703", message: "column last_action of relation leads does not exist" } });
+    const result = await createOrderTool.execute({ productName: "Livro" }, ctx);
+    expect(result).toMatchObject({ success: false, code: "SALES_SCHEMA_REQUIRED" });
+    expect(JSON.stringify(result)).not.toContain("last_action");
+  });
+
   it("only sends after a paid order has been exclusively claimed", async () => {
     const order = {
       status: "paid", order_number: "AGX-TEST", customer_phone: "841234567",

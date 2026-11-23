@@ -1,6 +1,8 @@
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
 import { isSellerMethod, sellerMethods } from "../../../shared/seller.ts";
+import { normalizeContactPhone } from "../../../shared/contactPhone.ts";
+import { salesToolFailure } from "../../services/salesToolFailure.ts";
 
 export const createOrderTool: ToolDefinition = {
   name: "createOrder",
@@ -28,7 +30,7 @@ export const createOrderTool: ToolDefinition = {
     },
     required: ["productName"]
   },
-  execute: async (args: { productName: string; quantity?: number; paymentMethod?: any }, ctx: ToolContext): Promise<ToolResult> => {
+  execute: async (args: { productName: string; quantity?: number; paymentMethod?: string }, ctx: ToolContext): Promise<ToolResult> => {
     try {
       const quantity = args.quantity ?? 1;
       const paymentMethod = args.paymentMethod ?? "mpesa";
@@ -46,13 +48,14 @@ export const createOrderTool: ToolDefinition = {
       }
       const product = matches[0];
 
-      if (!/^\d{8,15}$/.test(ctx.phone)) {
+      const phone = normalizeContactPhone(ctx.phone);
+      if (!phone) {
         return { success: false, message: "O contacto ainda não tem um número de telefone associado ao WhatsApp." };
       }
 
       const result = await commerceService.createOrder({
         userId: ctx.userId,
-        customerPhone: ctx.phone,
+        customerPhone: phone,
         customerName: ctx.contactName || "Cliente",
         contactId: ctx.contactId,
         sourceMessageId: ctx.messageId,
@@ -95,13 +98,14 @@ export const createOrderTool: ToolDefinition = {
           instructions
         }
       };
-    } catch (err: any) {
-      return {
-        success: false,
-        message: err.code === "22023" || err.code === "P0001"
-          ? "O produto ainda não está disponível nas condições pedidas. Confirma o stock e a entrega com a equipa."
-          : "Não foi possível criar o pedido. Tenta novamente ou fala com a equipa."
-      };
+    } catch (error) {
+      const detail = (error as { message?: string } | null)?.message;
+      const fallback = detail === "Produto digital sem ficheiro ou conteúdo para entrega"
+        ? "O ficheiro deste produto digital ainda não está pronto. Confirma a disponibilidade com a equipa."
+        : detail === "Produto indisponível ou sem stock suficiente"
+          ? "O produto está indisponível na quantidade pedida."
+          : "Não foi possível criar o pedido. Tenta novamente ou fala com a equipa.";
+      return salesToolFailure("createOrder", error, fallback);
     }
   }
 };
