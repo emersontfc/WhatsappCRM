@@ -1,6 +1,7 @@
 import type { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService } from "../../services/commerceService.ts";
-import { parseMozambicanReceiptSMS } from "../../services/paymentProofSms.ts";
+import { compareProofRecipient } from "../../services/paymentProofSms.ts";
+import { extractProofWithAI } from "../../services/paymentProofExtractor.ts";
 import { supabaseAdmin } from "../../supabaseAdmin.ts";
 import { normalizeContactPhone } from "../../../shared/contactPhone.ts";
 
@@ -27,7 +28,7 @@ export const submitPaymentProofTool: ToolDefinition = {
       ?.trim().toUpperCase();
     try {
       const phones = /^2588[2-7]\d{7}$/.test(phone) ? [phone, phone.slice(3)] : [phone];
-      let lookup = supabaseAdmin.from("orders").select("id,order_number,customer_phone").eq("user_id", ctx.userId)
+      let lookup = supabaseAdmin.from("orders").select("id,order_number,customer_phone,seller_payment").eq("user_id", ctx.userId)
         .in("customer_phone", phones).in("status", ["created", "awaiting_payment", "verification_pending", "rejected"]);
       if (number) lookup = lookup.eq("order_number", number);
       const { data: orders, error } = await lookup.limit(2);
@@ -35,13 +36,15 @@ export const submitPaymentProofTool: ToolDefinition = {
       if (!orders?.length) return { success: false, message: "Não encontrei um pedido pendente para este contacto." };
       if (orders.length > 1) return { success: false, message: "Há mais de um pedido pendente. Reenvia o comprovativo com o número do pedido." };
 
-      const extracted = parseMozambicanReceiptSMS(text) ?? {
-        provider: "other" as const, transactionReference: "", amount: 0, currency: "MT", confidenceScore: 0, rawText: text
-      };
-      const result = await commerceService.submitPaymentProof(ctx.userId, orders[0], ctx.messageId, extracted);
+      const extracted = await extractProofWithAI(ctx.userId, text);
+      const evidence = compareProofRecipient(extracted, orders[0].seller_payment);
+      const proof = { ...extracted, ...evidence };
+      const result = await commerceService.submitPaymentProof(ctx.userId, orders[0], ctx.messageId, proof);
       return {
         success: true,
-        message: `O comprovativo do pedido ${orders[0].order_number} está registado. O pedido aguarda a confirmação do pagamento.`,
+        message: evidence.recipientMatch === "mismatch"
+          ? `O destinatário deste comprovativo difere dos dados de pagamento do pedido ${orders[0].order_number}. Envia o comprovativo correto ou fala com a equipa.`
+          : `O comprovativo do pedido ${orders[0].order_number} está registado. O pedido aguarda a confirmação do pagamento.`,
         data: { verificationId: result.id, orderNumber: orders[0].order_number }
       };
     } catch {

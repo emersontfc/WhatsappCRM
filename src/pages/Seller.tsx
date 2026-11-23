@@ -4,7 +4,7 @@ import { ArrowRight, CheckCircle2, Circle, FileText, Package, RefreshCw, Wallet 
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { apiFetch } from "../lib/api";
-import { sellerMethods, type SellerMethod, type SellerOverview, type SellerSettings } from "../../shared/seller";
+import { sellerMethodKeys, sellerMethods, type PaymentDestinations, type SellerOverview, type SellerSettings } from "../../shared/seller";
 
 const field = "block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-emerald-700";
 const action = "inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 focus-visible:ring-2 focus-visible:ring-emerald-700";
@@ -69,7 +69,8 @@ export default function Seller() {
               detail={overview.readyProducts > 0 ? `${overview.readyProducts} de ${overview.products} produtos prontos para venda.`
                 : "Define preço, stock e o ficheiro dos produtos digitais."} href="/orders?tab=products" />
             <SetupStep ready={Boolean(overview.settings)} title="Definir como receber"
-              detail={overview.settings ? sellerMethods[overview.settings.payment_method] : "Indica ao agente para onde o cliente deve pagar."}
+              detail={overview.settings ? sellerMethodKeys.filter((method) => overview.settings?.payment_destinations[method])
+                .map((method) => sellerMethods[method]).join(" · ") : "Configura M-Pesa, e-Mola ou transferência bancária."}
               onClick={() => { setEditing(true); settingsSection.current?.scrollIntoView({ block: "start" }); }} />
           </ul>
         </section>
@@ -81,8 +82,13 @@ export default function Seller() {
           </div>
           {overview.settings && !editing
             ? <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-[auto_1fr] sm:gap-x-4">
-                <dt className="text-slate-600">Destino</dt>
-                <dd className="break-words">{sellerMethods[overview.settings.payment_method]} · {overview.settings.payment_recipient} · {overview.settings.recipient_name}</dd>
+                {sellerMethodKeys.map((method) => {
+                  const destination = overview.settings?.payment_destinations[method];
+                  return destination && <div key={method} className="contents">
+                    <dt className="text-slate-600">{sellerMethods[method]}</dt>
+                    <dd className="break-words">{destination.recipient} · {destination.name}</dd>
+                  </div>;
+                })}
                 <dt className="text-slate-600">Aviso por WhatsApp</dt>
                 <dd>{overview.settings.notification_phone ? `+${overview.settings.notification_phone}` : "Apenas no painel"}</dd>
               </dl>
@@ -147,7 +153,6 @@ function SetupStep({ ready, title, detail, href, onClick }: {
 }
 
 function PaymentSettings({ settings, onSave }: { settings: SellerSettings | null; onSave: (settings: SellerSettings) => void }) {
-  const [method, setMethod] = useState<SellerMethod>(settings?.payment_method ?? "mpesa");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -156,7 +161,19 @@ function PaymentSettings({ settings, onSave }: { settings: SellerSettings | null
     setSaving(true);
     setError("");
     try {
-      const body = Object.fromEntries(new FormData(event.currentTarget));
+      const values = new FormData(event.currentTarget);
+      const destinations: PaymentDestinations = {};
+      for (const method of sellerMethodKeys) {
+        const recipient = String(values.get(`${method}_recipient`) ?? "").trim();
+        const name = String(values.get(`${method}_name`) ?? "").trim();
+        if (recipient || name) {
+          if (!recipient || !name) throw new Error(`Preenche o destino e o titular de ${sellerMethods[method]}.`);
+          destinations[method] = { recipient, name };
+        }
+      }
+      if (!Object.keys(destinations).length) throw new Error("Preenche pelo menos um método para receber pagamentos.");
+      const body = { payment_method: values.get("payment_method"), payment_destinations: destinations,
+        notification_phone: values.get("notification_phone") };
       const { data } = await apiFetch("/api/commerce/seller/settings", { method: "PUT", body: JSON.stringify(body) });
       onSave(data);
     } catch (failure) {
@@ -165,24 +182,30 @@ function PaymentSettings({ settings, onSave }: { settings: SellerSettings | null
       setSaving(false);
     }
   }
-  return <form onSubmit={save} className="mt-4 grid gap-4 sm:grid-cols-2">
-    <label className="grid gap-1 text-sm font-medium">Método
-      <select name="payment_method" className={field} value={method} onChange={(event) => setMethod(event.target.value as SellerMethod)}>
-        {Object.entries(sellerMethods).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select>
-    </label>
-    <label className="grid gap-1 text-sm font-medium">{method === "bank_transfer" ? "Conta ou NIB" : "Número que recebe o pagamento"}
-      <Input name="payment_recipient" required maxLength={60} inputMode={method === "bank_transfer" ? "text" : "tel"} defaultValue={settings?.payment_recipient} />
-    </label>
-    <label className="grid gap-1 text-sm font-medium">Nome do titular
-      <Input name="recipient_name" required minLength={2} maxLength={100} defaultValue={settings?.recipient_name} />
-    </label>
-    <label className="grid gap-1 text-sm font-medium">WhatsApp para avisos (opcional)
-      <Input name="notification_phone" type="tel" defaultValue={settings?.notification_phone || ""} />
-    </label>
-    {error && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{error}</p>}
-    <div className="sm:col-span-2">
-      <Button type="submit" disabled={saving}>{saving ? "A guardar…" : "Guardar pagamento"}</Button>
+  return <form onSubmit={save} className="mt-4 grid gap-4">
+    <p className="text-sm text-slate-600">Preenche os métodos que queres aceitar. Podes guardar os três juntos.</p>
+    {sellerMethodKeys.map((method) => <fieldset key={method} className="grid gap-3 rounded-xl border border-slate-200 px-3 pb-3 pt-1 sm:grid-cols-2">
+      <legend className="px-1 text-sm font-semibold text-slate-900">{sellerMethods[method]}</legend>
+      <label className="grid gap-1 text-sm font-medium">{method === "bank_transfer" ? "Conta ou NIB" : "Número"}
+        <Input name={`${method}_recipient`} maxLength={60} inputMode={method === "bank_transfer" ? "text" : "tel"}
+          defaultValue={settings?.payment_destinations[method]?.recipient} />
+      </label>
+      <label className="grid gap-1 text-sm font-medium">Nome do titular
+        <Input name={`${method}_name`} minLength={2} maxLength={100} defaultValue={settings?.payment_destinations[method]?.name} />
+      </label>
+    </fieldset>)}
+    <div className="grid gap-3 sm:grid-cols-2">
+      <label className="grid gap-1 text-sm font-medium">Método sugerido
+        <select name="payment_method" className={field} defaultValue={settings?.payment_method ?? ""}>
+          <option value="">Primeiro método preenchido</option>
+          {sellerMethodKeys.map((method) => <option key={method} value={method}>{sellerMethods[method]}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-sm font-medium">WhatsApp para avisos (opcional)
+        <Input name="notification_phone" type="tel" defaultValue={settings?.notification_phone || ""} />
+      </label>
     </div>
+    {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+    <div><Button type="submit" disabled={saving}>{saving ? "A guardar…" : "Guardar métodos"}</Button></div>
   </form>;
 }

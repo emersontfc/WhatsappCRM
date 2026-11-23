@@ -5,6 +5,7 @@ import { commerceService } from "../services/commerceService.ts";
 import { supabaseAdmin, supabaseAdminConfigured } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { parseSellerSettings, saveSellerSettings, sellerOverview } from "../services/sellerWorkspace.ts";
+import { reviewProofRecipient } from "../services/paymentProofSms.ts";
 import { isSellerMethod } from "../../shared/seller.ts";
 import { makePlatformChecks } from "../services/platformChecks.ts";
 
@@ -29,7 +30,7 @@ router.get("/seller", async (req: AuthRequest, res) => {
   try {
     const sales = await platform.check("sales");
     if (sales === "migration_required") {
-      return res.status(503).json({ error: "A instalação precisa das migrações 20 e 21 do Supabase. Pede ao administrador que atualize o esquema de vendas." });
+      return res.status(503).json({ error: "A instalação precisa das migrações 20 a 22 do Supabase. Pede ao administrador que atualize o esquema de vendas." });
     }
     if (sales !== "ready") return res.status(503).json({ error: "Não foi possível verificar a ligação ao esquema de vendas. Tenta atualizar." });
     const data = await sellerOverview(userId, whatsappManager.getSession(userId)?.status === "connected");
@@ -45,8 +46,8 @@ router.put("/seller/settings", async (req: AuthRequest, res) => {
   const settings = parseSellerSettings(req.body);
   if (!settings) return res.status(400).json({ error: "Verifica o método, o titular e os números informados." });
   try {
-    await saveSellerSettings(userId, settings);
-    return res.json({ success: true, data: settings });
+    const data = await saveSellerSettings(userId, settings, req.body?.payment_destinations !== undefined);
+    return res.json({ success: true, data });
   } catch {
     return res.status(503).json({ error: "Não foi possível guardar as instruções de pagamento." });
   }
@@ -179,22 +180,30 @@ router.post("/orders/:id/approve", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-  const { settlementMethod, settlementVerified } = req.body ?? {};
+  const { settlementMethod, settlementVerified, proofId } = req.body ?? {};
   const amount = typeof req.body?.settlementAmount === "string" ? req.body.settlementAmount.trim().replace(",", ".") : "";
   const reference = typeof req.body?.settlementReference === "string" ? req.body.settlementReference.trim() : "";
   if (settlementVerified !== true) return res.status(400).json({ error: "Confirma a liquidação no prestador antes de aprovar." });
-  if ((!isSellerMethod(settlementMethod) && settlementMethod !== "other") ||
-      !/^[a-zA-Z0-9][a-zA-Z0-9 ./_-]{3,79}$/.test(reference) || reference.replace(/[^a-zA-Z0-9]/g, "").length < 4) {
-    return res.status(400).json({ error: "Indica o método e a referência oficial do pagamento." });
+  if (settlementMethod != null && settlementMethod !== "other" && !isSellerMethod(settlementMethod)) {
+    return res.status(400).json({ error: "Escolhe um método de pagamento válido." });
   }
-  if (!/^\d{1,10}(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0) {
+  if (reference && (!/^[a-zA-Z0-9][a-zA-Z0-9 ./_-]{3,79}$/.test(reference) || reference.replace(/[^a-zA-Z0-9]/g, "").length < 4)) {
+    return res.status(400).json({ error: "A referência oficial indicada é inválida." });
+  }
+  if (amount && (!/^\d{1,10}(?:\.\d{1,2})?$/.test(amount) || Number(amount) <= 0)) {
     return res.status(400).json({ error: "Indica o valor recebido, conferido no prestador." });
   }
+  if (proofId != null && (typeof proofId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(proofId))) {
+    return res.status(400).json({ error: "Escolhe um comprovativo válido." });
+  }
   try {
-    const result = await commerceService.approveOrder(req.params.id, userId, settlementMethod, reference, amount);
+    const result = await commerceService.approveOrder(req.params.id, userId, {
+      verified: settlementVerified, method: settlementMethod ?? null, reference: reference || null,
+      amount: amount || null, proofId: proofId ?? null
+    });
     res.json(result);
   } catch (err: any) {
-    if (err.code === "23505") return res.status(409).json({ error: "Esta referência já foi usada para confirmar outro pedido." });
+    if (err.code === "23505") return res.status(409).json({ error: "Este comprovativo ou referência já foi usado para confirmar outro pedido." });
     if (err.code === "P0002") return res.status(404).json({ error: "Pedido não encontrado." });
     if (err.code === "22023" || err.code === "P0001") return res.status(409).json({ error: err.message });
     return res.status(503).json({ error: "Não foi possível verificar a confirmação do pagamento." });
@@ -216,15 +225,20 @@ router.post("/orders/:id/reject", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
   const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const proofId = req.body?.proofId;
   if (reason.length < 3 || reason.length > 250) {
     return res.status(400).json({ error: "Motivo da rejeição é obrigatório." });
   }
+  if (proofId != null && (typeof proofId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(proofId))) {
+    return res.status(400).json({ error: "Escolhe um comprovativo válido." });
+  }
 
   try {
-    const result = await commerceService.rejectOrder(req.params.id, userId, reason);
+    const result = await commerceService.rejectOrder(req.params.id, userId, reason, proofId);
     res.json(result);
   } catch (err: any) {
     if (err.code === "P0002") return res.status(404).json({ error: "Pedido fora da fila de revisão." });
+    if (err.code === "22023") return res.status(409).json({ error: err.message });
     return res.status(503).json({ error: "Não foi possível registar a rejeição." });
   }
 });
@@ -249,13 +263,15 @@ router.get("/verifications", async (req: AuthRequest, res) => {
   try {
     const { data: verifications, error } = await supabaseAdmin
       .from("payment_verifications")
-      .select("*, orders(order_number, total_amount, currency, customer_name, customer_phone, payment_method)")
+      .select("*, orders(order_number, total_amount, currency, customer_name, customer_phone, payment_method, seller_payment)")
       .eq("user_id", userId)
       .eq("status", "pending")
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    res.json({ success: true, data: verifications || [] });
+    res.json({ success: true, data: (verifications ?? []).map((verification) => ({
+      ...verification, recipientEvidence: reviewProofRecipient(verification, verification.orders?.seller_payment)
+    })) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

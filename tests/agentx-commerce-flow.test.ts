@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseMozambicanReceiptSMS } from "../backend/services/paymentProofExtractor.ts";
+import { compareProofRecipient } from "../backend/services/paymentProofSms.ts";
 
 describe("AgentX 2.0 — End-to-End Autonomous Commerce & Scenarios", () => {
   // Scenario A: Atendimento & Histórico
@@ -66,6 +67,20 @@ describe("AgentX 2.0 — End-to-End Autonomous Commerce & Scenarios", () => {
       const text = "Bom dia, gostaria de saber se o meu pedido já foi enviado?";
       const extracted = parseMozambicanReceiptSMS(text);
       expect(extracted).toBeNull();
+    });
+
+    it("distingue remetente de titular do destino e interpreta o montante local", () => {
+      const proof = parseMozambicanReceiptSMS("M-Pesa. Recebeu 1.200,00 MT de 841234567 João Cliente. Beneficiário: Lója Exemplo.");
+      expect(proof).toMatchObject({ amount: 1200, senderName: "João Cliente", recipientName: "Lója Exemplo" });
+      expect(compareProofRecipient(proof!, { method: "mpesa", recipient: "258840000003", name: "Loja Exemplo" }).recipientMatch).toBe("match");
+    });
+
+    it("assinala destinatários divergentes e mantém nomes parciais por conferir", () => {
+      const expected = { method: "mpesa", recipient: "258840000003", name: "Loja Exemplo" } as const;
+      expect(compareProofRecipient({ recipientName: "Outra Pessoa" }, expected).recipientMatch).toBe("mismatch");
+      expect(compareProofRecipient({ recipientName: "Loja Exemplo", recipientAccount: "84 000 0005" }, expected).recipientMatch).toBe("mismatch");
+      expect(compareProofRecipient({ recipientName: "Loja", recipientAccount: "****0003" }, expected).recipientMatch).toBe("unknown");
+      expect(parseMozambicanReceiptSMS("Como envio um comprovativo de 250 MT?")).toBeNull();
     });
   });
 

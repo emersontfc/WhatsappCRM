@@ -651,10 +651,11 @@ export default function Messages() {
 
       if (response.reply) {
         setNewMessage(response.reply);
-        toast.info("Sugestão de resposta gerada pela IA!");
+        toast.info("Sugestão pronta para rever.");
       }
     } catch (err) {
       console.error("AI error:", err);
+      toast.error(err instanceof Error ? err.message : "Não foi possível gerar uma sugestão.");
     } finally {
       setLoading(false);
     }

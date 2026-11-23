@@ -1,8 +1,9 @@
 import { readContactPhone } from "../../shared/contactPhone.ts";
-import { isSellerMethod, type SellerOverview, type SellerSettings } from "../../shared/seller.ts";
+import { isSellerMethod, sellerMethodKeys, type PaymentDestination, type PaymentDestinations, type SellerMethod,
+  type SellerOverview, type SellerSettings } from "../../shared/seller.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 
-const settingsFields = "payment_method,payment_recipient,recipient_name,notification_phone";
+const settingsFields = "payment_method,payment_recipient,recipient_name,payment_destinations,notification_phone";
 
 export async function sellerSettings(userId: string): Promise<SellerSettings | null> {
   const { data, error } = await supabaseAdmin.from("agentx_seller_settings")
@@ -12,23 +13,52 @@ export async function sellerSettings(userId: string): Promise<SellerSettings | n
 }
 
 export function parseSellerSettings(body: Record<string, unknown> | undefined): SellerSettings | null {
-  const method = body?.payment_method;
-  if (!isSellerMethod(method)) return null;
-  const rawRecipient = typeof body?.payment_recipient === "string" ? body.payment_recipient.trim() : "";
-  const recipient = method === "bank_transfer" ? rawRecipient.toUpperCase() : readContactPhone(rawRecipient);
-  const name = typeof body?.recipient_name === "string" ? body.recipient_name.trim() : "";
+  const preferred = body?.payment_method;
+  if (preferred != null && preferred !== "" && !isSellerMethod(preferred)) return null;
   const rawNotification = typeof body?.notification_phone === "string" ? body.notification_phone.trim() : "";
   const notification = readContactPhone(rawNotification);
-  if (!recipient || !/^[A-Z0-9][A-Z0-9 -]{4,59}$/.test(recipient) ||
-      name.length < 2 || name.length > 100 || /[\r\n\p{Cc}\p{Cf}]/u.test(name) ||
-      (rawNotification && !notification)) return null;
-  return { payment_method: method, payment_recipient: recipient, recipient_name: name, notification_phone: notification };
+  if (rawNotification && !notification) return null;
+
+  const destinations: PaymentDestinations = {};
+  const supplied = body?.payment_destinations;
+  if (supplied !== undefined) {
+    if (!supplied || typeof supplied !== "object" || Array.isArray(supplied)) return null;
+    for (const [method, input] of Object.entries(supplied)) {
+      if (!isSellerMethod(method) || !input || typeof input !== "object") return null;
+      const fields = input as Partial<PaymentDestination>;
+      const destination = paymentDestination(method, fields.recipient, fields.name);
+      if (!destination) return null;
+      destinations[method] = destination;
+    }
+  } else if (isSellerMethod(preferred)) {
+    const legacy = paymentDestination(preferred, body?.payment_recipient, body?.recipient_name);
+    if (!legacy) return null;
+    destinations[preferred] = legacy;
+  }
+  const method = isSellerMethod(preferred) ? preferred : sellerMethodKeys.find((key) => destinations[key]);
+  const destination = method && destinations[method];
+  if (!method || !destination) return null;
+  return { payment_method: method, payment_recipient: destination.recipient, recipient_name: destination.name,
+    payment_destinations: destinations, notification_phone: notification };
 }
 
-export async function saveSellerSettings(userId: string, settings: SellerSettings) {
-  const { error } = await supabaseAdmin.from("agentx_seller_settings")
-    .upsert({ ...settings, user_id: userId, updated_at: new Date().toISOString() });
+function paymentDestination(method: SellerMethod, recipient: unknown, name: unknown): PaymentDestination | null {
+  const raw = typeof recipient === "string" ? recipient.trim() : "";
+  const account = method === "bank_transfer" ? raw.toUpperCase() : readContactPhone(raw);
+  const holder = typeof name === "string" ? name.trim() : "";
+  if (!account || !/^[A-Z0-9][A-Z0-9 -]{4,59}$/.test(account) ||
+      holder.length < 2 || holder.length > 100 || /[\p{Cc}\p{Cf}]/u.test(holder)) return null;
+  return { recipient: account, name: holder };
+}
+
+export async function saveSellerSettings(userId: string, settings: SellerSettings, replaceDestinations: boolean): Promise<SellerSettings> {
+  const { payment_destinations, ...legacy } = settings;
+  const { data, error } = await supabaseAdmin.from("agentx_seller_settings")
+    .upsert({ ...legacy, ...(replaceDestinations ? { payment_destinations } : {}),
+      user_id: userId, updated_at: new Date().toISOString() })
+    .select(settingsFields).single();
   if (error) throw error;
+  return data as SellerSettings;
 }
 
 export async function sellerOverview(userId: string, whatsappConnected: boolean): Promise<SellerOverview> {

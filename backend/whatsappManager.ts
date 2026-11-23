@@ -766,13 +766,14 @@ export class WhatsAppManager implements IWhatsAppTransport {
     return this.sessions.get(userId);
   }
 
-  async sendMessage(userId: string, jid: string, text: string, mediaUrl?: string, mediaType?: string, duration?: number, mimetype?: string, fileName?: string, verifiedContactId?: string) {
+  async sendMessage(userId: string, jid: string, text: string, media?: string | Buffer, mediaType?: string, duration?: number, mimetype?: string, fileName?: string, verifiedContactId?: string) {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") {
       throw new Error("WhatsApp session not connected.");
     }
 
     const isStatus = jid === "status@broadcast";
+    const mediaUrl = typeof media === "string" ? media : undefined;
     let result;
     const options: any = {};
 
@@ -804,8 +805,15 @@ export class WhatsAppManager implements IWhatsAppTransport {
       options.statusJidList = jidList;
     }
 
-    if (mediaUrl && mediaType) {
-      if (mediaType === 'image') {
+    if (media && mediaType) {
+      if (mediaType === "document") {
+        result = await session.socket.sendMessage(jid, {
+          document: typeof media === "string" ? { url: media } : media,
+          mimetype: mimetype || "application/pdf", fileName: fileName || "documento", caption: text
+        }, options);
+      } else if (!mediaUrl) {
+        throw new Error("Conteúdo de multimédia inválido.");
+      } else if (mediaType === 'image') {
         result = await session.socket.sendMessage(jid, { 
           image: { url: mediaUrl }, 
           caption: text,
@@ -847,8 +855,6 @@ export class WhatsAppManager implements IWhatsAppTransport {
           if (converted) fs.rmSync(converted, { force: true });
           if (inputDirectory) fs.rmSync(inputDirectory, { recursive: true, force: true });
         }
-      } else if (mediaType === 'document') {
-        result = await session.socket.sendMessage(jid, { document: { url: mediaUrl }, mimetype: mimetype || 'application/pdf', fileName: fileName || 'documento', caption: text }, options);
       }
     } else {
       result = await session.socket.sendMessage(jid, { text }, options);

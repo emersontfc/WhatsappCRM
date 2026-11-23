@@ -28,6 +28,13 @@ docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < tests/integration/
 for _ in 1 2; do
   docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/21_seller_lead_compatibility.sql >/dev/null
 done
+docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+INSERT INTO public.agentx_seller_settings (user_id, payment_method, payment_recipient, recipient_name)
+VALUES ('00000000-0000-4000-8000-000000000002', 'emola', '258870000005', 'Loja anterior');
+SQL
+for _ in 1 2; do
+  docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/22_seller_payment_methods.sql >/dev/null
+done
 
 export AGENTX_FIXTURE_JWT_SECRET="agentx-inbox-jwt-test-secret-local-only"
 rest="$(docker run --rm -d --network "$network" -p 127.0.0.1::3000 \

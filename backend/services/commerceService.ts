@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
-import { PRODUCT_FILE_BUCKET } from "./catalogDeliverables.ts";
+import { loadProductFile, PRODUCT_FILE_LIMIT, ProductFileError } from "./catalogDeliverables.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { normalizeContactPhone } from "../../shared/contactPhone.ts";
-import type { ExtractedPaymentData } from "./paymentProofSms.ts";
+import { reviewProofRecipient, type ExtractedPaymentData } from "./paymentProofSms.ts";
 import { sellerSettings } from "./sellerWorkspace.ts";
 
 export interface CreateOrderParams {
@@ -11,7 +11,7 @@ export interface CreateOrderParams {
   customerPhone: string;
   customerName: string;
   contactId?: string;
-  paymentMethod: string;
+  paymentMethod?: string;
   productId: string;
   sourceMessageId?: string;
   quantity: number;
@@ -58,7 +58,7 @@ export class CommerceService {
       p_phone: normalizeContactPhone(params.customerPhone),
       p_customer: params.customerName,
       p_contact: params.contactId ?? null,
-      p_method: params.paymentMethod,
+      p_method: params.paymentMethod ?? null,
       p_order_number: `AGX-${randomBytes(6).toString("hex").toUpperCase()}`,
       p_source_message: params.sourceMessageId ?? null
     });
@@ -94,12 +94,27 @@ export class CommerceService {
     return data as { id: string; created: boolean };
   }
 
-  async approveOrder(orderId: string, adminUserId: string, method: string, reference: string, amount: string) {
-    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_approve_order", {
-      p_user: adminUserId, p_order: orderId, p_method: method, p_reference: reference, p_amount: amount,
+  async approveOrder(orderId: string, adminUserId: string, confirmation: {
+    verified: boolean; method: string | null; reference: string | null; amount: string | null; proofId: string | null
+  }) {
+    let proofs = supabaseAdmin.from("payment_verifications").select("id,proof_raw_text,extracted_data")
+      .eq("order_id", orderId).eq("user_id", adminUserId).eq("status", "pending");
+    if (confirmation.proofId) proofs = proofs.eq("id", confirmation.proofId);
+    const [{ data: expected, error: orderError }, { data: proof, error: proofError }] = await Promise.all([
+      supabaseAdmin.from("orders").select("seller_payment").eq("id", orderId).eq("user_id", adminUserId).maybeSingle(),
+      proofs.order("created_at", { ascending: false, nullsFirst: false }).order("id", { ascending: false }).limit(1).maybeSingle()
+    ]);
+    if (orderError || proofError) throw orderError ?? proofError;
+    if (proof && reviewProofRecipient(proof, expected?.seller_payment).recipientMatch === "mismatch") {
+      throw { code: "22023", message: "O destinatário indicado no comprovativo difere do destino de pagamento do pedido." };
+    }
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_confirm_payment", {
+      p_user: adminUserId, p_order: orderId, p_verified: confirmation.verified, p_method: confirmation.method,
+      p_reference: confirmation.reference, p_amount: confirmation.amount, p_proof: confirmation.proofId ?? proof?.id ?? null,
       p_note: "Liquidação conferida no prestador pelo responsável da conta."
     });
     if (error) throw error;
+    if (!order?.id) throw new Error("Payment confirmation returned no order");
     try {
       const fulfillment = await this.fulfillOrder(orderId, adminUserId);
       return { success: true, order, fulfillment };
@@ -112,15 +127,22 @@ export class CommerceService {
   /**
    * Rejects an order with explicit reason
    */
-  async rejectOrder(orderId: string, adminUserId: string, reason: string) {
-    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_reject_order", {
-      p_user: adminUserId, p_order: orderId, p_reason: reason
-    });
+  async rejectOrder(orderId: string, adminUserId: string, reason: string, proofId?: string | null) {
+    const params = { p_user: adminUserId, p_order: orderId, p_reason: reason };
+    const { data, error } = proofId
+      ? await supabaseAdmin.rpc("agentx_seller_reject_proof", { ...params, p_proof: proofId })
+      : await supabaseAdmin.rpc("agentx_seller_reject_order", params);
     if (error) throw error;
+    const order = proofId ? data?.order : data;
+    const notify = !proofId || data?.notify === true;
+    if (!order?.id) throw new Error("Rejection returned no order");
+    if (!notify) return { success: true, notified: false, awaitingOtherProofs: order.status === "verification_pending" };
     let notified = false;
     try {
+      const phone = normalizeContactPhone(order.customer_phone);
+      if (!phone) return { success: true, notified: false };
       const result = await whatsappManager.sendMessage(adminUserId,
-        `${normalizeContactPhone(order.customer_phone)}@s.whatsapp.net`,
+        `${phone}@s.whatsapp.net`,
         `O comprovativo do pedido ${order.order_number} foi rejeitado. Motivo: ${reason}. Envie um novo comprovativo ou fale com a equipa.`);
       notified = Boolean(result?.key?.id);
     } catch {
@@ -140,8 +162,13 @@ export class CommerceService {
     if (order.status !== "paid") throw new Error("O pagamento ainda aguarda confirmação.");
     if (order.delivery_started_at) return { success: false, delivered: false, message: "Envio em curso ou por confirmar. Verifique a conversa antes de qualquer reenvio." };
 
+    const phone = normalizeContactPhone(order.customer_phone);
+    if (!phone) return { success: false, delivered: false, message: "O número do cliente não está disponível para entrega." };
+    const jid = `${phone}@s.whatsapp.net`;
     const lines: string[] = [];
-    let manualDelivery = false;
+    const writtenDeliverables: string[] = [];
+    const files: Awaited<ReturnType<typeof loadProductFile>>[] = [];
+    let remainingBytes = PRODUCT_FILE_LIMIT;
     for (const item of order.order_items ?? []) {
       let deliverable = item.deliverable_snapshot;
       if (!deliverable && item.product_id) {
@@ -154,59 +181,84 @@ export class CommerceService {
           path: product.deliverable_path, name: product.deliverable_name
         };
       }
-      if (!deliverable || (deliverable.type !== "digital" && !deliverable.text) ||
-          (!deliverable.text && !deliverable.path)) {
-        manualDelivery = true;
-        break;
-      }
       let line = `• ${item.product_name} (x${item.quantity})`;
-      if (deliverable.text) line += `\n${deliverable.text}`;
-      if (deliverable.path) {
-        if (!deliverable.path.startsWith(`${userId}/`)) throw new Error("Ficheiro fora do catálogo da conta.");
-        const { data, error: signedError } = await supabaseAdmin.storage.from(PRODUCT_FILE_BUCKET)
-          .createSignedUrl(deliverable.path, 86400, { download: deliverable.name || true });
-        if (signedError || !data) return { success: false, delivered: false, message: "Não foi possível preparar o ficheiro. Pode tentar a entrega novamente." };
-        line += `\n${data.signedUrl} (válido por 24 horas)`;
+      const written = typeof deliverable?.text === "string" ? deliverable.text.trim() : "";
+      const objectPath = typeof deliverable?.path === "string" ? deliverable.path : "";
+      if (!written && (!objectPath || deliverable.type !== "digital")) {
+        return { success: false, delivered: false, message: "Pagamento confirmado. Este pedido precisa de preparação ou entrega manual." };
+      }
+      if (written) {
+        line += `\n${written}`;
+        writtenDeliverables.push(line);
+      }
+      if (objectPath) {
+        try {
+          const name = typeof deliverable.name === "string" ? deliverable.name : item.product_name;
+          const file = await loadProductFile(userId, objectPath, name, remainingBytes);
+          remainingBytes -= file.content.byteLength;
+          files.push(file);
+        } catch (fileError) {
+          return { success: false, delivered: false,
+            message: fileError instanceof ProductFileError ? fileError.message
+              : "O ficheiro ainda não pôde ser preparado. Verifique o catálogo e tente novamente." };
+        }
       }
       lines.push(line);
     }
-    if (manualDelivery || !lines.length) {
+    if (!lines.length) {
       return { success: false, delivered: false, message: "Pagamento confirmado. Este pedido precisa de preparação ou entrega manual." };
     }
 
+    const startedAt = new Date().toISOString();
     const { data: claim, error: claimError } = await supabaseAdmin.from("orders")
-      .update({ delivery_started_at: new Date().toISOString(), delivery_error: null })
+      .update({ delivery_started_at: startedAt, delivery_error: null })
       .eq("id", orderId).eq("user_id", userId).eq("status", "paid").is("delivery_started_at", null)
       .select("id").maybeSingle();
     if (claimError) throw claimError;
     if (!claim) return { success: false, delivered: false, message: "Outro processo está a tratar da entrega." };
 
+    const payment = order.payment_reference
+      ? `\nValor recebido: ${order.total_amount} ${order.currency}. Referência: ${order.payment_reference}.` : "";
+    const confirmation = `Pagamento confirmado para o pedido *${order.order_number}*.${payment}`;
+    let acknowledged = 0;
     try {
-      const payment = order.payment_reference
-        ? `\nValor recebido: ${order.total_amount} ${order.currency}. Referência: ${order.payment_reference}.\n` : "";
-      const result = await whatsappManager.sendMessage(userId, `${order.customer_phone}@s.whatsapp.net`,
-        `Pagamento confirmado para o pedido *${order.order_number}*.${payment}\n\n${lines.join("\n\n")}\n\nObrigado pela compra!`);
-      if (!result?.key?.id) throw new Error("Envio sem identificador WhatsApp.");
+      for (const file of files) {
+        const caption = acknowledged === 0
+          ? `${confirmation}\n\nObrigado pela compra!` : `Ficheiro do pedido ${order.order_number}.`;
+        const result = await whatsappManager.sendMessage(userId, jid, caption, file.content, "document", undefined,
+          file.mimetype, file.name);
+        if (!result?.key?.id) throw new Error("Envio sem identificador WhatsApp.");
+        acknowledged += 1;
+      }
+      if (!files.length || writtenDeliverables.length) {
+        const body = files.length
+          ? `Conteúdo do pedido ${order.order_number}:\n\n${writtenDeliverables.join("\n\n")}`
+          : `${confirmation}\n\n${lines.join("\n\n")}\n\nObrigado pela compra!`;
+        const result = await whatsappManager.sendMessage(userId, jid, body);
+        if (!result?.key?.id) throw new Error("Envio sem identificador WhatsApp.");
+      }
     } catch (error) {
-      const disconnected = error instanceof Error && error.message === "WhatsApp session not connected.";
-      await supabaseAdmin.from("orders").update({
-        delivery_error: disconnected ? "WhatsApp desligado" : "Envio por confirmar",
-        ...(disconnected ? { delivery_started_at: null } : {})
-      }).eq("id", orderId).eq("user_id", userId);
-      return { success: false, delivered: false, message: disconnected
+      const canRetry = !acknowledged && error instanceof Error && error.message === "WhatsApp session not connected.";
+      const { error: updateError } = await supabaseAdmin.from("orders").update({
+        delivery_error: canRetry ? "WhatsApp desligado" : acknowledged ? "Envio parcial por verificar" : "Envio por confirmar",
+        ...(canRetry ? { delivery_started_at: null } : {})
+      }).eq("id", orderId).eq("user_id", userId).eq("status", "paid").eq("delivery_started_at", startedAt);
+      if (updateError) console.warn("[Commerce] Could not persist delivery recovery state:", updateError.code);
+      return { success: false, delivered: false, message: canRetry && !updateError
         ? "WhatsApp desligado. Ligue a sessão e tente a entrega novamente."
-        : "O WhatsApp não confirmou o envio. Verifique a conversa antes de qualquer reenvio." };
+        : "O envio ficou por confirmar. Verifique a conversa antes de qualquer reenvio." };
     }
 
     const deliveredAt = new Date().toISOString();
-    const { error: deliveryError } = await supabaseAdmin.from("orders")
+    const { data: delivered, error: deliveryError } = await supabaseAdmin.from("orders")
       .update({ status: "fulfilled", fulfilled_at: deliveredAt, updated_at: deliveredAt })
-      .eq("id", orderId).eq("user_id", userId).eq("status", "paid");
-    if (deliveryError) return { success: false, delivered: false, message: "O WhatsApp recebeu a entrega, mas o estado está por confirmar. Verifique a conversa." };
+      .eq("id", orderId).eq("user_id", userId).eq("status", "paid").eq("delivery_started_at", startedAt)
+      .select("id").maybeSingle();
+    if (deliveryError || !delivered) return { success: false, delivered: false, message: "O WhatsApp recebeu a entrega, mas o estado está por confirmar. Verifique a conversa." };
     await this.recordTimelineEvent({
       userId, orderId, phone: order.customer_phone, step: "fulfilled",
       description: `Entrega do pedido ${order.order_number} aceite pelo WhatsApp.`,
-      metadata: { deliveredAt }
+      metadata: { deliveredAt, attachments: files.length }
     });
     return { success: true, delivered: true };
   }

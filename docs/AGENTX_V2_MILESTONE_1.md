@@ -57,10 +57,10 @@ já cadastrado. São aceites PDF, EPUB, JPEG, PNG e WebP até 20 MiB. O agente r
 dados comerciais e consulta o catálogo ativo da conta. No pedido, o preço e a referência do
 ficheiro vêm do catálogo. O sistema verifica o stock disponível no momento da criação do pedido.
 
-Após conferir o pagamento no prestador, aprove o comprovativo. O WhatsApp recebe um link
-assinado válido por 24 horas. Guarde o link como uma credencial temporária. Se a sessão estiver
-desligada, volte a ligá-la e use **Tentar entrega**. Se o envio ficar por confirmar, verifique a
-conversa antes de qualquer reenvio. O estado de pagamento permanece confirmado.
+Após conferir o pagamento no prestador, aprove o comprovativo. O cliente recebe o ficheiro
+como documento no WhatsApp. Se a sessão estiver desligada, volte a ligá-la e use **Tentar entrega**.
+Se o envio ficar por confirmar, verifique a conversa antes de qualquer reenvio. O estado de pagamento
+permanece confirmado.
 
 O catálogo associado a cada conta do WhatsApp permanece no módulo **Vendas & Pedidos**.
 O fluxo por organização em **Pedidos digitais** continua a usar a descarga autenticada do
@@ -73,9 +73,13 @@ Aplique `supabase/migrations/20_seller_workspace.sql` depois das migrações 12,
 
 Em instalações que já receberam a migração 20, aplique `supabase/migrations/21_seller_lead_compatibility.sql`. Repare a base antes de publicar a aplicação. A migração adiciona os campos que o CRM antigo ainda possa não ter, como `leads.last_action`, e preserva os registos existentes. No SQL Editor, `select public.agentx_seller_contract_ready();` deve devolver `true`. O endpoint `/api/ready` da nova versão também valida o contrato de vendas.
 
+Depois da migração 21, aplique `supabase/migrations/22_seller_payment_methods.sql`. A migração conserva o destino já configurado e os dados de pagamento dos pedidos abertos. No SQL Editor, `select public.agentx_seller_payments_ready();` deve devolver `true`.
+
 Abra **Vendedor** em `/seller`. Ligue o WhatsApp, ative um agente com perfil **Vendas** ou **Multifuncional**, publique um produto com stock e configure o destino de pagamento. Os produtos digitais precisam de um ficheiro privado ou conteúdo de entrega. O agente guarda as instruções de pagamento no pedido para que uma alteração posterior do destino só afete novos pedidos.
 
-O cliente pode enviar um SMS ou um comprovativo em texto pelo WhatsApp. Inclua o número do pedido se tiver mais de um aberto. A receção cria um comprovativo pendente e envia um aviso ao número indicado, se estiver configurado. O titular da conta abre o painel, confere o recebimento no prestador e introduz o método, a referência oficial e o montante. O mesmo pagamento confirmado só pode liquidar um pedido por conta e por método. A entrega digital usa um link temporário e a confirmação por WhatsApp.
+Em **Pagamento e avisos**, podem ficar ativos M-Pesa, e-Mola e transferência bancária, cada um com os seus dados de destino. O pedido regista o método escolhido e os dados apresentados ao cliente.
+
+O cliente pode enviar um SMS ou um comprovativo em texto pelo WhatsApp. Inclua o número do pedido se tiver mais de um aberto. O AgentX compara o titular e a conta que consegue identificar com o destino do pedido. Um comprovativo com divergência comprovada só pode ser rejeitado pelo operador. Se os dados forem incompletos, o painel indica que o destino precisa de conferência. Para aprovar, o titular confere o extrato e confirma o recebimento do valor indicado. A referência, quando identificada no texto, fica associada ao pagamento. O sistema também impede a reutilização do mesmo comprovativo nos casos sem referência.
 
 O teste `tests/integration/run-agentx-inbox.sh` verifica o fluxo com PostgreSQL e PostgREST. Use `AGENTX_INBOX_BROWSER=1` após compilar para incluir a configuração e a aprovação no navegador. A IA, o transporte WhatsApp e o Storage são simulados neste ensaio. A operação com números reais e ficheiros privados precisa de teste num ambiente de homologação.
 

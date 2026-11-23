@@ -26,7 +26,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { Badge } from "../components/ui/Badge";
 import { Input } from "../components/ui/Input";
 import { cn } from "../lib/utils";
-import { isSellerMethod, sellerMethods } from "../../shared/seller";
+import { isSellerMethod, sellerMethods, type OrderPayment, type RecipientEvidence } from "../../shared/seller";
 
 interface Product {
   id: string;
@@ -51,6 +51,7 @@ interface Order {
   status: "created" | "awaiting_payment" | "verification_pending" | "paid" | "fulfilled" | "rejected" | "cancelled";
   lead_id?: string | null;
   payment_method: string;
+  seller_payment?: OrderPayment | null;
   delivery_started_at?: string | null;
   delivery_error?: string | null;
   created_at: string;
@@ -78,6 +79,7 @@ interface Verification {
   currency?: string;
   confidence_score: number;
   created_at: string;
+  recipientEvidence?: RecipientEvidence;
   orders?: {
     order_number: string;
     total_amount: number;
@@ -85,6 +87,7 @@ interface Verification {
     customer_name: string;
     customer_phone: string;
     payment_method?: string;
+    seller_payment?: OrderPayment | null;
   };
 }
 
@@ -114,13 +117,23 @@ export default function Orders() {
   const tab = searchParams.get("tab");
   const activeTab = tab === "verifications" || tab === "products" || tab === "timeline" ? tab : "orders";
   const setActiveTab = (next: string) => setSearchParams({ tab: next });
-  const [approval, setApproval] = useState<{ id: string; number: string; amount: number; currency: string; method?: string } | null>(null);
+  const [approval, setApproval] = useState<{
+    id: string; proofId: string; number: string; amount: number; currency: string;
+    method?: string; destination?: OrderPayment | null;
+  } | null>(null);
   const [approving, setApproving] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const approvalDialog = useRef<HTMLDialogElement>(null);
+  const [rejection, setRejection] = useState<{ id: string; proofId: string; mismatch: boolean } | null>(null);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectionError, setRejectionError] = useState("");
+  const rejectionDialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (approval && approvalDialog.current && !approvalDialog.current.open) approvalDialog.current.showModal();
   }, [approval]);
+  useEffect(() => {
+    if (rejection && rejectionDialog.current && !rejectionDialog.current.open) rejectionDialog.current.showModal();
+  }, [rejection]);
 
   const [proofsUnavailable, setProofsUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -133,6 +146,7 @@ export default function Orders() {
   const [search, setSearch] = useState(query);
   const [statusFilter, setStatusFilter] = useState(status);
   useEffect(() => { setSearch(query); setStatusFilter(status); }, [query, status]);
+  const pendingProofs = query ? verifications.filter((proof) => proof.orders?.order_number === query) : verifications;
 
   // Product modal
   const [showProductModal, setShowProductModal] = useState(false);
@@ -232,16 +246,20 @@ export default function Orders() {
     }
   };
 
-  function reviewOrder(id: string) {
-    const order = orders.find((item) => item.id === id);
-    const proof = verifications.find((item) => item.order_id === id)?.orders;
-    const current = order ?? proof;
-    if (!current) {
+  function reviewProof(proof: Verification) {
+    const orderId = proof.order_id;
+    const current = proof.orders ?? orders.find((item) => item.id === orderId);
+    if (!orderId || !current) {
       toast.error("Não foi possível consultar o pedido. Atualiza a lista antes de aprovar.");
       return;
     }
+    if (proof.recipientEvidence?.recipientMatch === "mismatch") {
+      toast.error("O destinatário do comprovativo é diferente do destino do pedido.");
+      return;
+    }
     setApprovalError("");
-    setApproval({ id, number: current.order_number, amount: current.total_amount, currency: current.currency || "MT", method: current.payment_method });
+    setApproval({ id: orderId, proofId: proof.id, number: current.order_number, amount: current.total_amount,
+      currency: current.currency || "MT", method: current.payment_method, destination: current.seller_payment });
   }
 
   async function approveOrder(event: React.FormEvent<HTMLFormElement>) {
@@ -253,8 +271,7 @@ export default function Orders() {
     try {
       const res = await apiFetch(`/api/commerce/orders/${approval.id}/approve`, {
         method: "POST",
-        body: JSON.stringify({ settlementVerified: true, settlementMethod: values.get("method"),
-          settlementReference: values.get("reference"), settlementAmount: values.get("amount") })
+        body: JSON.stringify({ settlementVerified: true, proofId: approval.proofId })
       });
       if (!res.success) throw new Error(res.error || "Não foi possível confirmar o pagamento.");
       if (res.fulfillment?.delivered) toast.success("Pagamento confirmado e envio aceite pelo WhatsApp.");
@@ -279,24 +296,28 @@ export default function Orders() {
     }
   };
 
-  const handleRejectOrder = async (orderId: string) => {
-    const reason = window.prompt("Informe o motivo da rejeição (será enviado ao cliente):", "Comprovativo não identificado ou valor divergente");
-    if (!reason) return;
-
+  async function rejectProof(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const reason = String(new FormData(event.currentTarget).get("reason") ?? "").trim();
+    if (!rejection || rejecting || reason.length < 3) return;
+    setRejecting(true);
+    setRejectionError("");
     try {
-      const res = await apiFetch(`/api/commerce/orders/${orderId}/reject`, {
+      const res = await apiFetch(`/api/commerce/orders/${rejection.id}/reject`, {
         method: "POST",
-        body: JSON.stringify({ reason })
+        body: JSON.stringify({ reason, proofId: rejection.proofId })
       });
-
-      if (res.success) {
-        toast.info(res.notified ? "Pedido rejeitado e cliente notificado." : "Pedido rejeitado. O aviso ao cliente ficou por confirmar.");
-        fetchData();
-      }
-    } catch (err: any) {
-      toast.error(`Erro ao rejeitar: ${err.message}`);
+      if (!res.success) throw new Error("Não foi possível rejeitar o comprovativo.");
+      toast.info(res.awaitingOtherProofs ? "Comprovativo rejeitado. Os restantes continuam em revisão."
+        : res.notified ? "Comprovativo rejeitado e cliente notificado." : "Comprovativo rejeitado. O aviso ficou por confirmar.");
+      setRejection(null);
+      void fetchData();
+    } catch (error) {
+      setRejectionError(error instanceof Error ? error.message : "Não foi possível rejeitar o comprovativo.");
+    } finally {
+      setRejecting(false);
     }
-  };
+  }
 
   const handleViewTimeline = async (order: Order) => {
     try {
@@ -565,25 +586,11 @@ export default function Orders() {
                               ? <span className="text-xs text-amber-700">{order.delivery_error || "Envio por confirmar"}</span>
                               : <Button size="sm" variant="outline" onClick={() => retryDelivery(order.id)}>Tentar entrega</Button>)}
 
-                            {order.status === "verification_pending" && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  onClick={() => reviewOrder(order.id)}
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1 text-xs px-2.5 h-8"
-                                >
-                                  <Check size={14} /> Aprovar
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRejectOrder(order.id)}
-                                  className="text-red-600 hover:bg-red-50 text-xs px-2.5 h-8"
-                                >
-                                  <X size={14} />
-                                </Button>
-                              </>
-                            )}
+                            {order.status === "verification_pending" && <Link
+                              to={`/orders?tab=verifications&q=${encodeURIComponent(order.order_number)}`}
+                              className="whitespace-nowrap rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
+                              Rever comprovativo
+                            </Link>}
                           </div>
                         </td>
                       </tr>
@@ -601,7 +608,8 @@ export default function Orders() {
         <div className="space-y-4">
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
             <h2 className="font-bold text-slate-900">Confirmar comprovativos de vendas</h2>
-            <p className="mt-1 text-slate-700">Abre o extrato do prestador, confere a referência, o valor e a moeda do pedido, e regista a decisão.</p>
+            <p className="mt-1 text-slate-700">Confere no prestador se o valor do pedido entrou na conta da loja.</p>
+            {query && <Link to="/orders?tab=verifications" className="mt-2 mr-4 inline-block font-semibold text-emerald-800 underline">Ver todos os comprovativos</Link>}
             <Link to="/digital-orders?view=review" className="mt-2 inline-block font-semibold text-emerald-800 underline">
               Rever comprovativos de pedidos digitais
             </Link>
@@ -611,7 +619,7 @@ export default function Orders() {
               <p className="mb-2 text-sm">Não foi possível consultar os comprovativos.</p>
               <Button size="sm" onClick={fetchData}>Tentar novamente</Button>
             </div>
-          ) : verifications.length === 0 ? (
+          ) : pendingProofs.length === 0 ? (
             <Card className="border-dashed border-2 py-12 text-center text-slate-400">
               <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-500" />
               <p className="font-bold text-slate-700 text-lg">Tudo em dia!</p>
@@ -619,7 +627,7 @@ export default function Orders() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {verifications.map(ver => (
+              {pendingProofs.map(ver => (
                 <Card key={ver.id} className="border border-amber-200 bg-amber-50/20 shadow-sm">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
@@ -650,6 +658,18 @@ export default function Orders() {
                       )}
                     </div>
 
+                    {ver.orders?.seller_payment && <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm">
+                      <p className="font-semibold">{ver.recipientEvidence?.recipientMatch === "mismatch"
+                        ? "Destinatário divergente" : ver.recipientEvidence?.recipientMatch === "match"
+                          ? "Dados de destino coincidem" : "Destinatário por conferir"}</p>
+                      <p className="mt-1 text-slate-600">Titular da loja · {ver.orders.seller_payment.name}</p>
+                      {ver.recipientEvidence?.recipientName &&
+                        <p className="text-slate-600">Titular no comprovativo · {ver.recipientEvidence.recipientName}</p>}
+                      {ver.recipientEvidence?.recipientAccount && <p className="text-slate-600">
+                        Conta ou número indicado · {ver.recipientEvidence.recipientAccount}
+                      </p>}
+                    </div>}
+
                     {ver.proof_raw_text && (
                       <div className="bg-slate-900 text-emerald-400 p-3 rounded-xl font-mono text-xs leading-relaxed max-h-32 overflow-y-auto">
                         {ver.proof_raw_text}
@@ -664,9 +684,9 @@ export default function Orders() {
                     )}
                     {!ver.order_id && <p className="text-sm text-amber-800">Este comprovativo ainda não tem um pedido associado.</p>}
                     <div className="flex gap-3 pt-2">
-                      {ver.order_id && (
+                      {ver.order_id && ver.recipientEvidence?.recipientMatch !== "mismatch" && (
                         <Button
-                          onClick={() => reviewOrder(ver.order_id!)}
+                          onClick={() => reviewProof(ver)}
                           className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-bold"
                         >
                           <Check size={18} /> Rever e aprovar
@@ -675,7 +695,10 @@ export default function Orders() {
                       {ver.order_id && (
                         <Button
                           variant="outline"
-                          onClick={() => handleRejectOrder(ver.order_id!)}
+                          onClick={() => {
+                            setRejectionError("");
+                            setRejection({ id: ver.order_id!, proofId: ver.id, mismatch: ver.recipientEvidence?.recipientMatch === "mismatch" });
+                          }}
                           className="text-red-600 border-red-200 hover:bg-red-50"
                         >
                           Rejeitar
@@ -778,23 +801,13 @@ export default function Orders() {
               <h2 id="approval-title" className="text-lg font-bold">Confirmar pagamento</h2>
               <p className="mt-1 text-sm text-slate-600">Pedido {approval.number} · {approval.amount} {approval.currency}</p>
             </div>
-            <label className="grid gap-1 text-sm font-medium">Método confirmado
-              <select className="rounded-lg border border-slate-300 bg-white p-2" name="method" required disabled={approving}
-                defaultValue={isSellerMethod(approval.method) ? approval.method : ""}>
-                <option value="">Escolher método</option>
-                {Object.entries(sellerMethods).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                <option value="other">Outro</option>
-              </select>
-            </label>
-            <label className="grid gap-1 text-sm font-medium">Referência oficial da transação
-              <Input name="reference" required minLength={4} maxLength={80} disabled={approving} />
-            </label>
-            <label className="grid gap-1 text-sm font-medium">Valor recebido em {approval.currency}
-              <Input name="amount" required inputMode="decimal" placeholder="0,00" maxLength={13} disabled={approving} />
-            </label>
+            <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-sm">
+              {isSellerMethod(approval.method) && <p className="font-semibold">{sellerMethods[approval.method]}</p>}
+              {approval.destination && <p>{approval.destination.name} · {approval.destination.recipient}</p>}
+            </div>
             <label className="flex items-start gap-2 text-sm">
               <input className="mt-1" type="checkbox" name="verified" required disabled={approving} />
-              Confirmei no prestador a referência, o valor e a moeda recebida.
+              Confirmei no prestador o recebimento deste valor na conta da loja.
             </label>
             {approvalError && <p role="alert" className="text-sm text-red-700">{approvalError}</p>}
             <div className="flex flex-wrap justify-end gap-2">
@@ -804,6 +817,23 @@ export default function Orders() {
           </form>
         </dialog>
       )}
+
+      {rejection && <dialog ref={rejectionDialog} aria-labelledby="rejection-title"
+        onCancel={(event) => { event.preventDefault(); if (!rejecting) setRejection(null); }}
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
+        <form onSubmit={rejectProof} className="grid gap-4">
+          <h2 id="rejection-title" className="text-lg font-bold">Rejeitar comprovativo</h2>
+          <label className="grid gap-1 text-sm font-medium">Motivo a comunicar ao cliente
+            <Input name="reason" required minLength={3} maxLength={250} disabled={rejecting}
+              defaultValue={rejection.mismatch ? "O destinatário do comprovativo difere dos dados do pedido." : ""} />
+          </label>
+          {rejectionError && <p role="alert" className="text-sm text-red-700">{rejectionError}</p>}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" disabled={rejecting} onClick={() => setRejection(null)}>Cancelar</Button>
+            <Button type="submit" disabled={rejecting} className="bg-red-700 hover:bg-red-800">{rejecting ? "A rejeitar…" : "Rejeitar comprovativo"}</Button>
+          </div>
+        </form>
+      </dialog>}
 
       {/* New Product Modal */}
       {showProductModal && (

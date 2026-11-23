@@ -35,7 +35,11 @@ const users = [owner, other].map((id, index) => ({
 const userTokens = users.map((user) => token("authenticated", user.id));
 const publicKey = token("anon");
 const serviceKey = token("service_role");
-const storedObjects = new Set();
+const storedObjects = new Map();
+const downloadedObjects = [];
+const pdfBytes = Buffer.from("%PDF-1.7\nExemplo");
+const sentDocuments = (outbound) => outbound.filter((message) => message.content.document);
+let aiEndpointAvailable = true;
 
 const supabase = createServer(async (req, res) => {
   if (req.headers.origin) res.setHeader("access-control-allow-origin", req.headers.origin);
@@ -58,25 +62,47 @@ const supabase = createServer(async (req, res) => {
   if (req.url === "/fixture-ai" && req.method === "POST") {
     let input = "";
     for await (const chunk of req) input += chunk;
+    if (!aiEndpointAvailable) return res.writeHead(503).end(JSON.stringify({ error: "Simulated AI outage" }));
     const message = JSON.parse(input).message.split("\nUSER:\n").at(-1);
     const buying = message.includes("comprar");
-    const toolAnswer = message.includes("interesse")
-      ? { tool: "qualifyLEAD", args: { phone: "258870000001", interestLevel: "alto", tag: "Interessado no livro",
-          notes: message.includes("limite") ? "x".repeat(501) : "Prefere o PDF" } }
-      : { tool: buying ? "createOrder" : "getProductsCatalog",
-          ...(buying ? { reply: "O seu pedido já foi criado." } : {}),
-          args: buying ? { productName: "Livro do piloto", quantity: message.includes("quatro") ? 4 : 1 } : { search: "Livro do piloto" } };
+    const paymentMethod = /e-Mola/i.test(message) ? "emola" : /transferência bancária/i.test(message) ? "bank_transfer" : undefined;
+    let toolAnswer = { tool: "getProductsCatalog", args: { search: "Livro do piloto" } };
+    if (message.includes("Comprovativo")) {
+      toolAnswer = { tool: "submitPaymentProof", reply: "O pagamento já foi confirmado.", args: {} };
+    } else if (message.includes("interesse")) {
+      toolAnswer = { tool: "qualifyLEAD", args: { phone: "258870000001", interestLevel: "alto", tag: "Interessado no livro",
+        notes: message.includes("limite") ? "x".repeat(501) : "Prefere o PDF" } };
+    } else if (buying) {
+      toolAnswer = { tool: "createOrder", reply: "O seu pedido já foi criado.",
+        args: { productName: "Livro do piloto", quantity: message.includes("quatro") ? 4 : 1, paymentMethod } };
+    }
     return res.end(JSON.stringify({ response: JSON.stringify(toolAnswer) }));
   }
-  if (req.url.startsWith("/storage/v1/object/") && req.method === "POST") {
+  if (req.url.startsWith("/storage/v1/object/") && (req.method === "GET" || req.method === "POST")) {
     if (req.headers.authorization !== `Bearer ${serviceKey}`) return res.writeHead(403).end("{}");
-    const objectPath = req.url.slice("/storage/v1/object/".length);
-    for await (const _ of req) { /* Consume the request body. */ }
+    const objectPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname.slice("/storage/v1/object/".length));
+    if (req.method === "GET") {
+      const object = storedObjects.get(objectPath);
+      if (!object) return res.writeHead(404).end("{}");
+      downloadedObjects.push(objectPath);
+      return res.writeHead(200, { "content-type": object.contentType, "content-length": object.bytes.length }).end(object.bytes);
+    }
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
     if (objectPath.startsWith("sign/")) {
       if (!storedObjects.has(objectPath.slice(5))) return res.writeHead(404).end("{}");
       return res.end(JSON.stringify({ signedURL: `/object/${objectPath}?token=fixture-file-access` }));
     }
-    storedObjects.add(objectPath);
+    const contentType = req.headers["content-type"] ?? "application/octet-stream";
+    const bytes = Buffer.concat(chunks);
+    if (contentType.startsWith("multipart/form-data")) {
+      const fields = await new Response(bytes, { headers: { "content-type": contentType } }).formData();
+      const file = [...fields.values()].find((value) => value instanceof Blob);
+      if (!file) return res.writeHead(400).end("{}");
+      storedObjects.set(objectPath, { bytes: Buffer.from(await file.arrayBuffer()), contentType: file.type });
+    } else {
+      storedObjects.set(objectPath, { bytes, contentType });
+    }
     return res.end(JSON.stringify({ Key: objectPath }));
   }
   if (req.url.startsWith("/auth/v1/token") && req.method === "POST") {
@@ -106,6 +132,7 @@ async function start(port = 0) {
     cwd: sandbox,
     env: { ...process.env, NODE_ENV: "production", PORT: String(port), SUPABASE_URL: supabaseUrl,
       VITE_SUPABASE_URL: supabaseUrl, SUPABASE_SERVICE_ROLE_KEY: serviceKey, VITE_SUPABASE_ANON_KEY: publicKey,
+      GEMINI_API_KEY: "",
       VITE_API_URL: "", DISABLE_WHATSAPP_RECONNECT: "true", DISABLE_SCHEDULER: "true", DISABLE_DIGITAL_DELIVERY_WORKER: "true" },
     stdio: ["ignore", "pipe", "pipe", "ipc"]
   });
@@ -324,27 +351,42 @@ try {
   }
 
   const seller = "/commerce/seller";
-  const ownerSettings = { payment_method: "mpesa", payment_recipient: "84 000 0003",
-    recipient_name: "Loja de teste", notification_phone: "85 000 0004" };
+  const ownerSettings = {
+    payment_method: "mpesa",
+    payment_destinations: {
+      mpesa: { recipient: "84 000 0003", name: "Loja de teste" },
+      emola: { recipient: "87 000 0006", name: "Loja de teste" },
+      bank_transfer: { recipient: "000111222333", name: "Loja de teste" }
+    },
+    notification_phone: "85 000 0004"
+  };
   const configure = (settings = ownerSettings) => fetch(app.base + "/api" + seller + "/settings", {
     method: "PUT", headers: { authorization: `Bearer ${userTokens[0]}`, "content-type": "application/json" },
     body: JSON.stringify(settings)
   });
   assert.equal((await api(seller, -1)).status, 401);
-  assert.equal((await configure({ ...ownerSettings, payment_recipient: "123@lid" })).status, 400);
+  assert.equal((await configure({ ...ownerSettings, payment_destinations: {
+    ...ownerSettings.payment_destinations, mpesa: { recipient: "123@lid", name: "Loja de teste" }
+  } })).status, 400);
 
   if (page) {
     await page.goto(app.base + "/seller");
     await page.getByRole("heading", { name: "Vendedor", exact: true }).waitFor();
-    await page.getByRole("textbox", { name: "Número que recebe o pagamento" }).fill(ownerSettings.payment_recipient);
-    await page.getByRole("textbox", { name: "Nome do titular" }).fill(ownerSettings.recipient_name);
+    for (const [method, { recipient, name }] of Object.entries(ownerSettings.payment_destinations)) {
+      const groupName = { mpesa: "M-Pesa", emola: "e-Mola", bank_transfer: "Transferência bancária" }[method];
+      const group = page.getByRole("group", { name: groupName, exact: true });
+      await group.getByRole("textbox", { name: method === "bank_transfer" ? "Conta ou NIB" : "Número", exact: true }).fill(recipient);
+      await group.getByRole("textbox", { name: "Nome do titular", exact: true }).fill(name);
+    }
     await page.getByRole("textbox", { name: /WhatsApp para avisos/ }).fill(ownerSettings.notification_phone);
-    await page.getByRole("button", { name: "Guardar pagamento" }).click();
+    await page.getByRole("button", { name: "Guardar métodos" }).click();
     await page.getByText("+258850000004", { exact: true }).waitFor();
   } else {
     assert.equal((await configure()).status, 200);
   }
-  assert.equal((await (await api(seller, 1)).json()).data.settings, null);
+  const otherSettings = (await (await api(seller, 1)).json()).data.settings;
+  assert.equal(otherSettings.payment_method, "emola");
+  assert.deepEqual(otherSettings.payment_destinations, { emola: { recipient: "258870000005", name: "Loja anterior" } });
 
   const storageAuth = { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" };
   const agent = await fetch(new URL("/agents", rest), { method: "POST", headers: storageAuth,
@@ -353,12 +395,13 @@ try {
 
   const productBody = new FormData();
   for (const [key, value] of Object.entries({ name: "Livro do piloto", price: "250", stock: "3", type: "digital" })) productBody.set(key, value);
-  productBody.set("file", new Blob(["%PDF-1.7\nExemplo"], { type: "application/pdf" }), "livro.pdf");
+  productBody.set("file", new Blob([pdfBytes], { type: "application/pdf" }), "livro.pdf");
   const productResponse = await fetch(app.base + "/api/commerce/products", { method: "POST",
     headers: { authorization: `Bearer ${userTokens[0]}` }, body: productBody });
   assert.equal(productResponse.status, 200);
   const product = (await productResponse.json()).data;
   assert.equal(storedObjects.size, 1);
+  assert.deepEqual(storedObjects.values().next().value.bytes, pdfBytes);
 
   const identity = { jid: "109876543211124@lid", altJid: "258840000002@s.whatsapp.net" };
   const sell = (text, messageId) => app.simulate("sales", { text, messageId, ...identity });
@@ -417,48 +460,91 @@ try {
   const [order] = (await (await api(seller)).json()).data.orders;
   assert.equal(order.status, "awaiting_payment");
   assert.match(app.outbound.at(-1).content.text, /250 MT.*258840000003/);
-  assert.equal((await read("orders", `?id=eq.${order.id}`))[0].lead_id, lead.id);
+  const [createdOrder] = await read("orders", `?id=eq.${order.id}`);
+  assert.equal(createdOrder.lead_id, lead.id);
+  assert.deepEqual(createdOrder.seller_payment, { method: "mpesa", recipient: "258840000003", name: "Loja de teste" });
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
-  assert.equal((await configure({ ...ownerSettings, payment_recipient: "84 000 0005" })).status, 200);
+  const changedSettings = { ...ownerSettings, payment_destinations: {
+    ...ownerSettings.payment_destinations, mpesa: { recipient: "84 000 0005", name: "Loja de teste" }
+  } };
+  assert.equal((await configure(changedSettings)).status, 200);
   await sell("Quero comprar o livro.", "purchase-one");
   assert.match(app.outbound.at(-1).content.text, /258840000003/);
   assert.equal((await (await api(seller)).json()).data.orders.length, 1);
   assert.equal((await api(`/commerce/orders/${order.id}/delivery`, 0, {})).status, 503);
 
-  const receipt = "M-Pesa Confirmado. Recebeu 250.00 MT de 841234567. Transaccao: AGVALID01";
-  await sell(`${receipt} Pedido ${order.order_number}`, "proof-one");
-  await sell(`${receipt} Pedido ${order.order_number}`, "proof-one");
-  assert.equal((await read("payment_verifications", `?order_id=eq.${order.id}`)).length, 1);
-  assert.equal((await (await api(seller)).json()).data.pendingReviews, 1);
-  assert.equal(app.outbound.filter((message) => message.jid === "258850000004@s.whatsapp.net").length, 1);
-  assert.ok(!app.outbound.some((message) => message.content.text?.includes("fixture-file-access")));
-
   const approve = (id, data, index = 0) => api(`/commerce/orders/${id}/approve`, index, data);
-  const approval = { settlementVerified: true, settlementMethod: "mpesa", settlementReference: "AGVALID01", settlementAmount: "250,00" };
+  const approval = { settlementVerified: true };
   assert.equal((await approve(order.id, {})).status, 400);
-  assert.equal((await approve(order.id, { ...approval, settlementReference: "" })).status, 400);
-  assert.equal((await approve(order.id, approval, 1)).status, 404);
-  assert.equal((await approve(order.id, { ...approval, settlementAmount: "25" })).status, 409);
+  assert.equal((await approve(order.id, approval)).status, 409);
+
+  const notifications = () => app.outbound.filter((message) => message.jid === "258850000004@s.whatsapp.net").length;
+  const wrongRecipient = "Comprovativo M-Pesa. Recebeu 250.00 MT de 841234567. Transaccao: AGWRONG01. Titular destinatário: Outra Pessoa.";
+  await sell(`${wrongRecipient} Pedido ${order.order_number}`, "proof-wrong-recipient");
+  const [mismatchedProof] = await read("payment_verifications", "?source_message_id=eq.proof-wrong-recipient");
+  assert.equal(mismatchedProof.extracted_data.recipientMatch, "mismatch");
+  assert.equal(mismatchedProof.status, "pending");
+  assert.equal((await approve(order.id, { ...approval, proofId: mismatchedProof.id })).status, 409);
+  assert.equal((await read("orders", `?id=eq.${order.id}`))[0].status, "verification_pending");
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
+  assert.equal(sentDocuments(app.outbound).length, 0);
+  assert.equal(downloadedObjects.length, 0);
+
+  const priorNotifications = notifications();
+  const receipt = "Comprovativo M-Pesa. Recebeu 250.00 MT de 841234567. Transaccao: AGVALID01. Beneficiário: Loja de teste.";
+  await sell(`${receipt} Pedido ${order.order_number}`, "proof-one");
+  await sell(`${receipt} Pedido ${order.order_number}`, "proof-one");
+  const [correctProof] = await read("payment_verifications", "?source_message_id=eq.proof-one");
+  assert.equal(correctProof.extracted_data.recipientMatch, "match");
+  assert.equal((await read("payment_verifications", `?order_id=eq.${order.id}`)).length, 2);
+  assert.equal((await (await api(seller)).json()).data.pendingReviews, 1);
+  assert.equal(notifications(), priorNotifications + 1);
+  assert.equal(sentDocuments(app.outbound).length, 0);
+  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação|validação humana/i);
+
+  const confirmCorrectProof = { ...approval, proofId: correctProof.id };
+  assert.equal((await approve(order.id, confirmCorrectProof, 1)).status, 404);
+  assert.equal((await approve(order.id, { ...confirmCorrectProof, settlementAmount: "25" })).status, 409);
   if (page) {
     await page.goto(app.base + "/seller");
     await page.getByRole("link", { name: /Comprovativos pendentes/ }).click();
-    await page.getByRole("button", { name: /Aprovar/i }).click();
+    await page.getByText("Destinatário divergente", { exact: true }).waitFor();
+    const wrongCard = page.getByRole("heading", { name: /AGWRONG01/ }).locator("xpath=../..");
+    assert.equal(await wrongCard.getByRole("button", { name: /Aprovar/i }).count(), 0);
+    const correctCard = page.getByRole("heading", { name: /AGVALID01/ }).locator("xpath=../..");
+    await correctCard.getByRole("button", { name: /Aprovar/i }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByRole("textbox", { name: "Referência oficial da transação" }).fill(approval.settlementReference);
-    await dialog.getByRole("textbox", { name: "Valor recebido em MT" }).fill(approval.settlementAmount);
-    await dialog.getByRole("checkbox").check();
+    assert.equal(await dialog.getByRole("textbox", { name: /Referência oficial da transação|Valor recebido/i }).count(), 0);
+    await dialog.getByRole("checkbox", { name: "Confirmei no prestador o recebimento deste valor na conta da loja." }).check();
     const [confirmed] = await Promise.all([
       page.waitForResponse((response) => response.url().endsWith("/approve")),
       dialog.getByRole("button", { name: "Confirmar pagamento" }).click()
     ]);
     assert.equal(confirmed.status(), 200);
+    assert.deepEqual(confirmed.request().postDataJSON(), confirmCorrectProof);
     assert.equal((await confirmed.json()).fulfillment.delivered, true);
   } else {
-    const attempts = await Promise.all([approve(order.id, approval), approve(order.id, approval)]);
+    const attempts = await Promise.all([approve(order.id, confirmCorrectProof), approve(order.id, confirmCorrectProof)]);
     assert.ok(attempts.every((response) => response.status === 200));
   }
-  assert.equal((await approve(order.id, approval)).status, 200);
-  assert.equal(app.outbound.filter((message) => message.content.text?.includes("fixture-file-access")).length, 1);
+  assert.equal((await approve(order.id, confirmCorrectProof)).status, 200);
+  assert.equal((await read("payment_verifications", `?id=eq.${correctProof.id}`))[0].status, "approved");
+  assert.equal((await read("payment_verifications", `?id=eq.${mismatchedProof.id}`))[0].status, "rejected");
+  assert.equal((await read("orders", `?id=eq.${order.id}`))[0].payment_reference, "AGVALID01");
+  const documents = sentDocuments(app.outbound);
+  assert.equal(documents.length, 1);
+  assert.equal(documents[0].jid, "258840000002@s.whatsapp.net");
+  assert.equal(documents[0].content.fileName, "livro.pdf");
+  assert.equal(documents[0].content.mimetype, "application/pdf");
+  assert.deepEqual(Buffer.from(documents[0].content.document.data), pdfBytes);
+  assert.match(documents[0].content.caption, /Pagamento confirmado/i);
+  const [documentMessage] = await read("messages", `?contact_id=eq.${lead.contact_id}&type=eq.outbound&media_type=eq.document`);
+  assert.equal(documentMessage.media_filename, "livro.pdf");
+  assert.equal(documentMessage.media_mimetype, "application/pdf");
+  assert.equal(documentMessage.media_url, null);
+  assert.ok(downloadedObjects.length > 0);
+  assert.ok(downloadedObjects.every((objectPath) => objectPath === `agentx-product-files/${product.deliverable_path}`));
+  assert.ok(!app.outbound.some((message) => /fixture-file-access|storage\/v1/.test(JSON.stringify(message.content))));
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
   assert.equal((await read("leads", `?id=eq.${lead.id}`))[0].stage, "venda_fechada");
   assert.equal((await (await api(seller)).json()).data.orders.find(({ id }) => id === order.id).status, "fulfilled");
@@ -486,14 +572,72 @@ try {
   const secondOrder = (await (await api(seller)).json()).data.orders.find(({ id }) => id !== order.id);
   assert.match(app.outbound.at(-1).content.text, /258840000005/);
   await sell(`${receipt} Pedido ${secondOrder.order_number}`, "proof-two");
-  assert.equal((await approve(secondOrder.id, { ...approval, settlementReference: "ag-valid01" })).status, 409);
+  const [duplicateProof] = await read("payment_verifications", "?source_message_id=eq.proof-two");
+  assert.equal((await approve(secondOrder.id, { ...approval, proofId: duplicateProof.id })).status, 409);
+  await sell(`${receipt.replace("AGVALID01", "AGVALID02")} Pedido ${secondOrder.order_number}`, "proof-two-alternative");
+  const [alternativeProof] = await read("payment_verifications", "?source_message_id=eq.proof-two-alternative");
+  const repliesBeforeRejectingOne = app.outbound.length;
+  const rejectedProof = await api(`/commerce/orders/${secondOrder.id}/reject`, 0,
+    { reason: "Referência já utilizada", proofId: duplicateProof.id });
+  assert.equal(rejectedProof.status, 200);
+  assert.equal((await read("payment_verifications", `?id=eq.${duplicateProof.id}`))[0].status, "rejected");
+  assert.equal((await read("payment_verifications", `?id=eq.${alternativeProof.id}`))[0].status, "pending");
+  assert.equal((await read("orders", `?id=eq.${secondOrder.id}`))[0].status, "verification_pending");
+  assert.equal(app.outbound.length, repliesBeforeRejectingOne);
   assert.equal((await api(`/commerce/orders/${secondOrder.id}/reject`, 0, { reason: "Referência já utilizada" })).status, 200);
   assert.equal((await read("orders", `?id=eq.${secondOrder.id}`))[0].status, "rejected");
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
-  assert.equal(app.outbound.filter((message) => message.content.text?.includes("fixture-file-access")).length, 1);
+  assert.equal(sentDocuments(app.outbound).length, 1);
+
+  await sell("Quero comprar um livro por e-Mola.", "purchase-emola");
+  const [emolaOrder] = await read("orders", "?source_message_id=eq.purchase-emola");
+  assert.equal(emolaOrder.payment_method, "emola");
+  assert.equal(emolaOrder.seller_payment.recipient, "258870000006");
+  assert.match(app.outbound.at(-1).content.text, /e-Mola.*258870000006/i);
+  const emolaProofText = "Comprovativo e-Mola. Recebeu 250.00 MT de 871234567. Beneficiário: Loja de teste.";
+  await sell(`${emolaProofText} Pedido ${emolaOrder.order_number}`, "proof-emola-no-reference");
+  const [emolaProof] = await read("payment_verifications", "?source_message_id=eq.proof-emola-no-reference");
+  assert.ok(!emolaProof.transaction_reference);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /pagamento já foi confirmado/i);
+
+  const filePath = `agentx-product-files/${product.deliverable_path}`;
+  const file = storedObjects.get(filePath);
+  storedObjects.delete(filePath);
+  const emolaConfirmed = await approve(emolaOrder.id, { ...approval, proofId: emolaProof.id });
+  assert.equal(emolaConfirmed.status, 200);
+  assert.equal((await emolaConfirmed.json()).fulfillment.delivered, false);
+  assert.equal((await read("orders", `?id=eq.${emolaOrder.id}`))[0].status, "paid");
+  assert.equal(sentDocuments(app.outbound).length, 1);
+  storedObjects.set(filePath, file);
+  const completedDelivery = await api(`/commerce/orders/${emolaOrder.id}/delivery`, 0, {});
+  assert.equal(completedDelivery.status, 200);
+  assert.equal((await completedDelivery.json()).delivered, true);
+  assert.equal((await read("orders", `?id=eq.${emolaOrder.id}`))[0].status, "fulfilled");
+  assert.equal(sentDocuments(app.outbound).length, 2);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 1);
+
+  await sell("Quero comprar por transferência bancária.", "purchase-bank");
+  const [bankOrder] = await read("orders", "?source_message_id=eq.purchase-bank");
+  assert.equal(bankOrder.status, "awaiting_payment");
+  assert.equal(bankOrder.payment_method, "bank_transfer");
+  assert.equal(bankOrder.seller_payment.recipient, "000111222333");
+  assert.match(app.outbound.at(-1).content.text, /transferência bancária.*000111222333/i);
+  assert.equal(sentDocuments(app.outbound).length, 2);
+
+  aiEndpointAvailable = false;
+  const outageIdentity = { jid: "258840000007@s.whatsapp.net" };
+  await app.simulate("sales", { ...outageIdentity, text: "Quanto custa o Livro do piloto?", messageId: "outage-catalogue" });
+  assert.match(app.outbound.at(-1).content.text, /Livro do piloto.*250 MT.*1 em stock/);
+  await app.simulate("sales", { ...outageIdentity, text: "Quero comprar o livro.", messageId: "outage-purchase" });
+  assert.match(app.outbound.at(-1).content.text, /Encaminhei a conversa para a equipa/);
+  const [escalatedContact] = await read("contacts", "?phone=eq.258840000007");
+  assert.equal(escalatedContact.ai_paused, true);
+  assert.ok(escalatedContact.ai_paused_at);
+  assert.deepEqual(await read("orders", "?source_message_id=eq.outage-purchase"), []);
 
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
-  console.log("Seller flow passed on the repaired legacy schema: scoped settings, LID-to-contact link, lead qualification, order, manual proof review, one settlement and one delivery");
+  console.log("Seller flow passed on the repaired legacy schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document");
+  console.log("AI outage fallback passed: catalogue from live data and human handoff before a purchase");
 } finally {
   await browser?.close();
   await app?.stop();

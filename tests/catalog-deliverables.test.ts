@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { productFilename } from "../backend/services/catalogDeliverables.ts";
+import { loadProductFile, productFilename } from "../backend/services/catalogDeliverables.ts";
 import { commerceService } from "../backend/services/commerceService.ts";
 import { createOrderTool } from "../backend/tools/commerce/createOrder.ts";
 import { getProductsCatalogTool } from "../backend/tools/commerce/getProductsCatalog.ts";
 import type { ToolContext } from "../backend/tools/types.ts";
 
-const mocks = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), sign: vi.fn(), send: vi.fn() }));
+const mocks = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), download: vi.fn(), send: vi.fn() }));
 vi.mock("../backend/supabaseAdmin.ts", () => ({
-  supabaseAdmin: { from: mocks.from, rpc: mocks.rpc, storage: { from: () => ({ createSignedUrl: mocks.sign }) } }
+  supabaseAdmin: { from: mocks.from, rpc: mocks.rpc, storage: { from: () => ({ download: mocks.download }) } }
 }));
 vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: { sendMessage: mocks.send } }));
 const ctx: ToolContext = { userId: "company", role: "lead", phone: "841234567", jid: "841234567@s.whatsapp.net", whatsappManager: {} };
@@ -27,6 +27,19 @@ function query(data: unknown) {
 }
 
 beforeEach(() => vi.resetAllMocks());
+
+const pdf = Buffer.from("%PDF-1.7\nLivro");
+const pdfItem = { product_name: "Livro", quantity: 1,
+  deliverable_snapshot: { type: "digital", path: "company/file", name: "livro.pdf" } };
+const paidOrder = { status: "paid", order_number: "AGX-TEST", customer_phone: "841234567", order_items: [pdfItem] };
+
+function downloadFile(content = pdf) {
+  mocks.download.mockImplementation(() => ({
+    asStream: async () => ({ data: new ReadableStream({
+      start(controller) { controller.enqueue(content); controller.close(); }
+    }), error: null })
+  }));
+}
 
 describe("commerce catalog and private files", () => {
   it("accepts a PDF and an image with matching file headers", () => {
@@ -62,25 +75,64 @@ describe("commerce catalog and private files", () => {
     expect(JSON.stringify(result)).not.toContain("last_action");
   });
 
-  it("only sends after a paid order has been exclusively claimed", async () => {
-    const order = {
-      status: "paid", order_number: "AGX-TEST", customer_phone: "841234567",
-      order_items: [{ product_name: "Livro", quantity: 1, deliverable_snapshot: {
-        type: "digital", path: "company/file", name: "livro.pdf"
-      } }]
-    };
-    mocks.from.mockReturnValueOnce(query(order)).mockReturnValueOnce(query(null));
-    mocks.sign.mockResolvedValue({ data: { signedUrl: "https://storage.invalid/book" } });
+  it("sends the actual private file once after exclusively claiming a paid order", async () => {
+    downloadFile();
+    mocks.from.mockReturnValueOnce(query(paidOrder)).mockReturnValueOnce(query(null));
     expect((await commerceService.fulfillOrder("order", ctx.userId)).delivered).toBe(false);
     expect(mocks.send).not.toHaveBeenCalled();
 
-    mocks.from.mockReturnValueOnce(query(order)).mockReturnValueOnce(query({ id: "order" }))
-      .mockReturnValueOnce(query(null)).mockReturnValueOnce(query(null));
+    mocks.from.mockReturnValueOnce(query(paidOrder)).mockReturnValueOnce(query({ id: "order" }))
+      .mockReturnValueOnce(query({ id: "order" })).mockReturnValueOnce(query(null));
     mocks.send.mockResolvedValue({ key: { id: "wa-id" } });
     expect((await commerceService.fulfillOrder("order", ctx.userId)).delivered).toBe(true);
-    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(ctx.userId, ctx.jid,
-      expect.stringContaining("https://storage.invalid/book"));
-    expect(mocks.sign).toHaveBeenLastCalledWith("company/file", 86400, { download: "livro.pdf" });
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(ctx.userId, "258841234567@s.whatsapp.net",
+      expect.stringContaining("Pagamento confirmado"), pdf, "document", undefined, "application/pdf", "livro.pdf");
+    expect(mocks.download).toHaveBeenLastCalledWith("company/file", {}, { signal: expect.any(AbortSignal) });
+  });
+
+  it("does not load a file from another account or a relative path that escapes the folder", async () => {
+    for (const path of ["other/file", "company/../other/file", "company/%2e%2e/other/file"]) {
+      await expect(loadProductFile(ctx.userId, path, "livro.pdf")).rejects.toThrow("não pertence ao catálogo");
+    }
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("stops reading when the remaining file limit is reached", async () => {
+    downloadFile();
+    await expect(loadProductFile(ctx.userId, "company/file", "livro.pdf", 4)).rejects.toThrow("20 MiB");
+  });
+
+  it("leaves delivery available for retry when the private file cannot be fetched", async () => {
+    mocks.from.mockReturnValueOnce(query(paidOrder));
+    mocks.download.mockReturnValue({ asStream: async () => ({ data: null, error: { message: "not found" } }) });
+    expect(await commerceService.fulfillOrder("order", ctx.userId)).toMatchObject({
+      delivered: false, message: expect.stringContaining("Verifique o ficheiro no catálogo")
+    });
+    expect(mocks.from).toHaveBeenCalledTimes(1);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("releases the claim only when the first attachment failed before WhatsApp was connected", async () => {
+    downloadFile();
+    const recovery = query(null);
+    mocks.from.mockReturnValueOnce(query(paidOrder)).mockReturnValueOnce(query({ id: "order" })).mockReturnValueOnce(recovery);
+    mocks.send.mockRejectedValue(new Error("WhatsApp session not connected."));
+    expect(await commerceService.fulfillOrder("order", ctx.userId)).toMatchObject({
+      delivered: false, message: expect.stringContaining("Ligue a sessão")
+    });
+    expect(recovery.update).toHaveBeenCalledWith({ delivery_error: "WhatsApp desligado", delivery_started_at: null });
+  });
+
+  it("does not release the claim after a partially acknowledged delivery", async () => {
+    downloadFile();
+    const recovery = query(null);
+    const order = { ...paidOrder, order_items: [pdfItem, pdfItem] };
+    mocks.from.mockReturnValueOnce(query(order)).mockReturnValueOnce(query({ id: "order" })).mockReturnValueOnce(recovery);
+    mocks.send.mockResolvedValueOnce({ key: { id: "doc-1" } }).mockRejectedValueOnce(new Error("WhatsApp session not connected."));
+    expect(await commerceService.fulfillOrder("order", ctx.userId)).toMatchObject({
+      delivered: false, message: expect.stringContaining("por confirmar")
+    });
+    expect(recovery.update).toHaveBeenCalledWith({ delivery_error: "Envio parcial por verificar" });
   });
 
   it("retains payment state when WhatsApp does not acknowledge the send", async () => {

@@ -17,7 +17,7 @@ CREATE TABLE public.subscriptions (user_id uuid PRIMARY KEY, messages_used integ
 CREATE TABLE public.contacts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
   name text, phone text, lid text, tags text[], notes text, unread_count integer DEFAULT 0,
-  last_message_at timestamptz, last_message_text text, ai_paused boolean DEFAULT false,
+  last_message_at timestamptz, last_message_text text, ai_paused boolean DEFAULT false, ai_paused_at timestamptz,
   created_at timestamptz DEFAULT now()
 );
 CREATE TABLE public.messages (

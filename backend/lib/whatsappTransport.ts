@@ -33,7 +33,7 @@ export interface IWhatsAppTransport {
     userId: string,
     jid: string,
     text: string,
-    mediaUrl?: string,
+    media?: string | Buffer,
     mediaType?: string,
     duration?: number,
     mimetype?: string,

@@ -13,7 +13,10 @@ router.get("/providers/models", async (req: AuthRequest, res) => {
     success: true,
     sharedGeminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
     data: {
-      gemini: ["gemini-3-flash-preview", "gemini-3.1-flash-preview", "gemini-3.1-pro-preview"],
+      gemini: [...new Set([
+        process.env.GEMINI_FALLBACK_MODEL?.trim() || "gemini-flash-latest",
+        "gemini-3-flash-preview", "gemini-3.1-flash-preview", "gemini-3.1-pro-preview"
+      ])],
       openai: ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4o"],
       openrouter: ["google/gemini-2.0-flash-001", "meta-llama/llama-3.1-8b-instruct", "deepseek/deepseek-chat"],
       deepseek: ["deepseek-chat"],
@@ -290,12 +293,15 @@ router.post("/test", async (req: AuthRequest, res) => {
 
   try {
     // Get agent config
-    const { data: agent } = await supabaseAdmin
+    const { data: agent, error } = await supabaseAdmin
       .from("agents")
       .select("*")
       .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
+    if (error) return res.status(503).json({ success: false, error: "Não foi possível consultar a configuração do agente." });
     if (!agent) {
       return res.status(404).json({ success: false, error: "Agente não configurado." });
     }
@@ -330,9 +336,9 @@ router.post("/test", async (req: AuthRequest, res) => {
     }
 
     res.json({ success: true, data: { response: responseText } });
-  } catch (error: any) {
-    console.error("[Agent Test Error]:", error);
-    res.status(500).json({ success: false, error: error.message || "Erro interno ao testar agente." });
+  } catch (error) {
+    console.warn("[Agent Test] Provider unavailable", { kind: (error as { kind?: string })?.kind });
+    res.status(503).json({ success: false, error: error instanceof Error ? error.message : "Não foi possível testar a ligação ao provedor." });
   }
 });
 

@@ -19,6 +19,9 @@ let missingSellerMigration = false;
 let missingLeadColumn = false;
 let missingSellerContract = false;
 let sellerContractReady = true;
+let missingPaymentContract = false;
+let paymentContractReady = true;
+const sellerMigrations = /migraç(?:ão|ões).*22/;
 
 const supabase = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -45,6 +48,13 @@ const supabase = createServer((req, res) => {
       return res.end(JSON.stringify({ code: "PGRST202", message: "Seller readiness contract missing" }));
     }
     return res.end(JSON.stringify(sellerContractReady));
+  }
+  if (url.pathname === "/rest/v1/rpc/agentx_seller_payments_ready") {
+    if (missingPaymentContract) {
+      res.statusCode = 404;
+      return res.end(JSON.stringify({ code: "PGRST202", message: "Payment readiness contract missing" }));
+    }
+    return res.end(JSON.stringify(paymentContractReady && sellerContractReady && !missingSellerContract));
   }
   if (url.pathname === "/auth/v1/user" && req.headers.authorization === `Bearer ${fakeToken}`) {
     return res.end(JSON.stringify({ id: fakeUser, aud: "authenticated", app_metadata: {}, user_metadata: {} }));
@@ -159,19 +169,26 @@ try {
   }
 
   missingSellerMigration = true;
-  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  await assert.rejects(preflight(), { code: 1, stderr: sellerMigrations });
   missingSellerMigration = false;
   missingLeadColumn = true;
-  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  await assert.rejects(preflight(), { code: 1, stderr: sellerMigrations });
   await assertDegradedReadiness();
   missingLeadColumn = false;
   missingSellerContract = true;
-  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  await assert.rejects(preflight(), { code: 1, stderr: sellerMigrations });
   await assertDegradedReadiness();
   missingSellerContract = false;
   sellerContractReady = false;
-  await assert.rejects(preflight(), { code: 1, stderr: /migrações 20 e 21/ });
+  await assert.rejects(preflight(), { code: 1, stderr: sellerMigrations });
   sellerContractReady = true;
+  missingPaymentContract = true;
+  await assert.rejects(preflight(), { code: 1, stderr: sellerMigrations });
+  await assertDegradedReadiness();
+  missingPaymentContract = false;
+  paymentContractReady = false;
+  await assert.rejects(preflight(), { code: 1, stderr: sellerMigrations });
+  paymentContractReady = true;
   missingContactMigration = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
   missingContactMigration = false;

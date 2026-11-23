@@ -44,9 +44,6 @@ router.post("/chat", async (req: AuthRequest, res) => {
       };
     }
 
-    console.log("Using AI model:", agent.model || agent.provider);
-    console.log("Prompt:", agent.instructions);
-
     const responseText = await runAI(agent, message, []);
     
     // Handle JSON response if AI returns it
@@ -64,9 +61,9 @@ router.post("/chat", async (req: AuthRequest, res) => {
     }
 
     res.json({ reply });
-  } catch (err: any) {
-    console.error("AI chat error:", err);
-    res.json({ reply: "Desculpe, estou com dificuldade para responder agora." });
+  } catch {
+    console.warn("[AI Chat] Unable to generate a reply");
+    res.status(503).json({ error: "Não foi possível gerar uma sugestão. Podes escrever a resposta manualmente." });
   }
 });
 

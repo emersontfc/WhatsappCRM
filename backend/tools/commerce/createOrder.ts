@@ -24,7 +24,7 @@ export const createOrderTool: ToolDefinition = {
       },
       paymentMethod: {
         type: "string",
-        description: "Método de pagamento preferido: 'mpesa', 'emola', 'bank_transfer' ou 'reference'",
+        description: "Método escolhido pelo cliente. Omite este campo se o cliente ainda não escolheu.",
         enum: ["mpesa", "emola", "bank_transfer", "reference"]
       }
     },
@@ -33,7 +33,7 @@ export const createOrderTool: ToolDefinition = {
   execute: async (args: { productName: string; quantity?: number; paymentMethod?: string }, ctx: ToolContext): Promise<ToolResult> => {
     try {
       const quantity = args.quantity ?? 1;
-      const paymentMethod = args.paymentMethod ?? "mpesa";
+      const paymentMethod = isSellerMethod(args.paymentMethod) || args.paymentMethod === "reference" ? args.paymentMethod : undefined;
       const term = typeof args.productName === "string" ? normalizeCatalogText(args.productName) : "";
       if (!term || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
         return { success: false, message: "Indique o produto e uma quantidade entre 1 e 999." };
@@ -75,16 +75,13 @@ export const createOrderTool: ToolDefinition = {
       }
 
       // 4. Instructions based on payment method
-      let instructions = "";
+      let instructions = "Pede à equipa os dados de pagamento antes de transferires qualquer valor.";
       const destination = order.seller_payment;
       if (destination && isSellerMethod(destination.method)) {
         instructions = `Pague ${totalFormatted} por ${sellerMethods[destination.method]} para ${destination.recipient} (titular: ${destination.name}). Envie o texto do comprovativo nesta conversa com o número ${order.order_number}.`;
-      } else if (orderMethod === "mpesa") {
-        instructions = `Envie ${totalFormatted} via M-Pesa para o número oficial da empresa e envie o comprovativo (SMS ou print) nesta conversa.`;
-      } else if (orderMethod === "emola") {
-        instructions = `Envie ${totalFormatted} via e-Mola para o número oficial da empresa e envie o comprovativo nesta conversa.`;
-      } else {
-        instructions = `Efetue a transferência de ${totalFormatted} e envie o comprovativo bancário aqui.`;
+        if (isSellerMethod(paymentMethod) && paymentMethod !== destination.method) {
+          instructions = `O pedido está registado para ${sellerMethods[destination.method]}. Se precisares de pagar por ${sellerMethods[paymentMethod]}, confirma primeiro com a equipa. ${instructions}`;
+        }
       }
 
       return {
