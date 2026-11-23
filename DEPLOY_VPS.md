@@ -190,7 +190,15 @@ sudo certbot --nginx -d seudominio.com -d www.seudominio.com
 
 ## 📋 8. Comandos Úteis de Manutenção
 
-O comando `scripts/release-agentx-vps.sh` testa a chave pública do painel e a leitura do CRM num contentor temporário antes de trocar a versão em execução. No `.env`, use a chave publishable ou anon em `VITE_SUPABASE_ANON_KEY` e reserve a chave secret ou service_role para `SUPABASE_SERVICE_ROLE_KEY`.
+O comando `scripts/release-agentx-vps.sh` valida a configuração pública e o esquema de CRM, vendas, Agenda, Marcações e Grupos num contentor temporário antes da troca. No `.env`, use a chave publishable ou anon em `VITE_SUPABASE_ANON_KEY` e reserve a chave secret ou service_role para `SUPABASE_SERVICE_ROLE_KEY`.
+
+Para a atualização de Agenda, Marcações e Grupos, aplique estes ficheiros por ordem no SQL Editor do mesmo projeto Supabase usado pela VPS. As migrações preservam os registos existentes.
+
+1. `supabase/migrations/23_agenda_dispatch.sql`
+2. `supabase/migrations/24_appointment_booking_delivery.sql`
+3. `supabase/migrations/25_group_payment_proofs.sql`
+
+Depois de aplicar as migrações, publique o commit da versão com `scripts/release-agentx-vps.sh`. Confirme em **Estado da operação** os três módulos, a ligação WhatsApp e o processamento de agendamentos. O processamento no servidor exige `DISABLE_SCHEDULER=false`.
 
 | Ação | Comando Docker | Comando PM2 |
 | :--- | :--- | :--- |

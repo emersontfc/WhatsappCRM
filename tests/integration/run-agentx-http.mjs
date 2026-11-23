@@ -6,6 +6,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
 const fakeUser = "00000000-0000-4000-8000-000000000001";
+const groupAttachmentId = "00000000-0000-4000-8000-000000000025";
+const unrelatedAttachmentId = "00000000-0000-4000-8000-000000000026";
+const groupDocument = Buffer.from("%PDF-1.4 Receipt fixture");
 const fakeToken = "agentx-integration-session";
 const fakeSecret = "sb_secret_agentx-smoke-test-service-key";
 const fakeAiKey = "agentx-smoke-test-gemini-key";
@@ -21,6 +24,7 @@ let missingSellerContract = false;
 let sellerContractReady = true;
 let missingPaymentContract = false;
 let paymentContractReady = true;
+let missingModuleContract = "";
 const sellerMigrations = /migraç(?:ão|ões).*22/;
 
 const supabase = createServer((req, res) => {
@@ -34,7 +38,10 @@ const supabase = createServer((req, res) => {
     workerCalls++;
     return res.end("0");
   }
-  if (url.pathname === "/rest/v1/rpc/agentx_schedule_contract_ready") return res.end("false");
+  const moduleContract = url.pathname.split("/").at(-1);
+  if (["agentx_schedule_dispatch_ready", "agentx_appointment_contract_ready", "agentx_group_proof_contract_ready"].includes(moduleContract)) {
+    return res.end(JSON.stringify(moduleContract !== missingModuleContract));
+  }
   if (url.pathname === "/rest/v1/rpc/agentx_contact_phone") {
     if (missingContactMigration) {
       res.statusCode = 404;
@@ -61,6 +68,16 @@ const supabase = createServer((req, res) => {
   }
   if (url.pathname === "/rest/v1/users" && url.searchParams.get("select") === "role,id") {
     return res.end(JSON.stringify([{ id: fakeUser, role: "user" }]));
+  }
+  if (url.pathname === "/rest/v1/agentx_group_payment_attachments") {
+    assert.equal(url.searchParams.get("user_id"), `eq.${fakeUser}`);
+    return res.end(JSON.stringify(url.searchParams.get("verification_id") === `eq.${groupAttachmentId}` ? [{
+      storage_path: `${fakeUser}/${groupAttachmentId}`, file_name: "prova.pdf", mime_type: "application/pdf", size_bytes: groupDocument.length
+    }] : []));
+  }
+  if (url.pathname === `/storage/v1/object/agentx-group-proofs/${fakeUser}/${groupAttachmentId}`) {
+    res.setHeader("content-type", "application/pdf");
+    return res.end(groupDocument);
   }
   if (url.pathname === "/rest/v1/contacts" && brokenCrm) {
     res.statusCode = 400;
@@ -104,7 +121,7 @@ async function startApp() {
     const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
     try { await exit; } finally { clearTimeout(timeout); }
   };
-  for (let attempt = 0; attempt < 200; attempt++) {
+  for (let attempt = 0; attempt < 450; attempt++) {
     const matches = /Server listening on port (\d+)/.exec(logs);
     if (matches) return { base: `http://127.0.0.1:${matches[1]}`, stop };
     if (child.exitCode !== null) break;
@@ -151,11 +168,19 @@ try {
     const status = await (await request("/api/operations", true)).json();
     assert.equal(status.modules.crm, "ready");
     assert.equal(status.modules.sales, "ready");
-    assert.equal(status.modules.agenda, "migration_required");
+    for (const module of ["agenda", "bookings", "groups"]) assert.equal(status.modules[module], "ready");
     assert.equal(status.whatsapp, "disconnected");
     assert.equal(status.schedulerEnabled, false);
     assert.equal(status.deliveryWorker.state, "running");
     assert.ok(workerCalls > 0);
+
+    const attachment = (id) => `/api/commerce/verifications/${id}/attachment`;
+    assert.equal((await request(attachment(groupAttachmentId))).status, 401);
+    assert.equal((await request(attachment(unrelatedAttachmentId), true)).status, 404);
+    const file = await request(attachment(groupAttachmentId), true);
+    assert.equal(file.status, 200);
+    assert.equal(file.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await file.json(), { success: true, name: "prova.pdf", mime: "application/pdf", base64: groupDocument.toString("base64") });
 
     const unknown = await request("/api");
     assert.equal(unknown.status, 404);
@@ -195,7 +220,12 @@ try {
   brokenCrm = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
   await assertDegradedReadiness();
-  console.log("AgentX production HTTP smoke passed (ready, degraded schema, auth and delivery worker)");
+  brokenCrm = false;
+  for (const [contract, migration] of [["agentx_schedule_dispatch_ready", 23], ["agentx_appointment_contract_ready", 24], ["agentx_group_proof_contract_ready", 25]]) {
+    missingModuleContract = contract;
+    await assert.rejects(preflight(), { code: 1, stderr: new RegExp(String(migration)) });
+  }
+  console.log("AgentX production HTTP smoke passed (readiness, migrations, private proofs, auth and delivery worker)");
 } finally {
   supabase.closeAllConnections();
   supabase.close();

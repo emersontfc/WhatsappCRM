@@ -5,15 +5,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { authenticate } from "../backend/middleware/auth.ts";
 import groups from "../backend/routes/groups.ts";
 
-const { gateway } = vi.hoisted(() => ({ gateway: {
+const { gateway, catalog } = vi.hoisted(() => ({ gateway: {
   getGroupMetadata: vi.fn(), getMe: vi.fn(), updateGroupSubject: vi.fn(), updateGroupDescription: vi.fn(),
   updateGroupAccess: vi.fn(), getGroupInvite: vi.fn(), getGroupJoinRequests: vi.fn(), reviewGroupJoinRequest: vi.fn(),
   updateGroupParticipants: vi.fn(), sendMessage: vi.fn(), leaveGroup: vi.fn()
-} }));
+}, catalog: { select: vi.fn(), eq: vi.fn(), gt: vi.fn(), order: vi.fn(), limit: vi.fn(), maybeSingle: vi.fn() } }));
 vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: gateway }));
 vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: {
   auth: { getUser: async () => ({ data: { user: { id: "account-a" } }, error: null }) },
-  from: () => ({ select: () => ({ eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: { role: "user" } }) }) }) }) })
+  from: (table: string) => table === "products" ? catalog
+    : ({ select: () => ({ eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: { role: "user" } }) }) }) }) })
 } }));
 
 const jid = "12036312345@g.us";
@@ -21,7 +22,10 @@ const self = "258841234567@s.whatsapp.net";
 const lid = "1234567890@lid";
 const member = "258851234567@s.whatsapp.net";
 const owner = "258861234567@s.whatsapp.net";
+const newMember = "258871234567@s.whatsapp.net";
+const newMemberLid = "9876543210@lid";
 const invite = "abcdefghijklmnopqrstuv";
+const product = { id: "c3e1e2fb-166b-4db4-a27e-4fc8d20ed396", name: "Livro do catálogo", price: 400, currency: "MT" };
 
 function metadata(admin = true, announce = false) {
   return {
@@ -51,6 +55,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   gateway.getMe.mockReturnValue({ id: "258841234567:4@s.whatsapp.net" });
   gateway.getGroupMetadata.mockResolvedValue(metadata());
+  catalog.select.mockReturnValue(catalog);
+  catalog.eq.mockReturnValue(catalog);
+  catalog.gt.mockReturnValue(catalog);
+  catalog.order.mockReturnValue(catalog);
+  catalog.limit.mockResolvedValue({ data: [product], error: null });
+  catalog.maybeSingle.mockResolvedValue({ data: product, error: null });
 });
 
 function request(path = "", method = "GET", body?: unknown, authorized = true) {
@@ -67,6 +77,8 @@ describe("WhatsApp group administration API", () => {
     expect(gateway.getGroupMetadata).not.toHaveBeenCalled();
     gateway.getGroupMetadata.mockResolvedValue({ ...metadata(), participants: [{ id: owner, admin: "superadmin" }] });
     expect((await request()).status).toBe(403);
+    gateway.getGroupMetadata.mockResolvedValue({ ...metadata(), id: "8888@g.us" });
+    expect((await request()).status).toBe(502);
   });
 
   it("matches the linked phone to a LID member and withholds invite codes from details", async () => {
@@ -84,12 +96,28 @@ describe("WhatsApp group administration API", () => {
   it("validates each setting and delegates changes under the authorized account", async () => {
     expect((await request("/settings", "PATCH", { field: "announce", value: "true" })).status).toBe(400);
     expect(gateway.updateGroupAccess).not.toHaveBeenCalled();
-    expect((await request("/settings", "PATCH", { field: "announce", value: true })).status).toBe(200);
     expect((await request("/settings", "PATCH", { field: "description", value: " Regras da comunidade " })).status).toBe(200);
     expect((await request("/subject", "POST", { subject: " Equipa " })).status).toBe(200);
-    expect(gateway.updateGroupAccess).toHaveBeenCalledExactlyOnceWith("account-a", jid, "announce", true);
     expect(gateway.updateGroupDescription).toHaveBeenCalledExactlyOnceWith("account-a", jid, "Regras da comunidade");
     expect(gateway.updateGroupSubject).toHaveBeenCalledExactlyOnceWith("account-a", jid, "Equipa");
+  });
+
+  it("closes and opens group writing only for admins and verifies each resulting mode", async () => {
+    const setting = (value: boolean) => request("/settings", "PATCH", { field: "announce", value });
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata(false));
+    expect((await setting(true)).status).toBe(403);
+    expect(gateway.updateGroupAccess).not.toHaveBeenCalled();
+
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata()).mockResolvedValueOnce(metadata(true, true));
+    expect(await (await setting(true)).json()).toEqual({ success: true, announce: true });
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata(true, true)).mockResolvedValueOnce(metadata());
+    expect(await (await setting(false)).json()).toEqual({ success: true, announce: false });
+    expect(gateway.updateGroupAccess).toHaveBeenNthCalledWith(1, "account-a", jid, "announce", true);
+    expect(gateway.updateGroupAccess).toHaveBeenNthCalledWith(2, "account-a", jid, "announce", false);
+
+    expect((await setting(true)).status).toBe(409);
+    expect(await (await setting(false)).json()).toEqual({ success: true, announce: false });
+    expect(gateway.updateGroupAccess).toHaveBeenCalledTimes(3);
   });
 
   it("only rotates a confirmed valid invitation through the explicit mutation", async () => {
@@ -118,13 +146,32 @@ describe("WhatsApp group administration API", () => {
       expect((await request("/participants", "POST", { action: "remove", participants: [id] })).status).toBe(400);
     }
     expect(gateway.updateGroupParticipants).not.toHaveBeenCalled();
-    gateway.updateGroupParticipants.mockResolvedValueOnce([{ jid: member, status: "403" }])
-      .mockResolvedValueOnce([{ jid: member, status: "200" }]);
-    const denied = await request("/participants", "POST", { action: "add", participants: ["+258 85 123 4567"] });
+    gateway.updateGroupParticipants.mockResolvedValueOnce([{ jid: newMember, status: "403" }]);
+    const denied = await request("/participants", "POST", { action: "add", participants: ["+258 87 123 4567"] });
     expect(denied.status).toBe(409);
     expect(await denied.json()).toMatchObject({ error: expect.stringContaining("exige convite") });
-    expect(gateway.updateGroupParticipants).toHaveBeenNthCalledWith(1, "account-a", jid, [member], "add");
-    expect((await request("/participants", "POST", { action: "promote", participants: [member] })).status).toBe(200);
+    expect(gateway.updateGroupParticipants).toHaveBeenCalledExactlyOnceWith("account-a", jid, [newMember], "add");
+    const repeated = await request("/participants", "POST", { action: "add", participants: [member] });
+    expect(await repeated.json()).toEqual({ success: true, status: "unchanged" });
+    expect(gateway.updateGroupParticipants).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms additions and removals by identity and membership, including phone aliases for LID", async () => {
+    const afterAdd = { ...metadata(), participants: [...metadata().participants,
+      { id: newMemberLid, phoneNumber: newMember, admin: null }] };
+    const mutate = (action: string, participant: string) => request("/participants", "POST", { action, participants: [participant] });
+    gateway.updateGroupParticipants.mockResolvedValueOnce([{ jid: newMemberLid, status: "200" }]);
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata()).mockResolvedValueOnce(afterAdd);
+    expect(await (await mutate("add", "+258 87 123 4567")).json()).toEqual({ success: true, status: "confirmed" });
+
+    gateway.updateGroupParticipants.mockResolvedValueOnce([{ jid: newMember, status: "200" }]);
+    gateway.getGroupMetadata.mockResolvedValueOnce(afterAdd).mockResolvedValueOnce(metadata());
+    expect(await (await mutate("remove", newMemberLid)).json()).toEqual({ success: true, status: "confirmed" });
+
+    gateway.updateGroupParticipants.mockResolvedValueOnce([{ jid: member, status: "200" }]);
+    expect((await mutate("add", newMember)).status).toBe(409);
+    gateway.updateGroupParticipants.mockResolvedValueOnce([{ jid: member, status: "200" }]);
+    expect((await mutate("remove", member)).status).toBe(409);
   });
 
   it("does not post in closed groups without admin permission or claim an unconfirmed send", async () => {
@@ -136,5 +183,27 @@ describe("WhatsApp group administration API", () => {
     const result = await request("/announce", "POST", { text: " Olá " });
     expect(await result.json()).toEqual({ success: true, status: "sent" });
     expect(gateway.sendMessage).toHaveBeenLastCalledWith("account-a", jid, "Olá");
+  });
+
+  it("posts a selected group's promotion using the current product from the authenticated account", async () => {
+    const listing = await request("/promotion-products");
+    expect(await listing.json()).toEqual({ success: true, products: [product] });
+    const publish = (body: unknown) => request("/promotions", "POST", body);
+    gateway.sendMessage.mockResolvedValue({ key: { id: "accepted-promotion" } });
+    expect(await (await publish({ productId: product.id, text: " Só hoje ", userId: "account-b", price: 1 })).json())
+      .toEqual({ success: true, status: "sent" });
+    expect(catalog.select).toHaveBeenCalledWith("id,name,price,currency");
+    expect(catalog.eq).toHaveBeenCalledWith("user_id", "account-a");
+    expect(catalog.eq).toHaveBeenCalledWith("is_active", true);
+    expect(catalog.gt).toHaveBeenCalledWith("stock", 0);
+    expect(catalog.eq).toHaveBeenCalledWith("id", product.id);
+    expect(gateway.sendMessage).toHaveBeenCalledExactlyOnceWith("account-a", jid, expect.stringMatching(/Só hoje[\s\S]*Livro do catálogo[\s\S]*400[.,]00 MT/));
+
+    catalog.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+    expect((await publish({ productId: product.id })).status).toBe(409);
+    expect((await publish({ text: "a".repeat(4096) })).status).toBe(400);
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata(false, true));
+    expect((await publish({ text: "Teste" })).status).toBe(403);
+    expect(gateway.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

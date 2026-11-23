@@ -2,6 +2,7 @@ import { getSession } from "../supabase";
 
 interface FetchOptions extends RequestInit {
   timeout?: number;
+  responseType?: "blob";
 }
 
 export class ApiError extends Error {
@@ -39,7 +40,7 @@ function getSessionBefore(signal: AbortSignal) {
 }
 
 export async function apiFetch(path: string, options: FetchOptions = {}) {
-  const { timeout = 30000, signal: callerSignal, ...fetchOptions } = options;
+  const { timeout = 30000, signal: callerSignal, responseType, ...fetchOptions } = options;
   const url = resolveApiUrl(path);
   const controller = new AbortController();
   const { signal } = controller;
@@ -51,11 +52,12 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
     const session = await getSessionBefore(signal);
     const headers = new Headers(fetchOptions.headers);
     if (session?.access_token) headers.set("Authorization", `Bearer ${session.access_token}`);
-    headers.set("Accept", "application/json");
+    headers.set("Accept", responseType === "blob" ? "*/*" : "application/json");
     if (typeof fetchOptions.body === "string" && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
     const response = await fetch(url, { ...fetchOptions, headers, signal });
     const requestId = response.headers.get("x-request-id") ?? undefined;
+    if (response.ok && responseType === "blob") return await response.blob();
     if (response.status === 204 && response.ok) return undefined;
     const json = /[/+]json\b/i.test(response.headers.get("content-type") ?? "");
     let data;

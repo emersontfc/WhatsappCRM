@@ -1,3 +1,4 @@
+import { VoicePreparationError } from "../utils/whatsappVoice.ts";
 import groupAdministrationRoutes from "./groups.ts";
 import { invalidateGroupRules, isGroupJid, readGroupRulePatch } from "../services/groupModeration.ts";
 import { dispatchScheduled, scheduledContactJid } from "../services/scheduledDispatch.ts";
@@ -433,6 +434,9 @@ router.post("/send", async (req: AuthRequest, res) => {
     res.json({ success: true, result, message: savedMessage, historySaved: Boolean(savedMessage),
       contact_id: savedMessage?.contact_id ?? contactId });
   } catch (err: any) {
+    if (err instanceof VoicePreparationError) {
+      return res.status(422).json({ success: false, error: err.message });
+    }
     console.error("Failed to send message:", err);
     if (err.message && err.message.includes("WhatsApp session not connected")) {
       return res.status(409).json({ success: false, error: "Liga o WhatsApp no painel antes de enviar." });

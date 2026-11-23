@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GroupMetadata } from "@whiskeysockets/baileys";
-import { groupRemovalDecision, groupViolation, readGroupRulePatch } from "../backend/services/groupModeration.ts";
+import { groupRemovalDecision, groupViolation, isGroupAdmin, readGroupRulePatch } from "../backend/services/groupModeration.ts";
 
 const active = { active: true, anti_link: true, anti_spam: true, anti_flood: true, welcome_msg: "" };
 const metadata = {
@@ -29,5 +29,8 @@ describe("WhatsApp group moderation", () => {
     expect(groupRemovalDecision(metadata, ["300@lid"], ["100@lid"])).toBe("exempt");
     expect(groupRemovalDecision(metadata, ["200@lid"], ["200@lid"])).toBe("no_permission");
     expect(groupRemovalDecision(metadata, ["999@lid"], ["100@lid"])).toBe("unverified_sender");
+  });
+  it("does not grant administration for an unknown gateway role", () => {
+    expect(isGroupAdmin({ id: "100@lid", admin: "member" } as unknown as GroupMetadata["participants"][number])).toBe(false);
   });
 });

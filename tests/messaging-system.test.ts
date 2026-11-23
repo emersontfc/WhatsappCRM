@@ -34,6 +34,7 @@ vi.mock("../backend/supabaseAdmin.ts", () => {
             filters[field] = val;
             return builder;
           },
+          not: () => builder,
           or: (conditionStr: string) => {
             filters._or = conditionStr;
             return builder;
@@ -165,7 +166,7 @@ vi.mock("../backend/supabaseAdmin.ts", () => {
   };
 });
 
-import { whatsappManager } from "../backend/whatsappManager.ts";
+import { WhatsAppManager, whatsappManager } from "../backend/whatsappManager.ts";
 import { getContactDisplay } from "../src/pages/Contacts.tsx";
 
 describe("AgentX Messaging System — Baileys 7, LID Architecture & Deduplication", () => {
@@ -174,6 +175,29 @@ describe("AgentX Messaging System — Baileys 7, LID Architecture & Deduplicatio
   beforeEach(() => {
     mockContacts.length = 0;
     mockMessages.length = 0;
+  });
+
+  it("uses each valid Status audience address once, including the connected device", async () => {
+    mockContacts.push(
+      { user_id: TEST_USER_ID, phone: "84 123 4567" },
+      { user_id: TEST_USER_ID, phone: "258841234567:5@s.whatsapp.net" },
+      { user_id: TEST_USER_ID, phone: "123456789012345", lid: "123456789012345" },
+      { user_id: "other", phone: "258849876543" }
+    );
+    const transport = new WhatsAppManager();
+    const sendMessage = vi.fn().mockResolvedValue({ key: { id: "published-status" } });
+    const socket = { user: { id: "258851234567@s.whatsapp.net" }, sendMessage };
+    vi.spyOn(transport, "ensureConnection").mockResolvedValue({ status: "connected", socket });
+    await transport.sendMessage(TEST_USER_ID, "status@broadcast", "Disponível hoje");
+    expect(sendMessage).toHaveBeenLastCalledWith("status@broadcast", { text: "Disponível hoje" }, expect.objectContaining({
+      statusJidList: ["258841234567@s.whatsapp.net", "258851234567@s.whatsapp.net"]
+    }));
+
+    socket.user.id = "123456789098765:2@lid";
+    await transport.sendMessage(TEST_USER_ID, "status@broadcast", "Disponível amanhã");
+    expect(sendMessage).toHaveBeenLastCalledWith("status@broadcast", { text: "Disponível amanhã" }, expect.objectContaining({
+      statusJidList: ["258841234567@s.whatsapp.net", "123456789098765@lid"]
+    }));
   });
 
   describe("1. Identificação Robusta de Contactos (LID vs Phone vs Grupo)", () => {

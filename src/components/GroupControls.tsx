@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { CalendarClock, Link2, Send, Settings, UserCheck } from "lucide-react";
+import { CalendarClock, Link2, Lock, LockOpen, Send, Settings, UserCheck } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { GroupProofSettings } from "./GroupProofSettings";
 
 export interface EditableGroup {
   id: string;
@@ -16,9 +17,9 @@ export interface EditableGroup {
 }
 
 export interface GroupPermissions { manage: boolean; post: boolean; selfId: string }
+type PromotionProduct = { id: string; name: string; price: number; currency?: string };
 
 const options = [
-  ["announce", "Só administradores podem escrever"],
   ["restrict", "Só administradores podem editar o grupo"],
   ["joinApprovalMode", "Exigir aprovação para novos membros"]
 ] as const;
@@ -26,17 +27,44 @@ const panelClass = "rounded-2xl border border-slate-200 bg-white p-4 sm:p-5";
 const summaryClass = "flex cursor-pointer items-center gap-2 font-semibold text-slate-900";
 const textareaClass = "min-h-20 w-full rounded-xl border border-slate-200 p-3 text-sm focus-visible:outline-emerald-500";
 
-export function GroupControls({ group, permissions, refresh }: {
-  group: EditableGroup; permissions: GroupPermissions; refresh: () => Promise<void>;
+export function GroupControls({ group, permissions, refresh, onPostingModeChange }: {
+  group: EditableGroup;
+  permissions: GroupPermissions;
+  refresh: () => Promise<void>;
+  onPostingModeChange?: (announce: boolean) => void;
 }) {
   const root = `/api/whatsapp/groups/${encodeURIComponent(group.id)}`;
   const [pending, setPending] = useState(false);
   const [name, setName] = useState(group.subject);
   const [description, setDescription] = useState(group.desc ?? "");
   const [announcement, setAnnouncement] = useState("");
+  const [publicationKind, setPublicationKind] = useState<"announcement" | "promotion">("announcement");
+  const [productId, setProductId] = useState("");
+  const [products, setProducts] = useState<PromotionProduct[]>([]);
+  const [productState, setProductState] = useState<"loading" | "ready" | "unavailable">("loading");
   const [inviteUrl, setInviteUrl] = useState("");
   const [resetting, setResetting] = useState(false);
   const [requests, setRequests] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    if (publicationKind !== "promotion" || !permissions.post) return;
+    const controller = new AbortController();
+    setProductState("loading");
+    void apiFetch(root + "/promotion-products", { signal: controller.signal }).then((data) => {
+      if (controller.signal.aborted) return;
+      if (!data?.success || !Array.isArray(data.products)) throw new Error("Catálogo indisponível.");
+      setProducts(data.products);
+      setProductId((selected) => data.products.some((product: PromotionProduct) => product.id === selected) ? selected : "");
+      setProductState("ready");
+    }).catch(() => {
+      if (!controller.signal.aborted) {
+        setProducts([]);
+        setProductId("");
+        setProductState("unavailable");
+      }
+    });
+    return () => controller.abort();
+  }, [permissions.post, publicationKind, root]);
 
   async function request(path: string, method = "GET", body?: unknown) {
     const data = await apiFetch(root + path, { method, body: JSON.stringify(body) });
@@ -67,7 +95,29 @@ export function GroupControls({ group, permissions, refresh }: {
     if (reset) toast.success("Novo link criado. O convite anterior foi revogado.");
   }
 
+  const isPromotion = publicationKind === "promotion";
+  const selectedProduct = products.find((product) => product.id === productId);
+  const postingLabel = group.announce ? "Só administradores podem escrever" : "Todos os membros podem escrever";
+  const PostingIcon = group.announce ? Lock : LockOpen;
   return <div className="space-y-3">
+    <section className={`${panelClass} flex flex-wrap items-center justify-between gap-3`} aria-label="Escrita no grupo">
+      <div>
+        <h3 className="flex items-center gap-2 font-semibold"><PostingIcon size={16} className="text-emerald-600" /> {group.announce ? "Grupo fechado" : "Grupo aberto"}</h3>
+        <p className="mt-1 text-sm text-slate-600">{postingLabel}.</p>
+      </div>
+      {permissions.manage && <Button variant="outline" disabled={pending} onClick={() => void run(async () => {
+        const value = !group.announce;
+        try {
+          const data = await request("/settings", "PATCH", { field: "announce", value });
+          if (data.announce !== value) throw new Error("O WhatsApp ainda não confirmou quem pode escrever.");
+          onPostingModeChange?.(data.announce);
+          toast.success(value ? "Grupo fechado. Só administradores podem escrever." : "Grupo aberto. Todos os membros podem escrever.");
+        } finally {
+          await refresh();
+        }
+      })}>{group.announce ? "Abrir grupo" : "Fechar grupo"}</Button>}
+    </section>
+
     <section className={panelClass} aria-label="Publicar no grupo">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="flex items-center gap-2 font-semibold"><Send size={16} className="text-emerald-600" /> Publicar no grupo</h3>
@@ -77,20 +127,44 @@ export function GroupControls({ group, permissions, refresh }: {
       {permissions.post ? <form className="mt-3 space-y-2" onSubmit={(event) => {
         event.preventDefault();
         void run(async () => {
-          const result = await request("/announce", "POST", { text: announcement });
+          const result = await request(isPromotion ? "/promotions" : "/announce", "POST", {
+            text: announcement, ...(isPromotion ? { productId: selectedProduct?.id } : {})
+          });
           if (result.status !== "sent") throw new Error("Envio por confirmar. Consulta o grupo antes de repetir.");
           setAnnouncement("");
-          toast.success("Anúncio aceite pelo WhatsApp.");
+          setProductId("");
+          toast.success(`${isPromotion ? "Promoção aceite" : "Anúncio aceite"} pelo WhatsApp em ${group.subject}.`);
         });
       }}>
-        <label className="block text-sm">Texto do anúncio
-          <textarea className={textareaClass} maxLength={4096} value={announcement} disabled={pending}
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Tipo de publicação">
+          <Button size="sm" variant={isPromotion ? "outline" : "primary"} aria-pressed={!isPromotion} disabled={pending}
+            onClick={() => setPublicationKind("announcement")}>Anúncio</Button>
+          <Button size="sm" variant={isPromotion ? "primary" : "outline"} aria-pressed={isPromotion} disabled={pending}
+            onClick={() => setPublicationKind("promotion")}>Promoção</Button>
+        </div>
+        {isPromotion && <div className="space-y-2">
+          <label className="block text-sm">Produto do catálogo (opcional)
+            <select className="mt-1 block min-h-10 w-full rounded-xl border border-slate-200 px-3 text-sm"
+              value={productId} disabled={pending || productState !== "ready"}
+              onChange={(event) => setProductId(event.target.value)}>
+              <option value="">Só texto</option>
+              {products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.price} {product.currency || "MT"}</option>)}
+            </select>
+          </label>
+          {productState === "loading" && <p role="status" className="text-sm text-slate-600">A carregar o catálogo…</p>}
+          {productState === "unavailable" && <p className="text-sm text-slate-600">Catálogo indisponível. Podes publicar uma promoção em texto.</p>}
+        </div>}
+        <label className="block text-sm">{isPromotion ? "Texto da promoção" : "Texto do anúncio"}
+          <textarea className={textareaClass} maxLength={isPromotion ? 3800 : 4096} value={announcement} disabled={pending}
             onChange={(event) => setAnnouncement(event.target.value)} />
         </label>
-        <Button type="submit" disabled={pending || !announcement.trim()}>Publicar agora</Button>
-      </form> : <p className="mt-2 text-sm text-slate-600">Só administradores podem escrever neste grupo.</p>}
+        <Button type="submit" disabled={pending || (!announcement.trim() && !(isPromotion && selectedProduct))}>
+          {isPromotion ? "Publicar promoção" : "Publicar agora"}
+        </Button>
+      </form> : <p className="mt-2 text-sm text-slate-600">A conta ligada não pode publicar neste grupo.</p>}
     </section>
 
+    {permissions.manage && <GroupProofSettings key={group.id} jid={group.id} />}
     {permissions.manage && <div className="grid items-start gap-3 xl:grid-cols-2">
       <details className={panelClass}>
         <summary className={summaryClass}><Settings size={16} className="text-emerald-600" /> Definições do grupo</summary>

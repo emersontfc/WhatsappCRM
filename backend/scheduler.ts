@@ -1,5 +1,5 @@
-import { appointmentReminderDue, appointmentReminderMessage, getAppointmentTimeZone } from "./services/appointmentReminders.ts";
-import { dispatchScheduled, scheduledContactJid } from "./services/scheduledDispatch.ts";
+import { processAppointmentReminders } from "./services/appointmentDelivery.ts";
+import { dispatchScheduled } from "./services/scheduledDispatch.ts";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { whatsappManager } from "./whatsappManager.ts";
 
@@ -10,14 +10,31 @@ export function startScheduler() {
 
   const isSchemaError = (err: any) => 
     err?.code === "42P01" || 
+    err?.code === "PGRST202" ||
     err?.code === "PGRST204" || 
     err?.code === "PGRST205" || 
     err?.message?.includes("does not exist") || 
     err?.message?.includes("schema cache");
 
+  let appointmentsRunning = false;
+  const processAppointments = async () => {
+    if (appointmentsRunning) return;
+    appointmentsRunning = true;
+    try {
+      await processAppointmentReminders(new Date());
+    } catch (error) {
+      if (!isSchemaError(error)) console.warn("[Scheduler] Appointment reminders unavailable:", (error as { code?: string })?.code);
+    } finally {
+      appointmentsRunning = false;
+    }
+  };
+  const appointmentTimer = setInterval(processAppointments, 60_000);
+  void processAppointments();
+
   async function dispatchDue(table: "scheduled_messages" | "scheduled_status", now: string) {
     const { data, error } = await supabaseAdmin.from(table).select("id,user_id")
-      .eq("status", "pending").lte("scheduled_at", now).order("scheduled_at").limit(10)
+      .eq("status", "pending").lte("scheduled_at", now).or(`retry_at.is.null,retry_at.lte.${now}`)
+      .order("scheduled_at").limit(10)
       .abortSignal(AbortSignal.timeout(8_000));
     if (error && !isSchemaError(error)) console.error(`[Scheduler] Unable to read ${table}:`, error);
     for (const item of data ?? []) {
@@ -36,6 +53,8 @@ export function startScheduler() {
     try {
       const now = new Date();
       const nowISO = now.toISOString();
+      const { error: expiryError } = await supabaseAdmin.rpc("agentx_expire_agenda_claims").abortSignal(AbortSignal.timeout(8_000));
+      if (expiryError && !isSchemaError(expiryError)) console.warn("[Scheduler] Unable to expire interrupted Agenda sends.", expiryError.code);
       await dispatchDue("scheduled_messages", nowISO);
       await dispatchDue("scheduled_status", nowISO);
 
@@ -68,50 +87,6 @@ export function startScheduler() {
         }
       }
 
-      // Appointments use the business time zone, irrespective of the container clock.
-      try {
-        const firstDate = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
-        const lastDate = new Date(now.getTime() + 2 * 86400000).toISOString().slice(0, 10);
-        const zones = new Map<string, Promise<string>>();
-        for (let offset = 0; ; offset += 100) {
-          const { data: appointments, error } = await supabaseAdmin.from("appointments")
-            .select("id,user_id,customer_phone,appointment_date,start_time,reminder_24h_sent,reminder_2h_sent")
-            .gte("appointment_date", firstDate).lte("appointment_date", lastDate)
-            .in("status", ["scheduled", "confirmed"]).not("customer_phone", "is", null)
-            .order("id").range(offset, offset + 99).abortSignal(AbortSignal.timeout(8_000));
-          if (error) throw error;
-          for (const appointment of appointments) {
-            const jid = scheduledContactJid({ phone: appointment.customer_phone });
-            if (!jid) continue;
-            try {
-              if (!zones.has(appointment.user_id)) zones.set(appointment.user_id, getAppointmentTimeZone(appointment.user_id));
-              const timeZone = await zones.get(appointment.user_id)!;
-              const field = appointmentReminderDue(appointment, timeZone, now);
-              if (!field) continue;
-              const { data: current, error: readError } = await supabaseAdmin.from("appointments")
-                .select("id").eq("id", appointment.id).eq("user_id", appointment.user_id)
-                .eq("appointment_date", appointment.appointment_date).eq("start_time", appointment.start_time)
-                .eq("customer_phone", appointment.customer_phone)
-                .in("status", ["scheduled", "confirmed"]).or(`${field}.eq.false,${field}.is.null`)
-                .abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
-              if (readError || !current) continue;
-              const result = await whatsappManager.sendMessage(appointment.user_id, jid, appointmentReminderMessage(appointment, timeZone));
-              if (!result?.key?.id) throw new Error("WhatsApp did not acknowledge the reminder");
-              const { error: updateError } = await supabaseAdmin.from("appointments").update({ [field]: true })
-                .eq("id", appointment.id).eq("user_id", appointment.user_id)
-                .eq("appointment_date", appointment.appointment_date).eq("start_time", appointment.start_time)
-                .eq("customer_phone", appointment.customer_phone).abortSignal(AbortSignal.timeout(8_000));
-              if (updateError) throw updateError;
-            } catch (error) {
-              console.warn("[Scheduler] Appointment reminder not confirmed:", appointment.id, error);
-            }
-          }
-          if (appointments.length < 100) break;
-        }
-      } catch (error) {
-        if (!isSchemaError(error)) console.error("[Scheduler] Appointment reminder query failed:", error);
-      }
-
     } catch (err: any) {
       const text = `${err?.message || ""} ${err?.cause || ""}`;
       const transientNet =
@@ -137,5 +112,8 @@ export function startScheduler() {
       isRunning = false;
     }
   }, 60000); // Check every minute
-  return { stop: () => clearInterval(timer) };
+  return { stop: () => {
+    clearInterval(timer);
+    clearInterval(appointmentTimer);
+  } };
 }

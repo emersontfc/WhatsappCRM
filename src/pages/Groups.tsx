@@ -174,13 +174,21 @@ export default function Groups() {
       const data = await apiFetch(`/api/whatsapp/groups/${encodeURIComponent(jid)}/participants`, {
         method: 'POST', body: JSON.stringify({ participants: [participant], action })
       });
-      if (data.success !== true) throw new Error(data.error || 'O WhatsApp não confirmou a operação.');
+      if (data.success !== true || !["confirmed", "unchanged"].includes(data.status)) {
+        throw new Error(data.error || 'O WhatsApp não confirmou a operação.');
+      }
       if (groupIdRef.current === jid) {
         setNewMember("");
         setMemberAction(null);
         await fetchGroupDetails(jid, true);
       }
-      toast.success(action === "add" ? "Membro adicionado." : "Membro atualizado no WhatsApp.");
+      if (data.status === "unchanged") {
+        toast.info(action === "add" ? "Este número já é membro do grupo." : "O membro já tem a função selecionada.");
+      } else {
+        const results = { add: "Membro adicionado.", remove: "Membro removido do grupo.",
+          promote: "Membro promovido a administrador.", demote: "Função de administrador removida." };
+        toast.success(results[action]);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erro ao atualizar o membro.');
       await fetchGroupDetails(jid, true);
@@ -349,8 +357,12 @@ export default function Groups() {
                   </div>}
                 </div>
 
-                <GroupControls group={selectedGroup} permissions={selectedGroup.permissions}
-                  refresh={() => fetchGroupDetails(selectedGroup.id, true)} />
+                <GroupControls key={selectedGroup.id} group={selectedGroup} permissions={selectedGroup.permissions}
+                  refresh={() => fetchGroupDetails(selectedGroup.id, true)}
+                  onPostingModeChange={(announce) => setSelectedGroup((current) => {
+                    if (!current || current.id !== selectedGroup.id) return current;
+                    return { ...current, announce, permissions: { ...current.permissions, post: !announce || current.permissions.manage } };
+                  })} />
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Participants List */}

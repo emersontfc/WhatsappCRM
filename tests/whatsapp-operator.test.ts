@@ -15,6 +15,7 @@ function query(data: unknown) {
   const chain = {
     upsert: vi.fn(() => chain), select: vi.fn(() => chain), eq: vi.fn(() => chain), update: vi.fn(() => chain),
     lte: vi.fn(() => chain), order: vi.fn(() => chain), limit: vi.fn(() => chain),
+    or: vi.fn(() => chain), abortSignal: vi.fn(() => chain),
     maybeSingle: vi.fn().mockResolvedValue(result),
     then: <T>(resolve: (value: typeof result) => T) => Promise.resolve(result).then(resolve)
   };
@@ -71,29 +72,30 @@ describe("WhatsApp self-chat commands", () => {
 describe("shared scheduled dispatch", () => {
   it("dispatches a single claimed audio message through the same path as manual sends", async () => {
     const claim = query({ contact_id: "contact", media_url: "/uploads/voice-1-1.ogg", media_type: "audio" });
-    const finish = query(null);
+    const finish = query({ id: "id" });
     mocks.from.mockReturnValueOnce(claim).mockReturnValueOnce(query({ phone: "841234567" })).mockReturnValueOnce(finish);
     mocks.send.mockResolvedValue({ key: { id: "sent" } });
     expect((await dispatchScheduled("scheduled_messages", "id", user, "due")).success).toBe(true);
     expect(claim.eq).toHaveBeenCalledWith("status", "pending");
     expect(claim.lte).toHaveBeenCalledWith("scheduled_at", "due");
-    expect(mocks.send).toHaveBeenCalledWith(user, jid, "", "/uploads/voice-1-1.ogg", "audio", undefined, undefined, undefined);
-    expect(finish.update).toHaveBeenCalledWith({ status: "sent", error: null });
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, "", "/uploads/voice-1-1.ogg", "audio", undefined, undefined, undefined, "contact");
+    expect(finish.update).toHaveBeenCalledWith(expect.objectContaining({ status: "sent", error: null, dispatch_receipt_id: "sent" }));
+    expect(finish.eq).toHaveBeenCalledWith("dispatch_token", expect.any(String));
   });
 
   it("dispatches an older schedule that only contains a phone", async () => {
-    const finish = query(null);
+    const finish = query({ id: "legacy" });
     mocks.from.mockReturnValueOnce(query({ phone: "+258 84 123 4567", message: "Olá" })).mockReturnValueOnce(finish);
     mocks.send.mockResolvedValue({ key: { id: "sent" } });
     expect((await dispatchScheduled("scheduled_messages", "legacy", user)).status).toBe("sent");
     expect(mocks.from).not.toHaveBeenCalledWith("contacts");
-    expect(mocks.send).toHaveBeenCalledWith(user, jid, "Olá", undefined, undefined, undefined, undefined, undefined);
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, "Olá", undefined, undefined, undefined, undefined, undefined, undefined);
   });
 
   it("rejects a missing or foreign contact without falling back to the stored phone", async () => {
     const contact = query(null);
-    mocks.from.mockReturnValueOnce(query({ contact_id: "other-contact", phone: "258841234567" }))
-      .mockReturnValueOnce(contact).mockReturnValueOnce(query(null));
+    mocks.from.mockReturnValueOnce(query({ contact_id: "other-contact", phone: "258841234567", message: "Mensagem" }))
+      .mockReturnValueOnce(contact).mockReturnValueOnce(query({ id: "id" }));
     expect((await dispatchScheduled("scheduled_messages", "id", user)).status).toBe("failed");
     expect(contact.eq).toHaveBeenCalledWith("user_id", user);
     expect(mocks.send).not.toHaveBeenCalled();
@@ -101,35 +103,53 @@ describe("shared scheduled dispatch", () => {
 
   it("sends a text-only Status once the gateway accepts it", async () => {
     mocks.from.mockReturnValueOnce(query({ caption: "Novidades", media_url: null, media_type: null }))
-      .mockReturnValueOnce(query(null));
+      .mockReturnValueOnce(query({ id: "text-status" }));
     mocks.send.mockResolvedValue({ key: { id: "status-id" } });
     expect((await dispatchScheduled("scheduled_status", "text-status", user)).status).toBe("sent");
-    expect(mocks.send).toHaveBeenCalledWith(user, "status@broadcast", "Novidades", null, null, undefined, undefined, undefined);
+    expect(mocks.send).toHaveBeenCalledWith(user, "status@broadcast", "Novidades", undefined, undefined, undefined, undefined, undefined, undefined);
   });
 
   it("refuses announcements in admin-only groups unless this linked account is an admin", async () => {
     const item = { target_type: "group", group_jid: "12345@g.us", message: "Aviso" };
-    mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query(null));
+    mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query({ id: "post" }));
     mocks.identity.mockReturnValue({ id: jid });
     mocks.group.mockResolvedValue({ announce: true, participants: [{ id: jid, admin: null }] });
     expect((await dispatchScheduled("scheduled_messages", "post", user)).status).toBe("failed");
     expect(mocks.send).not.toHaveBeenCalled();
-    mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query(null));
+    mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query({ id: "post" }));
     mocks.group.mockResolvedValue({ announce: true, participants: [{ id: jid, admin: "admin" }] });
     mocks.send.mockResolvedValue({ key: { id: "sent" } });
     expect((await dispatchScheduled("scheduled_messages", "post", user)).status).toBe("sent");
-    expect(mocks.send).toHaveBeenCalledWith(user, "12345@g.us", "Aviso", undefined, undefined, undefined, undefined, undefined);
+    expect(mocks.send).toHaveBeenCalledWith(user, "12345@g.us", "Aviso", undefined, undefined, undefined, undefined, undefined, undefined);
   });
 
   it("skips an already claimed job and freezes uncertain sends", async () => {
     mocks.from.mockReturnValueOnce(query(null));
     expect((await dispatchScheduled("scheduled_status", "id", user)).success).toBe(false);
     expect(mocks.send).not.toHaveBeenCalled();
-    const finish = query(null);
+    const finish = query({ id: "id" });
     mocks.from.mockReturnValueOnce(query({ caption: "Mensagem" })).mockReturnValueOnce(finish);
     mocks.send.mockResolvedValue({});
     expect((await dispatchScheduled("scheduled_status", "id", user)).status).toBe("failed");
     expect(finish.update).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", error: expect.stringContaining("por confirmar") }));
     expect(scheduledContactJid({ phone: "123456789", lid: "123456789" })).toBe("123456789@lid");
+  });
+
+  it("retries a known disconnected send without rewriting the scheduled time", async () => {
+    const finish = query({ id: "status" });
+    mocks.from.mockReturnValueOnce(query({ caption: "Mensagem", attempts: 1 })).mockReturnValueOnce(finish);
+    mocks.send.mockRejectedValue(new Error("WhatsApp session not connected."));
+    expect((await dispatchScheduled("scheduled_status", "status", user)).status).toBe("pending");
+    const [update] = finish.update.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(update.attempts).toBe(2);
+    expect(update.retry_at).toEqual(expect.any(String));
+    expect(update.scheduled_at).toBeUndefined();
+  });
+
+  it("does not send an attachment sourced from an arbitrary URL", async () => {
+    const finish = query({ id: "status" });
+    mocks.from.mockReturnValueOnce(query({ media_url: "https://external.invalid/image.png", media_type: "image" })).mockReturnValueOnce(finish);
+    expect((await dispatchScheduled("scheduled_status", "status", user)).status).toBe("failed");
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 });

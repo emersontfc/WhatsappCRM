@@ -71,7 +71,8 @@ export function groupParticipant(group: GroupMetadata, ...ids: Array<string | nu
 }
 
 export function isGroupAdmin(person?: GroupMetadata["participants"][number]) {
-  return Boolean(person?.admin || person?.isAdmin || person?.isSuperAdmin);
+  return person?.admin === "admin" || person?.admin === "superadmin" ||
+    person?.isAdmin === true || person?.isSuperAdmin === true;
 }
 
 export function groupRemovalDecision(group: GroupMetadata, senderIds: Array<string | null | undefined>, linkedIds: Array<string | null | undefined>) {

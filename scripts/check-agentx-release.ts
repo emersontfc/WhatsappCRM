@@ -17,11 +17,19 @@ async function check() {
   if (!supabaseAdminConfigured) return "Configura SUPABASE_SERVICE_ROLE_KEY com a chave privada do backend.";
   const { makePlatformChecks } = await import("../backend/services/platformChecks.ts");
   const checks = makePlatformChecks(true);
-  const [crm, sales] = await Promise.all([checks.check("crm"), checks.check("sales")]);
+  const [crm, sales, agenda, bookings, groups] = await Promise.all([
+    checks.check("crm"), checks.check("sales"), checks.check("agenda"), checks.check("bookings"), checks.check("groups")
+  ]);
   if (crm === "migration_required") return "O Supabase respondeu, mas o esquema principal do CRM precisa de atualização.";
   if (crm !== "ready") return "O contentor não conseguiu consultar o CRM. Verifica a chave privada e a ligação ao Supabase.";
   if (sales === "migration_required") return "O esquema das vendas precisa de atualização. Confirma as migrações 20 a 22.";
   if (sales !== "ready") return "O contentor não conseguiu consultar o esquema das vendas.";
+  if (agenda === "migration_required") return "A Agenda precisa das migrações 18 e 23.";
+  if (bookings === "migration_required") return "As Marcações e os lembretes precisam da migração 24.";
+  if (groups === "migration_required") return "Os Grupos precisam das migrações 15 e 25.";
+  if (agenda !== "ready" || bookings !== "ready" || groups !== "ready") {
+    return "O contentor não conseguiu consultar a Agenda, as Marcações ou os Grupos.";
+  }
   return null;
 }
 
@@ -31,5 +39,5 @@ if (message) {
   console.error(`Pré-verificação falhou. ${message}`);
   process.exitCode = 1;
 } else {
-  console.log("Pré-verificação concluída. Configuração pública, compilação, CRM e vendas verificados.");
+  console.log("Pré-verificação concluída. CRM, vendas, agenda, marcações e grupos verificados.");
 }

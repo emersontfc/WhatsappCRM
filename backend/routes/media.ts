@@ -2,26 +2,11 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegStatic from "ffmpeg-static";
-import ffprobeStatic from "@ffprobe-installer/ffprobe";
-import { authenticate } from "../middleware/auth.ts";
-
-// Configure ffmpeg & ffprobe binary paths with safe fallback for Linux VPS environments
-if (ffmpegStatic && typeof ffmpegStatic === "string" && fs.existsSync(ffmpegStatic)) {
-  try {
-    ffmpeg.setFfmpegPath(ffmpegStatic);
-  } catch (e) {
-    console.warn("[Media] Using system ffmpeg fallback:", e);
-  }
-}
-if (ffprobeStatic && ffprobeStatic.path && fs.existsSync(ffprobeStatic.path)) {
-  try {
-    ffmpeg.setFfprobePath(ffprobeStatic.path);
-  } catch (e) {
-    console.warn("[Media] Using system ffprobe fallback:", e);
-  }
-}
+import os from "node:os";
+import { randomUUID } from "node:crypto";
+import { authenticate, type AuthRequest } from "../middleware/auth.ts";
+import { AudioConversionError, convertToOpus, probeAudioDuration } from "../utils/audioConverter.ts";
+import { VOICE_UPLOAD_LIMIT, WHATSAPP_VOICE_MIME, voiceUploadOwner } from "../../shared/voiceAudio.ts";
 
 const router = express.Router();
 
@@ -44,87 +29,52 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
-const uploadAudio = multer({ storage, limits: { fileSize: 10 * 1024 * 1024, files: 1 } }).single("audio");
+const uploadAudio = multer({ dest: os.tmpdir(), limits: { fileSize: VOICE_UPLOAD_LIMIT, files: 1 } }).single("audio");
 
-router.post("/upload-audio", authenticate, (req, res) => {
-  uploadAudio(req, res, async (err) => {
-    if (err instanceof multer.MulterError) {
-      console.error("[Media] Multer error:", err);
-      return res.status(err.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({ success: false, error: "Ficheiro de áudio inválido. Limite de 10 MiB." });
-    } else if (err) {
-      console.error("[Media] Unknown upload error:", err);
-      return res.status(500).json({ success: false, error: "Erro interno no upload" });
+router.post("/upload-audio", authenticate, (req: AuthRequest, res) => {
+  uploadAudio(req, res, async (error) => {
+    if (error instanceof multer.MulterError) {
+      return res.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
+        success: false, error: "Ficheiro de áudio inválido. Limite de 10 MiB."
+      });
+    }
+    if (error) {
+      return res.status(500).json({ success: false, error: "Não foi possível receber o ficheiro de áudio." });
     }
 
     try {
-      if (!req.file) {
-        return res.status(400).json({ success: false, error: "Nenhum arquivo enviado" });
+      const userId = req.user?.id;
+      if (!userId) return res.status(401).json({ success: false, error: "Sessão inválida." });
+      if (!req.file?.size) return res.status(400).json({ success: false, error: "Escolhe um ficheiro de áudio." });
+
+      const filename = `voice-${userId}-${randomUUID()}.ogg`;
+      const output = await convertToOpus(req.file.path, path.join(uploadsDir, filename));
+      const duration = await probeAudioDuration(output);
+      const url = `${req.protocol}://${req.get("host")}/uploads/${filename}`;
+      return res.json({ success: true, url, filename, duration, mimetype: WHATSAPP_VOICE_MIME });
+    } catch (error) {
+      if (error instanceof AudioConversionError) {
+        return res.status(error.unavailable ? 503 : 422).json({ success: false, error: error.message });
       }
-
-      const inputPath = req.file.path;
-      const outputFilename = `voice-${Date.now()}-${Math.round(Math.random() * 1e6)}.ogg`;
-      const outputPath = path.join(uploadsDir, outputFilename);
-
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol;
-      const host = req.headers["x-forwarded-host"] || req.get("host");
-
-      // Probe duration safely
-      let duration = 0;
-      try {
-        await new Promise<void>((resolve) => {
-          ffmpeg.ffprobe(inputPath, (err, metadata) => {
-            if (!err && metadata?.format?.duration) {
-              duration = Math.round(metadata.format.duration);
-            }
-            resolve();
-          });
-        });
-      } catch (probeErr) {
-        console.warn("[Media] ffprobe warning:", probeErr);
-      }
-
-      // Convert to WhatsApp OGG Opus format
-      try {
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg(inputPath)
-            .audioCodec("libopus")
-            .audioChannels(1)
-            .audioFrequency(16000)
-            .toFormat("ogg")
-            .on("error", (convErr) => {
-              reject(convErr);
-            })
-            .on("end", () => {
-              resolve();
-            })
-            .save(outputPath);
-        });
-
-        // Clean up input file if different from output
-        if (fs.existsSync(inputPath) && inputPath !== outputPath) {
-          try { fs.unlinkSync(inputPath); } catch (_) {}
-        }
-
-        const audioUrl = `${protocol}://${host}/uploads/${outputFilename}`;
-        console.log(`[Media] Converted audio successfully: ${audioUrl}, duration: ${duration}s`);
-
-        return res.json({
-          success: true,
-          url: audioUrl,
-          filename: outputFilename,
-          duration: duration || 1,
-        });
-      } catch (convErr: any) {
-        console.warn("[Media] FFmpeg conversion failed:", convErr.message);
-        await Promise.allSettled([fs.promises.rm(inputPath, { force: true }), fs.promises.rm(outputPath, { force: true })]);
-        return res.status(422).json({ success: false, error: "Não foi possível converter o ficheiro numa nota de voz." });
-      }
-
-    } catch (err: any) {
-      console.error("[Media] General error:", err);
-      res.status(500).json({ success: false, error: err.message || "Erro interno no processamento de mídia" });
+      console.error("[Media] Voice upload failed:", error);
+      return res.status(500).json({ success: false, error: "Não foi possível preparar a nota de voz." });
+    } finally {
+      if (req.file?.path) await fs.promises.rm(req.file.path, { force: true }).catch(() => {});
     }
   });
+});
+
+router.get("/voice/:filename", (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  const filename = String(req.params.filename);
+  if (!userId || voiceUploadOwner(filename) !== userId.toLowerCase()) {
+    return res.status(404).json({ success: false, error: "Nota de voz indisponível." });
+  }
+
+  res.type("audio/ogg");
+  res.set("Cache-Control", "private, no-store");
+  res.set("X-Content-Type-Options", "nosniff");
+  return res.sendFile(filename, { root: uploadsDir, cacheControl: false });
 });
 
 router.post("/upload", authenticate, upload.single("file"), (req, res) => {

@@ -13,15 +13,19 @@ const contactsMap = new Map([
   ["109876543211122@lid", { id: "109876543211122@lid", name: "Número desconhecido" }],
   ["109876543211123@lid", { id: "109876543211123@lid", phoneNumber: "258831234567@s.whatsapp.net", name: "Número resolvido" }],
 ]);
-sessions.set(owner, { status: "connected", contactsMap, socket: {
-  user: { id: "258860000001:1@s.whatsapp.net", name: "Loja de teste" },
-  end() {},
-  async sendPresenceUpdate() {},
-  async sendMessage(jid: string, content: unknown) {
-    process.send?.({ event: "outbound", jid, content });
-    return confirmSend ? { key: { id: `fixture-outbound-${++sequence}` } } : undefined;
-  }
-} });
+function connectedSession(phone: string, contacts = new Map()) {
+  return { status: "connected", contactsMap: contacts, socket: {
+    user: { id: `${phone}:1@s.whatsapp.net`, name: "Loja de teste" },
+    end() {},
+    async sendPresenceUpdate() {},
+    async sendMessage(jid: string, content: unknown) {
+      process.send?.({ event: "outbound", jid, content });
+      return confirmSend ? { key: { id: `fixture-outbound-${++sequence}` } } : undefined;
+    }
+  } };
+}
+sessions.set(owner, connectedSession("258860000001", contactsMap));
+sessions.set("00000000-0000-4000-8000-000000000002", connectedSession("258860000002"));
 
 process.on("message", async (message: {
   event: string; requestId: string; text?: string; messageId?: string; jid?: string; altJid?: string;

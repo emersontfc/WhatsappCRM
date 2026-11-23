@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { fetchBusinessProfile } from "../lib/niches";
@@ -59,6 +59,16 @@ interface Professional {
   active: boolean;
 }
 
+type NotificationStatus = "sent" | "retry" | "uncertain" | "sending";
+type NotificationKind = "confirmation" | "manual" | "reminder_24h" | "reminder_2h";
+
+const notificationLabels: Record<NotificationStatus, string> = {
+  sent: "Aceite pelo WhatsApp",
+  retry: "Aguarda envio",
+  uncertain: "Envio por confirmar",
+  sending: "A enviar"
+};
+
 interface Appointment {
   id: string;
   user_id: string;
@@ -69,11 +79,14 @@ interface Appointment {
   customer_phone: string;
   appointment_date: string;
   start_time: string;
+  start_at?: string | null;
   end_time: string;
+  time_zone?: string | null;
   status: "scheduled" | "confirmed" | "completed" | "cancelled";
   notes?: string;
   reminder_24h_sent?: boolean | null;
   reminder_2h_sent?: boolean | null;
+  notification_statuses?: Partial<Record<NotificationKind, NotificationStatus>>;
   services?: Service;
   professionals?: Professional;
 }
@@ -87,6 +100,16 @@ const DAY_LABELS: Record<string, string> = {
   sat: "Sáb",
   sun: "Dom"
 };
+
+const appointmentForm = (date: string, appointment?: Appointment) => ({
+  customer_name: appointment?.customer_name ?? "",
+  customer_phone: appointment?.customer_phone ?? "",
+  service_id: appointment?.service_id ?? "",
+  professional_id: appointment?.professional_id ?? "",
+  appointment_date: appointment?.appointment_date || date,
+  start_time: appointment?.start_time?.slice(0, 5) || "09:00",
+  notes: appointment?.notes ?? ""
+});
 
 export default function Appointments() {
   const [params, setParams] = useSearchParams();
@@ -111,8 +134,10 @@ export default function Appointments() {
   const [whatsapp, setWhatsapp] = useState<"checking" | "connected" | "disconnected" | "unavailable">("checking");
   const [reminderAppointments, setReminderAppointments] = useState<Appointment[] | null>(null);
   const [remindersUnavailable, setRemindersUnavailable] = useState(false);
+  const [remindersRevision, setRemindersRevision] = useState(0);
   const [userId, setUserId] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [appointmentsError, setAppointmentsError] = useState("");
 
   // Data
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -127,20 +152,21 @@ export default function Appointments() {
 
   // Modals
   const [showAppModal, setShowAppModal] = useState(false);
+  const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
+  const [savingAppointment, setSavingAppointment] = useState(false);
+  const [updatingAppointment, setUpdatingAppointment] = useState<string | null>(null);
+  const [appointmentError, setAppointmentError] = useState("");
+  const savingAppointmentRef = useRef(false);
+  const appointmentRequest = useRef<{ body: string; requestId: string } | null>(null);
   const [showServiceModal, setShowServiceModal] = useState(false);
   const [showProfModal, setShowProfModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
   // Forms
-  const [appForm, setAppForm] = useState({
-    customer_name: "",
-    customer_phone: "",
-    service_id: "",
-    professional_id: "",
-    appointment_date: today,
-    start_time: "09:00",
-    notes: ""
-  });
+  const [appForm, setAppForm] = useState(() => appointmentForm(today));
+  const originalAppForm = editingAppointment ? appointmentForm(today, editingAppointment) : null;
+  const rescheduling = originalAppForm && (["appointment_date", "start_time", "service_id", "professional_id"] as const)
+    .some((key) => originalAppForm[key] !== appForm[key]);
 
   const [serviceForm, setServiceForm] = useState({
     id: "",
@@ -165,6 +191,14 @@ export default function Appointments() {
     active: true
   });
 
+  const openAppointment = (appointment?: Appointment) => {
+    setEditingAppointment(appointment ?? null);
+    setAppointmentError("");
+    setAppForm(appointmentForm(filterDate || today, appointment));
+    appointmentRequest.current = null;
+    setShowAppModal(true);
+  };
+
   useEffect(() => {
     loadInitialData();
     let active = true;
@@ -184,7 +218,7 @@ export default function Appointments() {
   const newAppointment = params.get("new") === "appointment";
   useEffect(() => {
     if (!newAppointment) return;
-    setShowAppModal(true);
+    openAppointment();
     setParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("new");
@@ -195,7 +229,6 @@ export default function Appointments() {
   useEffect(() => {
     if (activeTab !== "reminders") return;
     let active = true;
-    setReminderAppointments(null);
     const refresh = () => {
       if (document.hidden) return;
       void apiFetch("/api/whatsapp/status")
@@ -210,66 +243,70 @@ export default function Appointments() {
     };
     refresh();
     const timer = window.setInterval(refresh, 30000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [activeTab, today]);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [activeTab, today, remindersRevision]);
 
   const loadInitialData = async () => {
     setLoading(true);
+    setAppointmentsError("");
     try {
-      const user = await getUser();
-      if (user) setUserId(user.id);
-
-      const [appsRes, servRes, profRes] = await Promise.all([
+      const [user, appsRes, servRes, profRes] = await Promise.allSettled([
+        getUser(),
         apiFetch("/api/appointments"),
         apiFetch("/api/appointments/services"),
         apiFetch("/api/appointments/professionals")
       ]);
 
-      if (appsRes.success) setAppointments(appsRes.data || []);
-      if (servRes.success) setServices(servRes.data || []);
-      if (profRes.success) setProfessionals(profRes.data || []);
-    } catch (err: any) {
-      console.error("Error loading appointment data:", err);
-      toast.error("Erro ao carregar dados da agenda.");
+      if (user.status === "fulfilled" && user.value) setUserId(user.value.id);
+      if (servRes.status === "fulfilled" && servRes.value?.success) setServices(servRes.value.data || []);
+      else toast.error("Não foi possível carregar os serviços.");
+      if (profRes.status === "fulfilled" && profRes.value?.success) setProfessionals(profRes.value.data || []);
+      else toast.error("Não foi possível carregar os profissionais.");
+      if (appsRes.status === "fulfilled" && appsRes.value?.success) setAppointments(appsRes.value.data || []);
+      else setAppointmentsError(appsRes.status === "rejected" && appsRes.reason instanceof Error
+        ? appsRes.reason.message : "Não foi possível carregar as marcações.");
     } finally {
       setLoading(false);
     }
-  };
-
-  const reloadAppointments = async () => {
-    try {
-      const res = await apiFetch("/api/appointments");
-      if (res.success) setAppointments(res.data || []);
-    } catch (_) {}
   };
 
   async function sendReminder(id: string) {
     if (sendingReminder) return;
     setSendingReminder(id);
     try {
-      await apiFetch(`/api/appointments/${id}/reminder`, { method: "POST" });
-      toast.success("Lembrete aceite pelo WhatsApp.");
-      setConfirmReminder(null);
+      const res = await apiFetch(`/api/appointments/${id}/reminder`, { method: "POST" });
+      if (!res?.success || res.status !== "sent") throw new Error("O envio do lembrete ainda não está confirmado.");
+      toast.success(res.alreadySent ? "O WhatsApp já aceitou este lembrete." : "Lembrete aceite pelo WhatsApp.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Não foi possível enviar o lembrete.");
     } finally {
+      setConfirmReminder(null);
       setSendingReminder(null);
+      setRemindersRevision((value) => value + 1);
     }
   }
 
   // Status updates
   const handleUpdateStatus = async (appId: string, newStatus: Appointment["status"]) => {
+    if (updatingAppointment) return;
+    setUpdatingAppointment(appId);
     try {
       const res = await apiFetch(`/api/appointments/${appId}`, {
         method: "PUT",
         body: JSON.stringify({ status: newStatus })
       });
-      if (res.success) {
-        setAppointments(prev => prev.map(a => a.id === appId ? { ...a, status: newStatus } : a));
-        toast.success(`Status alterado para ${newStatus}!`);
-      }
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao atualizar status");
+      if (!res?.success) throw new Error("Não foi possível atualizar a marcação.");
+      setAppointments((current) => current.map((item) => item.id === appId ? { ...item, status: res.data?.status ?? newStatus } : item));
+      toast.success("Estado da marcação atualizado.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível atualizar a marcação.");
+    } finally {
+      setUpdatingAppointment(null);
     }
   };
 
@@ -290,36 +327,52 @@ export default function Appointments() {
   // Save appointment manually
   const handleSaveAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!appForm.customer_name || !appForm.appointment_date || !appForm.start_time) {
-      return toast.error("Preencha o nome, data e horário.");
+    if (savingAppointmentRef.current) return;
+    if (!appForm.customer_name.trim() || !appForm.appointment_date || !appForm.start_time) {
+      setAppointmentError("Indica o nome, a data e a hora.");
+      return;
     }
-
+    const edit = editingAppointment;
+    savingAppointmentRef.current = true;
+    setSavingAppointment(true);
+    setAppointmentError("");
     try {
-      const res = await apiFetch("/api/appointments", {
-        method: "POST",
-        body: JSON.stringify(appForm)
-      });
-      if (res.success) {
-        toast.success("Marcação guardada.");
-        setShowAppModal(false);
-        setFilterDate(appForm.appointment_date);
-        setFilterProf("all");
-        setFilterStatus("all");
-        setSearchQuery("");
-        if (activeTab !== "agenda") setActiveTab("agenda");
-        setAppForm({
-          customer_name: "",
-          customer_phone: "",
-          service_id: "",
-          professional_id: "",
-          appointment_date: today,
-          start_time: "09:00",
-          notes: ""
-        });
-        reloadAppointments();
+      const values = { ...appForm, customer_name: appForm.customer_name.trim(), notes: appForm.notes.trim() };
+      const payload: Partial<typeof values> & { end_time?: string; request_id?: string } = { ...values };
+      if (edit && originalAppForm) {
+        for (const key of Object.keys(values) as Array<keyof typeof values>) {
+          if (values[key] === originalAppForm[key]) delete payload[key];
+        }
+        if (payload.professional_id !== undefined && payload.appointment_date === undefined &&
+          payload.start_time === undefined && payload.service_id === undefined && edit.end_time) payload.end_time = edit.end_time;
+      } else {
+        const body = JSON.stringify(values);
+        if (appointmentRequest.current?.body !== body) appointmentRequest.current = { body, requestId: crypto.randomUUID() };
+        payload.request_id = appointmentRequest.current.requestId;
       }
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao agendar consulta");
+      const res = await apiFetch(edit ? `/api/appointments/${edit.id}` : "/api/appointments", {
+        method: edit ? "PUT" : "POST",
+        body: JSON.stringify(payload)
+      });
+      if (!res?.success || !res.data?.id) throw new Error("Não foi possível guardar a marcação.");
+      const saved: Appointment = {
+        ...res.data,
+        services: services.find((item) => item.id === res.data.service_id),
+        professionals: professionals.find((item) => item.id === res.data.professional_id)
+      };
+      setAppointments((current) => [...current.filter((item) => item.id !== saved.id), saved]);
+      toast.success(edit ? "Marcação atualizada." : "Marcação guardada.");
+      setShowAppModal(false);
+      setFilterDate(saved.appointment_date);
+      setFilterProf("all");
+      setFilterStatus("all");
+      setSearchQuery("");
+      if (activeTab !== "agenda") setActiveTab("agenda");
+    } catch (error) {
+      setAppointmentError(error instanceof Error ? error.message : "Não foi possível guardar a marcação.");
+    } finally {
+      savingAppointmentRef.current = false;
+      setSavingAppointment(false);
     }
   };
 
@@ -418,7 +471,7 @@ export default function Appointments() {
       if (!matchName && !matchPhone && !matchService) return false;
     }
     return true;
-  });
+  }).sort((first, second) => first.appointment_date.localeCompare(second.appointment_date) || first.start_time.localeCompare(second.start_time));
 
   // Booking URL
   const bookingUrl = typeof window !== "undefined" && userId
@@ -453,7 +506,9 @@ export default function Appointments() {
 
   const upcoming = (reminderAppointments ?? []).filter((appointment) =>
     (appointment.status === "scheduled" || appointment.status === "confirmed") &&
-    fromZonedTime(`${appointment.appointment_date}T${appointment.start_time}`, timeZone).getTime() > Date.now());
+    (appointment.start_at
+      ? Date.parse(appointment.start_at)
+      : fromZonedTime(`${appointment.appointment_date}T${appointment.start_time}`, appointment.time_zone || timeZone).getTime()) > Date.now());
   const hasService = services.some((service) => service.active);
   const hasProfessional = professionals.some((professional) => professional.active);
 
@@ -480,7 +535,7 @@ export default function Appointments() {
             <Share2 size={16} /> Link de Agendamento
           </Button>
           <Button
-            onClick={() => setShowAppModal(true)}
+            onClick={() => openAppointment()}
             className="bg-white text-emerald-800 hover:bg-emerald-50 rounded-2xl gap-2 font-bold shadow-lg"
           >
             <Plus size={18} /> {clinic ? "Marcar consulta" : salon ? "Marcar atendimento" : "Nova marcação"}
@@ -647,7 +702,14 @@ export default function Appointments() {
 
           {/* Appointments List */}
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
-            {filteredAppointments.length > 0 ? (
+            {loading ? (
+              <p role="status" className="p-5 text-sm text-slate-600">A carregar marcações…</p>
+            ) : appointmentsError ? (
+              <div className="space-y-2 p-5">
+                <p role="alert" className="text-sm text-red-700">{appointmentsError}</p>
+                <Button size="sm" variant="outline" onClick={() => void loadInitialData()}>Tentar novamente</Button>
+              </div>
+            ) : filteredAppointments.length > 0 ? (
               <div className="divide-y divide-slate-100">
                 {filteredAppointments.map((app) => (
                   <div
@@ -693,7 +755,7 @@ export default function Appointments() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex items-center gap-2 self-end sm:self-center">
+                    <div className="flex flex-wrap items-center justify-end gap-2 self-end sm:self-center">
                       {/* WhatsApp direct chat button */}
                       {app.customer_phone && (
                         <a
@@ -709,7 +771,9 @@ export default function Appointments() {
                       {/* Status Dropdown */}
                       <select
                         value={app.status}
-                        onChange={(e) => handleUpdateStatus(app.id, e.target.value as any)}
+                        aria-label="Estado da marcação"
+                        disabled={Boolean(updatingAppointment)}
+                        onChange={(e) => handleUpdateStatus(app.id, e.target.value as Appointment["status"])}
                         className="text-xs font-semibold bg-slate-100 hover:bg-slate-200 border-none rounded-xl px-2.5 py-2 text-slate-700 focus:outline-none cursor-pointer"
                       >
                         <option value="scheduled">Agendado</option>
@@ -717,6 +781,18 @@ export default function Appointments() {
                         <option value="completed">Concluir</option>
                         <option value="cancelled">Cancelar</option>
                       </select>
+
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={updatingAppointment === app.id}
+                        onClick={() => openAppointment(app)}
+                        className="h-9 w-9 text-slate-500 hover:text-emerald-700 rounded-xl"
+                        aria-label="Editar marcação"
+                        title="Editar marcação"
+                      >
+                        <Edit size={16} />
+                      </Button>
 
                       <Button
                         variant="ghost"
@@ -739,7 +815,7 @@ export default function Appointments() {
                   Cria uma marcação ou partilha o link para receber pedidos de horário.
                 </p>
                 <Button
-                  onClick={() => setShowAppModal(true)}
+                  onClick={() => openAppointment()}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs gap-1.5"
                 >
                   <Plus size={16} /> Agendar Agora
@@ -918,7 +994,7 @@ export default function Appointments() {
         <section aria-labelledby="reminders-heading" className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
           <div>
             <h2 id="reminders-heading" className="text-lg font-bold text-slate-900">Lembretes das próximas marcações</h2>
-            <p className="mt-1 text-sm text-slate-600">Os avisos automáticos usam o fuso {timeZone}. A agenda tenta enviar até dois avisos, a partir de 24 h e 2 h antes, enquanto a marcação estiver ativa.</p>
+            <p className="mt-1 text-sm text-slate-600">A agenda tenta enviar avisos 24 h e 2 h antes de cada marcação ativa, no fuso em que foi registada.</p>
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="font-medium">{{ checking: "A confirmar ligação ao WhatsApp…", connected: "WhatsApp ligado", disconnected: "WhatsApp desligado", unavailable: "Ligação ao WhatsApp por verificar" }[whatsapp]}</span>
@@ -929,23 +1005,35 @@ export default function Appointments() {
           : !reminderAppointments ? <p role="status">A carregar marcações…</p> : upcoming.length === 0 ? (
             <p className="rounded-xl bg-slate-50 p-3 text-sm">Sem marcações ativas no futuro.</p>
           ) : <ul className="divide-y divide-slate-100">
-            {upcoming.map((item) => <li key={item.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <strong className="text-sm">{item.customer_name}</strong>
-                <p className="text-sm text-slate-600">{item.appointment_date.split("-").reverse().join("/")} · {item.start_time.slice(0, 5)}</p>
-                <p className="mt-1 text-sm text-slate-700">{item.customer_phone
-                  ? `24 h: ${item.reminder_24h_sent ? "Enviado" : "Sem envio"} · 2 h: ${item.reminder_2h_sent ? "Enviado" : "Sem envio"}`
-                  : "Sem número WhatsApp"}</p>
-              </div>
-              {confirmReminder === item.id ? <div className="grid gap-2">
-                <p className="text-sm">Enviar agora para {item.customer_phone}?</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => void sendReminder(item.id)} disabled={Boolean(sendingReminder) || whatsapp !== "connected"}>Confirmar envio</Button>
-                  <Button size="sm" variant="outline" onClick={() => setConfirmReminder(null)} disabled={Boolean(sendingReminder)}>Cancelar envio</Button>
+            {upcoming.map((item) => {
+              const notices = item.notification_statuses;
+              const manual = notices?.manual;
+              const canSendManually = item.customer_phone && (!manual || manual === "retry");
+              const label24 = notices?.reminder_24h ? notificationLabels[notices.reminder_24h] : item.reminder_24h_sent ? "Enviado" : "Por enviar";
+              const label2 = notices?.reminder_2h ? notificationLabels[notices.reminder_2h] : item.reminder_2h_sent ? "Enviado" : "Por enviar";
+              return <li key={item.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <strong className="text-sm">{item.customer_name}</strong>
+                  <p className="text-sm text-slate-600">{item.appointment_date.split("-").reverse().join("/")} · {item.start_time.slice(0, 5)} · {item.time_zone || timeZone}</p>
+                  {item.customer_phone ? <dl className="mt-1 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 text-sm text-slate-700">
+                    {notices?.confirmation && <><dt>Confirmação</dt><dd>{notificationLabels[notices.confirmation]}</dd></>}
+                    <dt>Lembrete de 24 h</dt><dd>{label24}</dd>
+                    <dt>Lembrete de 2 h</dt><dd>{label2}</dd>
+                    {manual && <><dt>Lembrete manual</dt><dd>{notificationLabels[manual]}</dd></>}
+                  </dl> : <p className="mt-1 text-sm text-slate-700">Sem número WhatsApp</p>}
                 </div>
-              </div> : item.customer_phone && <Button size="sm" variant="outline" disabled={whatsapp !== "connected" || Boolean(sendingReminder)}
-                onClick={() => setConfirmReminder(item.id)}>Enviar lembrete agora</Button>}
-            </li>)}
+                {canSendManually && (confirmReminder === item.id ? <div className="grid gap-2">
+                  <p className="text-sm">Enviar agora para {item.customer_phone}?</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => void sendReminder(item.id)} disabled={Boolean(sendingReminder) || whatsapp !== "connected"}>
+                      {sendingReminder === item.id ? "A enviar…" : "Confirmar envio"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setConfirmReminder(null)} disabled={Boolean(sendingReminder)}>Cancelar envio</Button>
+                  </div>
+                </div> : <Button size="sm" variant="outline" disabled={whatsapp !== "connected" || Boolean(sendingReminder)}
+                  onClick={() => setConfirmReminder(item.id)}>Enviar lembrete agora</Button>)}
+              </li>;
+            })}
           </ul>}
         </section>
       )}
@@ -1004,105 +1092,118 @@ export default function Appointments() {
         </div>
       )}
 
-      {/* MODAL: NOVA CONSULTA MANUAL */}
       {showAppModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-lg space-y-4 overflow-y-auto rounded-3xl border border-slate-100 bg-white p-4 shadow-2xl sm:p-6">
+          <div role="dialog" aria-modal="true" aria-labelledby="appointment-heading"
+            className="max-h-[calc(100dvh-2rem)] w-full max-w-lg space-y-4 overflow-y-auto rounded-3xl border border-slate-100 bg-white p-4 shadow-2xl sm:p-6">
             <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="text-base font-bold text-slate-900">Marcar {appointmentLabel}</h3>
-              <button onClick={() => setShowAppModal(false)} className="text-slate-400 hover:text-slate-600">✕</button>
+              <h3 id="appointment-heading" className="text-base font-bold text-slate-900">{editingAppointment ? "Editar" : "Marcar"} {appointmentLabel}</h3>
+              <button type="button" disabled={savingAppointment} aria-label="Fechar" onClick={() => setShowAppModal(false)} className="text-slate-400 hover:text-slate-600">✕</button>
             </div>
 
             <form onSubmit={handleSaveAppointment} className="space-y-4 text-xs font-semibold text-slate-700">
-              <div>
-                <label htmlFor="appointment-customer" className="block mb-1">Nome do {customerLabel} *</label>
-                <input id="appointment-customer"
-                  type="text"
-                  required
-                  placeholder="Ex: João Silva"
-                  value={appForm.customer_name}
-                  onChange={e => setAppForm({...appForm, customer_name: e.target.value})}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="appointment-phone" className="block mb-1">WhatsApp do {customerLabel}</label>
-                <input id="appointment-phone"
-                  type="tel"
-                  aria-describedby="appointment-phone-help"
-                  placeholder="Ex: 841234567"
-                  value={appForm.customer_phone}
-                  onChange={e => setAppForm({...appForm, customer_phone: e.target.value})}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-                />
-                <p id="appointment-phone-help" className="mt-1 text-xs font-normal text-slate-600">Adiciona o número para enviar lembretes por WhatsApp.</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+              <fieldset disabled={savingAppointment} className="space-y-4">
                 <div>
-                  <label htmlFor="appointment-service" className="block mb-1">Serviço / Procedimento</label>
-                  <select id="appointment-service"
-                    value={appForm.service_id}
-                    onChange={e => setAppForm({...appForm, service_id: e.target.value})}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
-                  >
-                    <option value="">Selecione...</option>
-                    {services.filter((service) => service.active).map(s => <option key={s.id} value={s.id}>{s.name} ({s.price} MT)</option>)}
-                  </select>
-                </div>
-
-                <div>
-                  <label htmlFor="appointment-professional" className="block mb-1">Profissional Responsável</label>
-                  <select id="appointment-professional"
-                    value={appForm.professional_id}
-                    onChange={e => setAppForm({...appForm, professional_id: e.target.value})}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
-                  >
-                    <option value="">Selecione...</option>
-                    {professionals.filter((professional) => professional.active).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="appointment-date" className="block mb-1">Data *</label>
-                  <input id="appointment-date"
-                    type="date"
+                  <label htmlFor="appointment-customer" className="block mb-1">Nome do {customerLabel} *</label>
+                  <input id="appointment-customer"
+                    type="text"
                     required
-                    value={appForm.appointment_date}
-                    onChange={e => setAppForm({...appForm, appointment_date: e.target.value})}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                    autoComplete="name"
+                    maxLength={150}
+                    placeholder="Ex: João Silva"
+                    value={appForm.customer_name}
+                    onChange={e => setAppForm({...appForm, customer_name: e.target.value})}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="appointment-time" className="block mb-1">Horário de Início *</label>
-                  <input id="appointment-time"
-                    type="time"
-                    required
-                    value={appForm.start_time}
-                    onChange={e => setAppForm({...appForm, start_time: e.target.value})}
+                  <label htmlFor="appointment-phone" className="block mb-1">WhatsApp do {customerLabel}</label>
+                  <input id="appointment-phone"
+                    type="tel"
+                    autoComplete="tel"
+                    aria-describedby="appointment-phone-help"
+                    placeholder="Ex: 841234567"
+                    value={appForm.customer_phone}
+                    onChange={e => setAppForm({...appForm, customer_phone: e.target.value})}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                  />
+                  <p id="appointment-phone-help" className="mt-1 text-xs font-normal text-slate-600">Adiciona o número para enviar lembretes por WhatsApp.</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="appointment-service" className="block mb-1">Serviço / Procedimento</label>
+                    <select id="appointment-service"
+                      value={appForm.service_id}
+                      onChange={e => setAppForm({...appForm, service_id: e.target.value})}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                    >
+                      <option value="">Selecione...</option>
+                      {services.filter((service) => service.active || service.id === editingAppointment?.service_id)
+                        .map((service) => <option key={service.id} value={service.id}>{service.name}{service.active ? "" : " (inativo)"}</option>)}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="appointment-professional" className="block mb-1">Profissional Responsável</label>
+                    <select id="appointment-professional"
+                      value={appForm.professional_id}
+                      onChange={e => setAppForm({...appForm, professional_id: e.target.value})}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                    >
+                      <option value="">Selecione...</option>
+                      {professionals.filter((professional) => professional.active || professional.id === editingAppointment?.professional_id)
+                        .map((professional) => <option key={professional.id} value={professional.id}>{professional.name}{professional.active ? "" : " (inativo)"}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="appointment-date" className="block mb-1">Data *</label>
+                    <input id="appointment-date"
+                      type="date"
+                      required
+                      value={appForm.appointment_date}
+                      onChange={e => setAppForm({...appForm, appointment_date: e.target.value})}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="appointment-time" className="block mb-1">Horário de Início *</label>
+                    <input id="appointment-time"
+                      type="time"
+                      aria-describedby="appointment-time-zone"
+                      required
+                      value={appForm.start_time}
+                      onChange={e => setAppForm({...appForm, start_time: e.target.value})}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                    />
+                    <p id="appointment-time-zone" className="mt-1 font-normal text-slate-600">{!rescheduling && editingAppointment?.time_zone || timeZone}</p>
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="appointment-notes" className="block mb-1">Observações Internas (Opcional)</label>
+                  <textarea id="appointment-notes"
+                    rows={2}
+                    maxLength={1000}
+                    placeholder="Ex: Preferência de horário"
+                    value={appForm.notes}
+                    onChange={e => setAppForm({...appForm, notes: e.target.value})}
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
                   />
                 </div>
-              </div>
+              </fieldset>
 
-              <div>
-                <label htmlFor="appointment-notes" className="block mb-1">Observações Internas (Opcional)</label>
-                <textarea id="appointment-notes"
-                  rows={2}
-                  placeholder="Ex: Preferência de horário"
-                  value={appForm.notes}
-                  onChange={e => setAppForm({...appForm, notes: e.target.value})}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
-                />
-              </div>
-
+              {appointmentError && <p role="alert" className="font-medium text-red-700">{appointmentError}</p>}
               <div className="flex justify-end gap-2 pt-3 border-t">
-                <Button type="button" variant="ghost" onClick={() => setShowAppModal(false)}>Cancelar</Button>
-                <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl px-6">Agendar</Button>
+                <Button type="button" variant="ghost" disabled={savingAppointment} onClick={() => setShowAppModal(false)}>Cancelar</Button>
+                <Button type="submit" disabled={savingAppointment} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl px-6">
+                  {savingAppointment ? "A guardar…" : editingAppointment ? "Guardar alterações" : "Agendar"}
+                </Button>
               </div>
             </form>
           </div>

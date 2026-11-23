@@ -39,6 +39,27 @@ const storedObjects = new Map();
 const downloadedObjects = [];
 const pdfBytes = Buffer.from("%PDF-1.7\nExemplo");
 const sentDocuments = (outbound) => outbound.filter((message) => message.content.document);
+function testAudio() {
+  const samples = Buffer.alloc(16000 * 2, 0);
+  for (let i = 0; i < samples.length / 2; i++) {
+    samples.writeInt16LE(Math.round(6000 * Math.sin(2 * Math.PI * 440 * i / 16000)), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(samples.length + 36, 4);
+  header.write("WAVEfmt ", 8);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16000, 24);
+  header.writeUInt32LE(32000, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(samples.length, 40);
+  return Buffer.concat([header, samples]);
+}
+
 let aiEndpointAvailable = true;
 
 const supabase = createServer(async (req, res) => {
@@ -228,7 +249,8 @@ try {
 
   const otherAccount = await saveContact("0849998888", 1);
   assert.equal(otherAccount.status, 201);
-  assert.notEqual((await otherAccount.json()).data.id, legacyId);
+  const otherCsvContactId = (await otherAccount.json()).data.id;
+  assert.notEqual(otherCsvContactId, legacyId);
 
   const variants = await Promise.all([saveContact("+258 86 123 4567"), saveContact("(86) 123-4567")]);
   assert.deepEqual(variants.map((result) => result.status).sort(), [200, 201]);
@@ -265,7 +287,7 @@ try {
   if (process.env.AGENTX_INBOX_BROWSER === "1") {
     const { chromium } = createRequire(import.meta.url)("playwright");
     browser = await chromium.launch({ executablePath: process.env.AGENTX_TEST_CHROMIUM || "/usr/bin/chromium",
-      args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
     page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     page.on("pageerror", (error) => console.error("Inbox browser error:", error.message));
     await page.goto(app.base + "/login");
@@ -635,6 +657,102 @@ try {
   assert.ok(escalatedContact.ai_paused_at);
   assert.deepEqual(await read("orders", "?source_message_id=eq.outage-purchase"), []);
 
+  const uploadAudio = (buffer, index = 0) => {
+    const body = new FormData();
+    body.set("audio", new Blob([buffer], { type: "audio/wav" }), "nota-teste.wav");
+    return fetch(app.base + "/api/media/upload-audio", {
+      method: "POST",
+      headers: index < 0 ? {} : { authorization: `Bearer ${userTokens[index]}` },
+      body, signal: AbortSignal.timeout(30000)
+    });
+  };
+  assert.equal((await uploadAudio(testAudio(), -1)).status, 401);
+  assert.equal((await uploadAudio(Buffer.from("ficheiro que não contém áudio"))).status, 422);
+  const prepared = await uploadAudio(testAudio());
+  assert.equal(prepared.status, 200);
+  const voice = await prepared.json();
+  assert.match(voice.filename, new RegExp(`^voice-${owner}-[0-9a-f-]+\.ogg$`));
+  assert.equal(voice.mimetype, "audio/ogg; codecs=opus");
+  assert.equal(voice.duration, 1);
+  assert.equal((await fetch(voice.url)).status, 404);
+  const privateVoicePath = `/media/voice/${voice.filename}`;
+  assert.equal((await api(privateVoicePath, -1)).status, 401);
+  assert.equal((await api(privateVoicePath, 1)).status, 404);
+  const playback = await api(privateVoicePath);
+  assert.equal(playback.status, 200);
+  assert.match(playback.headers.get("content-type"), /^audio\/ogg/);
+  const bytes = Buffer.from(await playback.arrayBuffer());
+  assert.equal(bytes.toString("ascii", 0, 4), "OggS");
+  assert.ok(bytes.includes("OpusHead"));
+
+  const voiceSend = { mediaUrl: voice.url, mediaType: "audio", duration: 1, fileName: "nota-teste.wav" };
+  const beforeVoiceSend = app.outbound.length;
+  const crossTenantVoice = await call("/send", 1, { ...voiceSend, contactId: otherCsvContactId });
+  assert.equal(crossTenantVoice.status, 422);
+  assert.match((await crossTenantVoice.json()).error, /outra conta/);
+  const missingVoice = await call("/send", 0, { ...voiceSend, contactId: contact.id, mediaUrl: "/uploads/ficheiro-inexistente.ogg" });
+  assert.equal(missingVoice.status, 422);
+  assert.equal(app.outbound.length, beforeVoiceSend);
+  const postedVoice = await call("/send", 0, { ...voiceSend, contactId: contact.id });
+  assert.equal(postedVoice.status, 200);
+  const postedVoiceResult = await postedVoice.json();
+  assert.equal(postedVoiceResult.historySaved, true);
+  assert.equal(postedVoiceResult.message.media_mimetype, "audio/ogg; codecs=opus");
+  assert.equal(postedVoiceResult.message.media_type, "audio");
+  const wireVoice = app.outbound.at(-1);
+  assert.equal(wireVoice.jid, "258840000001@s.whatsapp.net");
+  assert.equal(wireVoice.content.ptt, true);
+  assert.equal(wireVoice.content.seconds, 1);
+  assert.deepEqual(Buffer.from(wireVoice.content.audio.data), bytes);
+
+  if (page) {
+    await page.goto(app.base + "/messages");
+    await page.getByRole("button", { name: /Cliente de teste/ }).click({ timeout: 15000 });
+    const history = page.getByRole("log", { name: "Histórico da conversa" });
+    const [browserPlayback] = await Promise.all([
+      page.waitForResponse(response => response.url().endsWith("/api" + privateVoicePath)),
+      history.getByRole("button", { name: "Ouvir nota de voz" }).first().click()
+    ]);
+    assert.equal(browserPlayback.status(), 200);
+    const encodedBrowserAudio = history.locator("audio").first();
+    await page.waitForFunction(element => element.readyState > 0 && element.src.startsWith("blob:"),
+      await encodedBrowserAudio.elementHandle());
+    const input = page.getByPlaceholder("Digite uma mensagem...");
+    await input.fill("Rascunho mantido após gravar");
+    await page.getByTitle("Gravar Áudio de Voz").click();
+    await page.getByRole("button", { name: "Iniciar gravação" }).click();
+    const stop = page.getByRole("button", { name: "Parar gravação" });
+    await stop.waitFor();
+    await delay(450);
+    await stop.click();
+    await page.getByText("Áudio Gravado", { exact: true }).waitFor();
+    const [browserUpload, browserSend] = await Promise.all([
+      page.waitForResponse(response => response.url().endsWith("/api/media/upload-audio")),
+      page.waitForResponse(response => response.url().endsWith("/api/whatsapp/send")),
+      page.getByRole("button", { name: "Enviar", exact: true }).click()
+    ]);
+    assert.equal(browserUpload.status(), 200);
+    assert.equal(browserSend.status(), 200);
+    assert.equal((await browserSend.json()).historySaved, true);
+    await input.waitFor();
+    assert.equal(await input.inputValue(), "Rascunho mantido após gravar");
+
+    await app.simulate("unconfirmed");
+    const [attachment, unconfirmed] = await Promise.all([
+      page.waitForResponse(response => response.url().endsWith("/api/media/upload-audio")),
+      page.waitForResponse(response => response.url().endsWith("/api/whatsapp/send")),
+      page.locator('input[type="file"]').setInputFiles({
+        name: "nota-teste.wav", mimeType: "audio/wav", buffer: testAudio()
+      })
+    ]);
+    assert.equal(attachment.status(), 200);
+    assert.equal(unconfirmed.status(), 502);
+    await page.getByText("Envio por confirmar. Verifica no WhatsApp antes de repetir.", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Anexo enviado.", { exact: true }).count(), 0);
+    assert.equal(await input.inputValue(), "Rascunho mantido após gravar");
+  }
+
+  console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log("Seller flow passed on the repaired legacy schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document");
   console.log("AI outage fallback passed: catalogue from live data and human handoff before a purchase");

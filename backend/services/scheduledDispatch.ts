@@ -1,9 +1,8 @@
-import { canPostInGroup, isGroupJid } from "./groupModeration.ts";
+import { randomUUID } from "node:crypto";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { normalizeContactPhone } from "../../shared/contactPhone.ts";
-
-type ScheduleTable = "scheduled_messages" | "scheduled_status";
+import { disconnectedSchedule, scheduleAttachment, scheduleDeadline, writableScheduleGroup, type ScheduleTable } from "./schedulePolicy.ts";
 
 export function scheduledContactJid(contact: { phone?: string | null; lid?: string | null } | null): string | null {
   const phone = normalizeContactPhone(contact?.phone);
@@ -13,75 +12,79 @@ export function scheduledContactJid(contact: { phone?: string | null; lid?: stri
   return phone ? `${phone}@s.whatsapp.net` : null;
 }
 
-export async function dispatchScheduled(table: ScheduleTable, id: string, userId: string, dueBefore?: string) {
-  let claim = supabaseAdmin.from(table).update({ status: "processing" })
-    .eq("id", id).eq("user_id", userId).eq("status", "pending");
-  if (dueBefore) claim = claim.lte("scheduled_at", dueBefore);
-  const { data: item, error } = await claim.select("*").maybeSingle();
-  if (error) throw error;
-  if (!item) return { success: false, status: null, error: "O agendamento já saiu da fila ou não existe." };
+type DispatchStatus = "pending" | "sent" | "failed";
+const unavailableClaim = { success: false as const, status: null, error: "O agendamento já saiu da fila ou não existe." };
 
-  async function update(status: string, fields: Record<string, unknown>) {
-    const { error: updateError } = await supabaseAdmin.from(table).update({ status, ...fields })
-      .eq("id", id).eq("user_id", userId).eq("status", "processing");
+export async function dispatchScheduled(table: ScheduleTable, id: string, userId: string, dueBefore?: string) {
+  const token = randomUUID();
+  let claim = supabaseAdmin.from(table).update({ status: "processing", dispatch_token: token, dispatch_started_at: new Date().toISOString() })
+    .eq("id", id).eq("user_id", userId).eq("status", "pending");
+  if (dueBefore) claim = claim.lte("scheduled_at", dueBefore).or(`retry_at.is.null,retry_at.lte.${dueBefore}`);
+  const { data: item, error } = await claim.select("*").abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
+  if (error) throw error;
+  if (!item) return unavailableClaim;
+
+  async function finish(status: DispatchStatus, message: string | null, fields: Record<string, unknown> = {}) {
+    const { data, error: updateError } = await supabaseAdmin.from(table)
+      .update({ status, error: message, retry_at: null, dispatch_token: null, ...fields })
+      .eq("id", id).eq("user_id", userId).eq("status", "processing").eq("dispatch_token", token)
+      .select("id").abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
     if (updateError) throw updateError;
+    if (!data) return unavailableClaim;
+    return { success: status === "sent", status, error: message };
   }
 
+  const attempts = Number(item.attempts ?? 0) + 1;
+  const retry = (message: string) => attempts < 3
+    ? finish("pending", message + " Nova tentativa agendada.", {
+      attempts, dispatch_started_at: null, retry_at: new Date(Date.now() + attempts * 120_000).toISOString()
+    })
+    : finish("failed", message + " O limite de tentativas foi atingido.", { attempts });
+
   const statusPost = table === "scheduled_status" || item.target_type === "status";
+  const message = item.caption || item.message || "";
+  const mediaType = item.media_type;
+  const media = item.media_url ? scheduleAttachment(item.media_url, userId, mediaType, true) : (item.media_url ?? undefined);
+  if ((!message.trim() && !media) || (item.media_url && (!media || !["image", "video", "audio", "document"].includes(mediaType))) ||
+    (statusPost && media && !["image", "video"].includes(mediaType)) || (mediaType === "audio" && message.trim())) {
+    return finish("failed", "O conteúdo do agendamento não é válido. Verifica o anexo ou volta a guardar o texto.", { attempts });
+  }
+
   let jid: string | null = statusPost ? "status@broadcast" : null;
+  let contactId: string | undefined;
   if (item.target_type === "group" && !statusPost) {
+    if (media && mediaType === "audio") return finish("failed", "A nota de voz pode ser agendada para um contacto direto.", { attempts });
+    let group;
     try {
-      if (!isGroupJid(item.group_jid || "") || !item.message?.trim() || item.media_url) {
-        throw new Error("Anúncio de grupo inválido.");
-      }
-      const group = await whatsappManager.getGroupMetadata(userId, item.group_jid);
-      if (!canPostInGroup(group, whatsappManager.getMe(userId))) throw new Error("Sem permissão para publicar no grupo.");
-      jid = item.group_jid;
+      group = await writableScheduleGroup(userId, item.group_jid ?? "");
     } catch (failure) {
-      const offline = failure instanceof Error && failure.message === "WhatsApp não conectado";
-      const attempts = Number(item.attempts ?? 0) + 1;
-      const message = offline ? "WhatsApp desligado. Verifique a ligação." : "Não foi possível validar a participação ou permissão no grupo.";
-      if (offline && attempts < 3) {
-        await update("pending", { attempts, error: message, scheduled_at: new Date(Date.now() + 5 * 60_000 * attempts).toISOString() });
-        return { success: false, status: "pending", error: message };
-      }
-      await update("failed", { attempts, error: message });
-      return { success: false, status: "failed", error: message };
+      return retry(disconnectedSchedule(failure) ? "WhatsApp desligado." : "Não foi possível consultar o grupo.");
     }
+    if (!group) return finish("failed", "A conta ligada deixou de poder publicar no grupo.", { attempts });
+    jid = item.group_jid;
   } else if (!statusPost && item.contact_id) {
     const { data: contact, error: contactError } = await supabaseAdmin.from("contacts").select("phone,lid")
-      .eq("id", item.contact_id).eq("user_id", userId).maybeSingle();
-    if (contactError) {
-      await update("pending", { scheduled_at: new Date(Date.now() + 60000).toISOString(), error: "Consulta do contacto indisponível." });
-      return { success: false, status: "pending", error: "Consulta do contacto indisponível. Nova tentativa agendada." };
-    }
+      .eq("id", item.contact_id).eq("user_id", userId).abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
+    if (contactError) return retry("Consulta do contacto indisponível.");
     jid = scheduledContactJid(contact);
+    contactId = item.contact_id;
   } else if (!statusPost && typeof item.phone === "string" && /^\+?[\d\s()-]+$/.test(item.phone)) {
     // Older jobs stored just a phone. Never fall back after a failed owner-scoped contact lookup.
     jid = scheduledContactJid({ phone: item.phone });
   }
-  if (!jid) {
-    await update("failed", { error: "Contacto inválido para a conta." });
-    return { success: false, status: "failed", error: "Contacto inválido para a conta." };
-  }
+  if (!jid) return finish("failed", "Contacto inválido para a conta.", { attempts });
 
+  let receipt: string;
   try {
-    const result = await whatsappManager.sendMessage(userId, jid, item.caption || item.message || "",
-      item.media_url, item.media_type, undefined, item.media_mimetype, item.media_filename);
-    if (!result?.key?.id) throw new Error("WhatsApp did not acknowledge the send");
+    const result = await scheduleDeadline(whatsappManager.sendMessage(userId, jid, message,
+      media ?? undefined, mediaType ?? undefined, undefined, item.media_mimetype, item.media_filename, contactId), 45_000);
+    if (!result?.key?.id) throw new Error("O WhatsApp não devolveu um identificador.");
+    receipt = result.key.id;
   } catch (failure) {
-    const offline = failure instanceof Error && failure.message === "WhatsApp session not connected.";
-    const attempts = Number(item.attempts ?? 0) + 1;
-    if (offline && attempts < 3) {
-      await update("pending", { attempts, scheduled_at: new Date(Date.now() + 5 * 60_000 * attempts).toISOString(),
-        error: "WhatsApp desligado. Nova tentativa agendada." });
-      return { success: false, status: "pending", error: "WhatsApp desligado. Nova tentativa agendada." };
-    }
-    const message = offline ? "WhatsApp desligado após três tentativas."
-      : "Envio por confirmar. Consulte a conversa ou o Status antes de reenviar.";
-    await update("failed", { attempts, error: message });
-    return { success: false, status: "failed", error: message };
+    if (disconnectedSchedule(failure)) return retry("WhatsApp desligado.");
+    return finish("failed", "Envio por confirmar. Consulta a conversa ou o Status antes de criar outro agendamento.", { attempts });
   }
-  await update("sent", { error: null });
-  return { success: true, status: "sent", error: null };
+  // A gateway response alone is insufficient. Record the acknowledgement and
+  // create a recurring successor (where configured) in the same DB update.
+  return finish("sent", null, { attempts, dispatch_receipt_id: receipt });
 }

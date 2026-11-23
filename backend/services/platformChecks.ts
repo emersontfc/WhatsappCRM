@@ -11,8 +11,15 @@ const requirements = {
     ["agentx_seller_settings", "user_id,payment_method,payment_destinations"], ["agentx_seller_settlements", "order_id,proof_id,evidence_hash"]],
   delivery: [["agentx_orders", "id,organization_id,status"], ["agentx_digital_deliveries", "organization_id,order_id"]],
   bookings: [["services", "id,user_id,active"], ["appointments", "id,user_id,appointment_date,reminder_24h_sent,reminder_2h_sent"]],
-  groups: [["group_rules", "user_id,group_jid,active"], ["agentx_group_events", "id,user_id,group_jid,outcome"]]
+  groups: [["group_rules", "user_id,group_jid,active,proof_intake_enabled"], ["agentx_group_events", "id,user_id,group_jid,outcome"]]
 } as const;
+
+const moduleContracts = {
+  agenda: "agentx_schedule_dispatch_ready",
+  bookings: "agentx_appointment_contract_ready",
+  groups: "agentx_group_proof_contract_ready",
+  sales: "agentx_seller_payments_ready"
+};
 
 type Module = keyof typeof requirements;
 export type PlatformState = "ready" | "migration_required" | "unverified" | "unavailable";
@@ -38,16 +45,10 @@ export function makePlatformChecks(configured: boolean) {
         if (error) return "unavailable";
         return data === "258841234567" ? "ready" : "migration_required";
       }
-      if (module === "sales") {
-        const { data, error } = await supabaseAdmin.rpc("agentx_seller_payments_ready").abortSignal(signal);
-        if (isSchemaError(error?.code) || error?.code === "PGRST202" || error?.code === "42883") return "migration_required";
-        if (error || typeof data !== "boolean") return "unavailable";
-        return data ? "ready" : "migration_required";
-      }
-      if (module !== "agenda") return "ready";
+      if (module !== "sales" && module !== "agenda" && module !== "bookings" && module !== "groups") return "ready";
 
-      const { data, error } = await supabaseAdmin.rpc("agentx_schedule_contract_ready").abortSignal(signal);
-      if (error?.code === "PGRST202" || error?.code === "42883") return "unverified";
+      const { data, error } = await supabaseAdmin.rpc(moduleContracts[module]).abortSignal(signal);
+      if (isSchemaError(error?.code) || error?.code === "PGRST202" || error?.code === "42883") return "migration_required";
       if (error || typeof data !== "boolean") return "unavailable";
       return data ? "ready" : "migration_required";
     } catch {

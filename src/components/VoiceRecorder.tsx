@@ -2,107 +2,112 @@ import React, { useState, useRef, useEffect } from "react";
 import { Button } from "./ui/Button";
 import { Mic, Square, Trash2, Send, Loader2, Play, Pause } from "lucide-react";
 import { toast } from "sonner";
-import { apiFetch } from "../lib/api";
+import { uploadVoiceAudio, type UploadedVoiceAudio } from "../lib/voiceAudio";
+
+export type VoiceSendOutcome = "sent" | "failed" | "unconfirmed";
 
 interface VoiceRecorderProps {
-  onSend: (audioUrl: string, duration?: number) => void;
+  onSend: (audioUrl: string, duration?: number, media?: UploadedVoiceAudio) => void | Promise<void | VoiceSendOutcome>;
   onCancel: () => void;
   actionLabel?: string;
 }
 
 export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const timerRef = useRef<any>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const uploadRef = useRef<AbortController | null>(null);
+  const storedRef = useRef<UploadedVoiceAudio | null>(null);
+  const mountedRef = useRef(false);
+
+  const releaseMicrophone = () => {
+    clearInterval(timerRef.current);
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+  };
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-        mediaRecorderRef.current.stop();
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
+      mountedRef.current = false;
+      uploadRef.current?.abort();
+      const recorder = mediaRecorderRef.current;
+      if (recorder?.state === "recording") recorder.stop();
+      releaseMicrophone();
     };
+  }, []);
+
+  useEffect(() => {
+    return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); };
   }, [previewUrl]);
 
   const startRecording = async () => {
+    if (isStarting || mediaRecorderRef.current?.state === "recording") return;
+    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      toast.error("A gravação precisa de um navegador compatível e de uma ligação segura.");
+      return;
+    }
+
+    setIsStarting(true);
     try {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-        setPreviewUrl(null);
-      }
-      setAudioBlob(null);
-
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-
-      // Select supported mimeType
-      let mimeType = "";
-      if (typeof MediaRecorder.isTypeSupported === "function") {
-        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
-          mimeType = "audio/webm;codecs=opus";
-        } else if (MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")) {
-          mimeType = "audio/ogg;codecs=opus";
-        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
-          mimeType = "audio/mp4";
-        }
+      if (!mountedRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
       }
 
-      const options = mimeType ? { mimeType } : undefined;
-      const mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
+      streamRef.current = stream;
+      const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"]
+        .find(type => MediaRecorder.isTypeSupported?.(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      const chunks: Blob[] = [];
+      let startedAt = Date.now();
 
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunksRef.current.push(e.data);
+      recorder.ondataavailable = ({ data }) => { if (data.size) chunks.push(data); };
+      recorder.onerror = () => {
+        releaseMicrophone();
+        if (mountedRef.current) toast.error("A gravação foi interrompida.");
+      };
+      recorder.onstop = () => {
+        releaseMicrophone();
+        if (!mountedRef.current) return;
+        setIsRecording(false);
+        const recorded = new Blob(chunks, { type: chunks[0]?.type || recorder.mimeType || mimeType });
+        if (!recorded.size) {
+          toast.error("O microfone não captou áudio. Tenta gravar novamente.");
+          return;
         }
+        setRecordingTime(Math.max(1, Math.round((Date.now() - startedAt) / 1000)));
+        setAudioBlob(recorded);
+        setPreviewUrl(URL.createObjectURL(recorded));
       };
 
-      mediaRecorder.onstop = () => {
-        const actualType = mediaRecorder.mimeType || mimeType || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type: actualType });
-        setAudioBlob(blob);
-        const url = URL.createObjectURL(blob);
-        setPreviewUrl(url);
-
-        stream.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      };
-
-      mediaRecorder.start(200); // 200ms timeslices for reliable chunk collection
-      setIsRecording(true);
+      recorder.start(250);
+      startedAt = Date.now();
       setRecordingTime(0);
-      
-      timerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
-    } catch (err: any) {
-      console.error("Error accessing microphone:", err);
-      toast.error("Erro ao acessar o microfone. Verifique as permissões no navegador.");
+      setIsRecording(true);
+      timerRef.current = setInterval(() => setRecordingTime(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    } catch {
+      releaseMicrophone();
+      if (mountedRef.current) toast.error("Não foi possível abrir o microfone. Verifica as permissões no navegador.");
+    } finally {
+      if (mountedRef.current) setIsStarting(false);
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
+    if (mediaRecorderRef.current?.state === "recording") mediaRecorderRef.current.stop();
   };
 
   const formatTime = (seconds: number) => {
@@ -127,47 +132,36 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
   };
 
   const handleSend = async () => {
-    if (!audioBlob) return;
-    
+    if (!audioBlob || uploadRef.current || unconfirmed) return;
+    const request = new AbortController();
+    uploadRef.current = request;
     setIsUploading(true);
+
     try {
-      const ext = audioBlob.type.includes("ogg") ? "ogg" : audioBlob.type.includes("mp4") ? "mp4" : "webm";
-      const formData = new FormData();
-      formData.append("audio", audioBlob, `recording.${ext}`);
-
-      const result = await apiFetch("/api/media/upload-audio", {
-        method: "POST",
-        body: formData
-      });
-
-      if (result.success && result.url) {
-        const dur = result.duration || (recordingTime > 0 ? recordingTime : 1);
-        onSend(result.url, dur);
-        if (actionLabel !== "Enviar") toast.success("Áudio anexado");
-      } else {
-        throw new Error(result.error || "Erro ao processar áudio");
+      const media = storedRef.current ?? await uploadVoiceAudio(audioBlob, undefined, request.signal);
+      storedRef.current = media;
+      if (!mountedRef.current) return;
+      const outcome = await onSend(media.url, media.duration ?? recordingTime, media);
+      if (!mountedRef.current) return;
+      if (outcome === "unconfirmed") setUnconfirmed(true);
+      if (outcome === undefined && actionLabel !== "Enviar") toast.success("Áudio anexado");
+    } catch (error) {
+      if (mountedRef.current && !request.signal.aborted) {
+        toast.error(error instanceof Error ? error.message : "Não foi possível preparar a gravação.");
       }
-    } catch (err: any) {
-      console.error("Upload error:", err);
-      toast.error(err.message || "Erro ao enviar áudio");
     } finally {
-      setIsUploading(false);
+      uploadRef.current = null;
+      if (mountedRef.current) setIsUploading(false);
     }
   };
 
-  const handleCancel = () => {
-    if (isRecording) {
-      stopRecording();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-    }
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
+  const discardRecording = () => {
     setAudioBlob(null);
     setPreviewUrl(null);
-    onCancel();
+    setRecordingTime(0);
+    setIsPlaying(false);
+    setUnconfirmed(false);
+    storedRef.current = null;
   };
 
   return (
@@ -192,7 +186,7 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
               <span className="text-xs text-red-500 font-medium ml-1 animate-pulse">Gravando voz...</span>
             )}
             {!isRecording && (
-              <span className="text-xs text-slate-400">Pronto para gravar</span>
+              <span className="text-xs text-slate-400">{isStarting ? "A abrir microfone…" : "Pronto para gravar"}</span>
             )}
           </div>
           
@@ -202,7 +196,7 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
               variant="ghost" 
               size="icon" 
               className="h-9 w-9 text-slate-400 hover:text-red-500 rounded-xl"
-              onClick={handleCancel}
+              onClick={onCancel}
               title="Cancelar"
             >
               <Trash2 size={18} />
@@ -215,6 +209,8 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
                 size="icon" 
                 className="rounded-xl h-9 w-9 bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm"
                 onClick={startRecording}
+                disabled={isStarting}
+                aria-label="Iniciar gravação"
                 title="Iniciar gravação"
               >
                 <Mic size={18} />
@@ -226,6 +222,7 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
                 size="icon" 
                 className="rounded-xl h-9 w-9 bg-red-500 hover:bg-red-600 text-white shadow-sm"
                 onClick={stopRecording}
+                aria-label="Parar gravação"
                 title="Parar gravação"
               >
                 <Square size={18} />
@@ -262,12 +259,7 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
               variant="ghost" 
               size="icon" 
               className="h-9 w-9 text-slate-400 hover:text-red-500 rounded-xl"
-              onClick={() => {
-                if (previewUrl) URL.revokeObjectURL(previewUrl);
-                setPreviewUrl(null);
-                setAudioBlob(null);
-                setRecordingTime(0);
-              }}
+              onClick={discardRecording}
               disabled={isUploading}
               title="Descartar e regravar"
             >
@@ -279,7 +271,7 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
               variant="primary" 
               className="bg-emerald-500 hover:bg-emerald-600 text-white h-9 px-4 rounded-xl font-medium shadow-sm gap-1.5"
               onClick={handleSend}
-              disabled={isUploading}
+              disabled={isUploading || unconfirmed}
             >
               {isUploading ? (
                 <>
@@ -295,6 +287,9 @@ export function VoiceRecorder({ onSend, onCancel, actionLabel = "Enviar" }: Voic
             </Button>
           </div>
         </>
+      )}
+      {unconfirmed && (
+        <p role="status" className="max-w-32 text-xs text-amber-700">Verifica no WhatsApp se a nota de voz chegou.</p>
       )}
     </div>
   );

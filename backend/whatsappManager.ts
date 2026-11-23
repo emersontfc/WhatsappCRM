@@ -1,11 +1,14 @@
 import { isGroupJid, moderateGroupMessage, welcomeGroupParticipants } from "./services/groupModeration.ts";
+import { GROUP_PROOF_LIMIT, groupProofOrderNumber, processGroupPaymentProof } from "./services/groupPaymentProofs.ts";
 import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "./services/whatsappOperator.ts";
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   Contact as BaileysContact,
   downloadMediaMessage,
+  extractMessageContent,
   type WASocket,
+  type WAMessage,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
@@ -13,11 +16,10 @@ import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { handleIncomingMessage } from "./automationManager.ts";
 import { handleAgentMessage } from "./agentManager.ts";
 import { useSupabaseAuthState, clearSupabaseAuthCache } from "./lib/supabaseAuthState.ts";
-import axios from "axios";
 import fs from "fs";
 import path from "path";
-import os from "os";
-import { convertToOpus } from "./utils/audioConverter.ts";
+import { prepareWhatsAppVoice } from "./utils/whatsappVoice.ts";
+import { WHATSAPP_VOICE_MIME, ownedVoiceFilename } from "../shared/voiceAudio.ts";
 import { IWhatsAppTransport } from "./lib/whatsappTransport.ts";
 import { normalizeContactPhone } from "../shared/contactPhone.ts";
 import { saveContactIdentity } from "./services/contactIdentity.ts";
@@ -25,6 +27,24 @@ import { saveContactIdentity } from "./services/contactIdentity.ts";
 const logger = pino({ level: "silent" });
 const lidFrom = (jid?: string | null) => /^(\d{5,20})(?::\d+)?@lid$/i.exec(jid ?? "")?.[1] ?? null;
 const phoneFromJid = (jid?: string | null) => /@(?:s\.whatsapp\.net|c\.us)$/i.test(jid ?? "") ? normalizeContactPhone(jid) : null;
+
+async function loadGroupProofMedia(msg: WAMessage, length: number) {
+  if (length > GROUP_PROOF_LIMIT) throw new Error("Group proof exceeds file limit");
+  const stream = await downloadMediaMessage(msg, "stream", { options: { signal: AbortSignal.timeout(12_000) } });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of stream) {
+      const bytes = Buffer.from(chunk);
+      size += bytes.length;
+      if (size > GROUP_PROOF_LIMIT) throw new Error("Group proof exceeds file limit");
+      chunks.push(bytes);
+    }
+    return Buffer.concat(chunks, size);
+  } finally {
+    stream.destroy();
+  }
+}
 
 export class WhatsAppManager implements IWhatsAppTransport {
   private sessions: Map<string, { socket: any; status: string; qr?: string; pairingCode?: string; createdAt?: number }> = new Map();
@@ -342,6 +362,25 @@ export class WhatsAppManager implements IWhatsAppTransport {
             const jid = msg.key.remoteJid;
             if (!jid) continue;
             const isMe = msg.key.fromMe;
+            if (isGroupJid(jid)) {
+              const content = extractMessageContent(msg.message);
+              const media = content?.imageMessage ?? content?.documentMessage;
+              const proofText = content?.conversation || content?.extendedTextMessage?.text ||
+                content?.imageMessage?.caption || content?.documentMessage?.caption || "";
+              if (!isMe && groupProofOrderNumber(proofText, Boolean(media))) {
+                if (type === "notify") {
+                  void processGroupPaymentProof({ userId, jid, key: msg.key, text: proofText, linked: socket.user,
+                    loadGroup: () => socket.groupMetadata(jid), attachment: media ? {
+                      filename: content?.documentMessage?.fileName ?? undefined,
+                      load: () => loadGroupProofMedia(msg, Number(media.fileLength ?? 0))
+                    } : undefined }).catch(() => console.warn("[GroupProofs] Could not process a group proof"));
+                }
+              } else {
+                await this.syncMessage(userId, msg);
+              }
+              if (type === "notify") await moderateGroupMessage(socket, userId, jid, msg.key, proofText || text);
+              continue;
+            }
             
             // Ignora status de outras pessoas para não poluir o log nem ativar a automação/IA
             if (jid === "status@broadcast" && !isMe) {
@@ -350,10 +389,6 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
             const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
             const saved = await this.syncMessage(userId, msg, altJid);
-            if (isGroupJid(jid)) {
-              if (type === "notify") await moderateGroupMessage(socket, userId, jid, msg.key, text);
-              continue;
-            }
 
             // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
             const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
@@ -419,6 +454,13 @@ export class WhatsAppManager implements IWhatsAppTransport {
       if (!jid) return null;
 
       if (jid === "status@broadcast") return null;
+      const groupMessage = isGroupJid(jid);
+      if (groupMessage && !msg.key.fromMe) {
+        const content = extractMessageContent(msg.message);
+        const caption = content?.conversation || content?.extendedTextMessage?.text ||
+          content?.imageMessage?.caption || content?.documentMessage?.caption || "";
+        if (groupProofOrderNumber(caption, Boolean(content?.imageMessage || content?.documentMessage))) return null;
+      }
 
       let text = msg.message.conversation || 
                    msg.message.extendedTextMessage?.text || 
@@ -507,7 +549,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
       }
 
       // Download incoming media from WhatsApp if not already provided
-      if (!msg.key.fromMe && !mediaUrl && (msg.message.audioMessage || msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage || msg.message.stickerMessage)) {
+      if (!groupMessage && !msg.key.fromMe && !mediaUrl && (msg.message.audioMessage || msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage || msg.message.stickerMessage)) {
         try {
           const session = this.sessions.get(userId);
           if (session?.socket) {
@@ -781,28 +823,31 @@ export class WhatsAppManager implements IWhatsAppTransport {
       options.backgroundColor = options.backgroundColor || "#075E54";
       options.font = options.font || 2;
       
-      // Fetch contacts to define who can see the status
+      // Keep the audience scoped to this account and use canonical WhatsApp addresses.
       const { data: contacts } = await supabaseAdmin
         .from("contacts")
-        .select("phone")
+        .select("phone,lid")
         .eq("user_id", userId)
         .not("phone", "is", null);
-        
-      const jidList = (contacts || []).map((c: any) => `${c.phone}@s.whatsapp.net`);
-      const myJid = session.socket.user?.id ? session.socket.user.id.split(':')[0] + '@s.whatsapp.net' : '';
-      if (myJid && !jidList.includes(myJid)) {
-          jidList.push(myJid); // É importante enviar para o seu próprio número para aparecer no aparelho
+
+      const audience = new Set<string>();
+      for (const contact of contacts ?? []) {
+        const phone = normalizeContactPhone(contact.phone);
+        const lid = lidFrom(contact.lid) ?? contact.lid;
+        if (phone && phone !== lid) audience.add(`${phone}@s.whatsapp.net`);
       }
-      
-      // Fallback: if no contacts yet, fetch user's own registered phone
-      if (jidList.length === 0) {
+      const me = session.socket.user;
+      const ownPhone = phoneFromJid(me?.id) ?? phoneFromJid(me?.phoneNumber);
+      const ownLid = lidFrom(me?.id) ?? lidFrom(me?.lid);
+      if (ownPhone) audience.add(`${ownPhone}@s.whatsapp.net`);
+      else if (ownLid) audience.add(`${ownLid}@lid`);
+
+      if (!audience.size) {
         const { data: u } = await supabaseAdmin.from("users").select("phone").eq("id", userId).maybeSingle();
-        if (u?.phone) {
-          const clean = u.phone.replace(/\D/g, "");
-          if (clean) jidList.push(`${clean}@s.whatsapp.net`);
-        }
+        const phone = normalizeContactPhone(u?.phone);
+        if (phone) audience.add(`${phone}@s.whatsapp.net`);
       }
-      options.statusJidList = jidList;
+      options.statusJidList = [...audience];
     }
 
     if (media && mediaType) {
@@ -824,37 +869,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
           caption: text,
         }, options);
       } else if (mediaType === 'audio') {
-        let inputDirectory: string | undefined;
-        let converted: string | undefined;
-        try {
-          const filename = mediaUrl.split("/uploads/").at(-1)?.split("?")[0] ?? "";
-          let localPath = "";
-          if (mediaUrl.includes("/uploads/") && /^[a-zA-Z0-9_.-]+$/.test(filename) && filename !== "." && filename !== "..") {
-            const file = path.join(process.cwd(), "uploads", filename);
-            if (fs.existsSync(file)) localPath = file;
-          }
-          if (!localPath) {
-            const url = new URL(mediaUrl);
-            const storage = new URL(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://invalid.local");
-            if (url.protocol !== "https:" || url.origin !== storage.origin ||
-                !url.pathname.startsWith("/storage/v1/object/")) throw new Error("Origem do áudio inválida.");
-            const response = await axios.get(url.href, {
-              responseType: "arraybuffer", timeout: 20000, maxContentLength: 20 * 1024 * 1024, maxRedirects: 0
-            });
-            inputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "agentx-audio-"));
-            localPath = path.join(inputDirectory, "source");
-            fs.writeFileSync(localPath, response.data);
-          }
-          // The voice upload endpoint already encodes these files in Opus.
-          const ready = /^voice-\d+-\d+\.ogg$/.test(path.basename(localPath));
-          const audioPath = ready ? localPath : (converted = await convertToOpus(localPath));
-          result = await session.socket.sendMessage(jid, {
-            audio: fs.readFileSync(audioPath), mimetype: "audio/ogg; codecs=opus", ptt: true, seconds: duration
-          }, options);
-        } finally {
-          if (converted) fs.rmSync(converted, { force: true });
-          if (inputDirectory) fs.rmSync(inputDirectory, { recursive: true, force: true });
-        }
+        const voice = await prepareWhatsAppVoice(userId, mediaUrl, duration);
+        result = await session.socket.sendMessage(jid, voice, options);
       }
     } else {
       result = await session.socket.sendMessage(jid, { text }, options);
@@ -873,7 +889,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
           },
           message: {
             conversation: text,
-            audioMessage: mediaType === 'audio' ? { mimetype: 'audio/ogg' } : undefined,
+            audioMessage: mediaType === 'audio' ? { mimetype: WHATSAPP_VOICE_MIME } : undefined,
             imageMessage: mediaType === 'image' ? { caption: text } : undefined,
             videoMessage: mediaType === 'video' ? { caption: text } : undefined,
             documentMessage: mediaType === 'document' ? { fileName: fileName } : undefined,
@@ -884,7 +900,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
         undefined,
         mediaUrl,
         mediaType,
-        mimetype,
+        mediaType === "audio" && ownedVoiceFilename(mediaUrl ?? "") ? WHATSAPP_VOICE_MIME : mimetype,
         fileName,
         verifiedContactId
       );

@@ -2,13 +2,15 @@ import express, { type Response } from "express";
 import type { GroupMetadata, GroupParticipant } from "@whiskeysockets/baileys";
 import type { AuthRequest } from "../middleware/auth.ts";
 import { groupParticipant, isGroupAdmin, isGroupJid, normalizedGroupIdentity } from "../services/groupModeration.ts";
-import { scheduledContactJid } from "../services/scheduledDispatch.ts";
+import { readContactPhone } from "../../shared/contactPhone.ts";
+import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 
 type GroupContext = { userId: string; jid: string; group: GroupMetadata; self: GroupParticipant };
 
 const groups = express.Router();
 const memberJid = /^\d{5,20}@(s\.whatsapp\.net|lid)$/;
+const productUuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 function forGroup(adminOnly: boolean, handle: (req: AuthRequest, res: Response, context: GroupContext) => Promise<unknown>) {
   return async (req: AuthRequest, res: Response) => {
@@ -19,6 +21,7 @@ function forGroup(adminOnly: boolean, handle: (req: AuthRequest, res: Response, 
     res.set("Cache-Control", "no-store");
     try {
       const group = await whatsappManager.getGroupMetadata(userId, jid);
+      if (group.id !== jid) return res.status(502).json({ error: "O WhatsApp não confirmou a identidade do grupo." });
       const identity = whatsappManager.getMe(userId);
       const self = groupParticipant(group, identity?.id, identity?.lid, identity?.phoneNumber);
       if (!self || (adminOnly && !isGroupAdmin(self))) {
@@ -49,11 +52,20 @@ groups.post("/:jid/subject", forGroup(true, async (req, res, { userId, jid }) =>
   return res.json({ success: true });
 }));
 
-groups.patch("/:jid/settings", forGroup(true, async (req, res, { userId, jid }) => {
+groups.patch("/:jid/settings", forGroup(true, async (req, res, { userId, jid, group }) => {
   const { field, value } = req.body ?? {};
   if (field === "description" && typeof value === "string" && value.length <= 2048) {
     await whatsappManager.updateGroupDescription(userId, jid, value.trim());
   } else if ((field === "announce" || field === "restrict" || field === "joinApprovalMode") && typeof value === "boolean") {
+    if (field === "announce") {
+      if (group.announce === value) return res.json({ success: true, announce: value });
+      await whatsappManager.updateGroupAccess(userId, jid, field, value);
+      const confirmed = await whatsappManager.getGroupMetadata(userId, jid);
+      if (confirmed.id !== jid || confirmed.announce !== value) {
+        return res.status(409).json({ error: "O WhatsApp ainda não confirmou quem pode escrever. Atualiza o grupo antes de repetir." });
+      }
+      return res.json({ success: true, announce: confirmed.announce });
+    }
     await whatsappManager.updateGroupAccess(userId, jid, field, value);
   } else {
     return res.status(400).json({ error: "Definição do grupo inválida." });
@@ -103,11 +115,12 @@ groups.post("/:jid/participants", forGroup(true, async (req, res, { userId, jid,
   for (const value of participants) {
     const id = typeof value === "string" ? normalizedGroupIdentity(value.trim()) : undefined;
     if (action === "add") {
-      const phone = id && /^\+?[\d\s()-]+$/.test(id) ? scheduledContactJid({ phone: id }) : id;
-      if (!phone || !/^\d{8,15}@s\.whatsapp\.net$/.test(phone)) {
+      const phone = readContactPhone(id);
+      if (!phone) {
         return res.status(400).json({ error: "Introduz um número de telefone com indicativo." });
       }
-      targets.add(phone);
+      const phoneJid = `${phone}@s.whatsapp.net`;
+      if (!groupParticipant(group, phoneJid)) targets.add(phoneJid);
       continue;
     }
     const member = id && memberJid.test(id) ? groupParticipant(group, id) : undefined;
@@ -115,8 +128,10 @@ groups.post("/:jid/participants", forGroup(true, async (req, res, { userId, jid,
     if (!member || member.id === self.id || member.id === owner?.id || member.admin === "superadmin" || member.isSuperAdmin) {
       return res.status(400).json({ error: "Seleciona outro membro do grupo. O criador e a conta ligada estão protegidos." });
     }
+    if ((action === "promote" && isGroupAdmin(member)) || (action === "demote" && !isGroupAdmin(member))) continue;
     targets.add(member.id);
   }
+  if (!targets.size) return res.json({ success: true, status: "unchanged" });
   const result = await whatsappManager.updateGroupParticipants(userId, jid, [...targets], action);
   // The gateway may return an IQ success while rejecting individual participants.
   if (result.length !== targets.size || result.some((item) => item.status !== "200")) {
@@ -125,18 +140,79 @@ groups.post("/:jid/participants", forGroup(true, async (req, res, { userId, jid,
       ? "O WhatsApp exige convite para este número. Partilha o link do grupo com a pessoa."
       : "O WhatsApp não confirmou todos os membros. Atualiza a lista antes de repetir." });
   }
-  return res.json({ success: true });
+  const confirmed = await whatsappManager.getGroupMetadata(userId, jid);
+  const identities = (group: GroupMetadata, id: string) => {
+    const person = groupParticipant(group, id);
+    return [person?.id, person?.lid, person?.phoneNumber].map(normalizedGroupIdentity).filter(Boolean);
+  };
+  const verified = confirmed.id === jid && [...targets].every((target) => {
+    const equivalent = [normalizedGroupIdentity(target), ...identities(group, target), ...identities(confirmed, target)];
+    if (!result.some((item) => equivalent.includes(normalizedGroupIdentity(item.jid)))) return false;
+    const participant = groupParticipant(confirmed, ...equivalent);
+    return action === "remove" ? !participant :
+      Boolean(participant && (action === "add" || isGroupAdmin(participant) === (action === "promote")));
+  });
+  if (!verified) return res.status(409).json({ error: "A lista do WhatsApp ainda não confirma a alteração. Atualiza os membros antes de repetir." });
+  return res.json({ success: true, status: "confirmed" });
 }));
 
-groups.post("/:jid/announce", forGroup(false, async (req, res, { userId, jid, group, self }) => {
-  if (group.announce && !isGroupAdmin(self)) {
-    return res.status(403).json({ error: "Só administradores podem escrever neste grupo." });
-  }
-  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
-  if (!text || text.length > 4096) return res.status(400).json({ error: "Escreve um anúncio entre 1 e 4096 caracteres." });
+function forGroupPost(handle: (req: AuthRequest, res: Response, context: GroupContext) => Promise<unknown>) {
+  return forGroup(false, async (req, res, context) => {
+    if (context.group.announce && !isGroupAdmin(context.self)) {
+      return res.status(403).json({ error: "Só administradores podem escrever neste grupo." });
+    }
+    return handle(req, res, context);
+  });
+}
+
+async function sendGroupText(res: Response, userId: string, jid: string, text: string) {
   const result = await whatsappManager.sendMessage(userId, jid, text);
   if (!result?.key?.id) return res.status(502).json({ error: "Envio por confirmar. Consulta o grupo antes de repetir." });
   return res.json({ success: true, status: "sent" });
+}
+
+groups.post("/:jid/announce", forGroupPost(async (req, res, { userId, jid }) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text || text.length > 4096) return res.status(400).json({ error: "Escreve um anúncio entre 1 e 4096 caracteres." });
+  return sendGroupText(res, userId, jid, text);
+}));
+
+function promotionProducts(userId: string) {
+  return supabaseAdmin.from("products").select("id,name,price,currency")
+    .eq("user_id", userId).eq("is_active", true).gt("stock", 0).gt("price", 0);
+}
+
+groups.get("/:jid/promotion-products", forGroupPost(async (_req, res, { userId }) => {
+  const { data, error } = await promotionProducts(userId).order("name").limit(100);
+  if (error) return res.status(503).json({ error: "Não foi possível consultar o catálogo." });
+  return res.json({ success: true, products: data ?? [] });
+}));
+
+groups.post("/:jid/promotions", forGroupPost(async (req, res, { userId, jid }) => {
+  const { text, productId } = req.body ?? {};
+  const caption = typeof text === "string" ? text.trim() : "";
+  if ((text !== undefined && typeof text !== "string") ||
+      (productId != null && (typeof productId !== "string" || !productUuid.test(productId)))) {
+    return res.status(400).json({ error: "Seleciona um produto ou escreve o texto da promoção." });
+  }
+
+  let productLine = "";
+  if (productId) {
+    const { data: product, error } = await promotionProducts(userId).eq("id", productId).maybeSingle();
+    if (error) return res.status(503).json({ error: "Não foi possível consultar o produto." });
+    const price = Number(product?.price);
+    if (!product || typeof product.name !== "string" || !product.name.trim() || !Number.isFinite(price) || price <= 0) {
+      return res.status(409).json({ error: "Este produto já não está disponível no catálogo." });
+    }
+    const name = product.name.trim().replace(/\s+/g, " ").slice(0, 180);
+    const currency = product.currency?.trim().slice(0, 12) || "MT";
+    const amount = price.toLocaleString("pt-MZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    productLine = `*${name}*\nPreço: ${amount} ${currency}`;
+  }
+  const content = [caption, productLine].filter(Boolean).join("\n\n");
+  const message = `*Promoção*\n\n${content}`;
+  if (!content || message.length > 4096) return res.status(400).json({ error: "A promoção deve ter entre 1 e 4096 caracteres." });
+  return sendGroupText(res, userId, jid, message);
 }));
 
 groups.post("/:jid/leave", forGroup(false, async (_req, res, { userId, jid }) => {

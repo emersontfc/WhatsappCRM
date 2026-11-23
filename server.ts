@@ -1,3 +1,4 @@
+import { voiceUploadOwner } from "./shared/voiceAudio.ts";
 import "./backend/loadEnv.ts";
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -17,6 +18,8 @@ import packRoutes from "./backend/routes/packs.ts";
 import mediaRoutes from "./backend/routes/media.ts";
 import menuRoutes from "./backend/routes/menus.ts";
 import appointmentRoutes from "./backend/routes/appointments.ts";
+import scheduleRoutes from "./backend/routes/schedule.ts";
+import groupProofRoutes, { downloadGroupProofAttachment } from "./backend/routes/groupProofs.ts";
 import commerceRoutes from "./backend/routes/commerce.ts";
 import v2CommerceRoutes from "./backend/routes/v2Commerce.ts";
 import companyRoutes from "./backend/routes/company.ts";
@@ -558,6 +561,7 @@ async function startServer() {
   });
 
   // API Routes
+  app.use("/api/whatsapp/groups/:jid/payment-proofs", authenticate, groupProofRoutes);
   app.use("/api/whatsapp", authenticate, whatsappRoutes);
   app.use("/api/contacts", authenticate, contactRoutes);
   app.use("/api/leads", authenticate, leadRoutes);
@@ -589,6 +593,8 @@ async function startServer() {
   app.use("/api/media", authenticate, mediaRoutes);
   app.use("/api/menus", authenticate, menuRoutes);
   app.use("/api/appointments", appointmentRoutes);
+  app.use("/api/schedule", authenticate, scheduleRoutes);
+  app.get("/api/commerce/verifications/:id/attachment", authenticate, downloadGroupProofAttachment);
   app.use("/api/commerce", authenticate, commerceRoutes);
   app.use("/api/v2/commerce", authenticate, v2CommerceRoutes);
   app.use("/api/company", authenticate, companyRoutes);
@@ -603,6 +609,9 @@ async function startServer() {
     const rawFilename = req.params.filename;
     // Strict basename extraction to completely block path traversal attacks
     const safeFilename = path.basename(rawFilename);
+    if (voiceUploadOwner(safeFilename)) {
+      return res.status(404).json({ success: false, error: "Ficheiro indisponível." });
+    }
     const filePath = path.join(uploadsDir, safeFilename);
 
     if (!filePath.startsWith(uploadsDir)) {

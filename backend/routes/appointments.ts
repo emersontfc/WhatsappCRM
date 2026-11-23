@@ -1,688 +1,373 @@
-import { appointmentInstant, appointmentReminderMessage, getAppointmentTimeZone } from "../services/appointmentReminders.ts";
-import { scheduledContactJid } from "../services/scheduledDispatch.ts";
-import express from "express";
+import { Router, type Response } from "express";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
-import { whatsappManager } from "../whatsappManager.ts";
-import { authenticate } from "../middleware/auth.ts";
-import { saveContactIdentity } from "../services/contactIdentity.ts";
+import { authenticate, type AuthRequest } from "../middleware/auth.ts";
 import { readContactPhone } from "../../shared/contactPhone.ts";
+import { appointmentInstant, appointmentZone, getAppointmentTimeZone } from "../services/appointmentReminders.ts";
+import { dispatchAppointmentNotification, manualAppointmentKind } from "../services/appointmentDelivery.ts";
 
-const router = express.Router();
+const router = Router();
+const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const time = /^([01]\d|2[0-3]):[0-5]\d(?::00)?$/;
+const statuses = ["scheduled", "confirmed", "completed", "cancelled"];
+const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const isUuid = (value: unknown): value is string => typeof value === "string" && uuid.test(value);
 
-// Helper to calculate available time slots for a given professional, service, and date
-function calculateSlots(
-  workingDays: string[],
-  startTimeStr: string,
-  endTimeStr: string,
-  breakStartStr: string | null,
-  breakEndStr: string | null,
-  durationMinutes: number,
-  targetDateStr: string,
-  existingAppointments: { start_time: string; end_time: string }[]
-): string[] {
-  // Check day of week
-  const dateObj = new Date(targetDateStr + "T00:00:00");
-  const dayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-  const targetDay = dayNames[dateObj.getDay()];
-
-  if (workingDays && workingDays.length > 0 && !workingDays.includes(targetDay)) {
-    return []; // Not a working day
-  }
-
-  const parseToMinutes = (timeStr: string) => {
-    const [h, m] = timeStr.split(":").map(Number);
-    return h * 60 + m;
-  };
-
-  const formatMinutes = (totalMinutes: number) => {
-    const h = Math.floor(totalMinutes / 60).toString().padStart(2, "0");
-    const m = (totalMinutes % 60).toString().padStart(2, "0");
-    return `${h}:${m}`;
-  };
-
-  const startMin = parseToMinutes(startTimeStr || "08:00");
-  const endMin = parseToMinutes(endTimeStr || "17:00");
-  const breakStartMin = breakStartStr ? parseToMinutes(breakStartStr) : null;
-  const breakEndMin = breakEndStr ? parseToMinutes(breakEndStr) : null;
-
-  const duration = durationMinutes > 0 ? durationMinutes : 30;
-  const slots: string[] = [];
-
-  for (let current = startMin; current + duration <= endMin; current += duration) {
-    const slotStart = current;
-    const slotEnd = current + duration;
-
-    // Check lunch / break conflict
-    if (breakStartMin !== null && breakEndMin !== null) {
-      if (slotStart < breakEndMin && slotEnd > breakStartMin) {
-        continue;
-      }
-    }
-
-    const slotStartStr = formatMinutes(slotStart);
-    const hasConflict = existingAppointments.some((app) => {
-      const appStart = parseToMinutes(app.start_time);
-      const appEnd = app.end_time ? parseToMinutes(app.end_time) : appStart + duration;
-      return slotStart < appEnd && slotEnd > appStart;
-    });
-
-    if (!hasConflict) {
-      slots.push(slotStartStr);
-    }
-  }
-
-  return slots;
+function isValidDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + "T00:00:00Z");
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-// ==========================================
-// 🌐 PUBLIC BOOKING ENDPOINTS (NO AUTH NEEDED)
-// ==========================================
+function appointmentError(res: Response, error: unknown, publicRequest = false) {
+  const { code, message } = (error ?? {}) as { code?: string; message?: string };
+  if (code === "P0002") return res.status(404).json({ error: message || "Marcação indisponível." });
+  if (code === "23P01" || code === "23505") return res.status(409).json({ error: code === "23P01" && message
+    ? message : "Este horário já não está disponível." });
+  if (code === "22023") return res.status(400).json({ error: message || "Confere os dados da marcação." });
+  if (code === "22007" || code === "22008" || code === "22P02") {
+    return res.status(400).json({ error: "Confere a data, o horário e os dados da marcação." });
+  }
+  console.warn("[Appointments] Request failed:", code ?? "unavailable");
+  const schemaMissing = ["42883", "42703", "42P01", "PGRST202", "PGRST204", "PGRST205"].includes(code ?? "");
+  return res.status(503).json({ error: !publicRequest && schemaMissing
+    ? "A agenda precisa da migração 24 do Supabase."
+    : "Não foi possível concluir agora. Atualiza a agenda e tenta novamente." });
+}
 
-// Get business info, services and professionals for public booking page
+class AppointmentInputError extends Error {
+  readonly code = "22023";
+}
+
+function saveFields(body: Record<string, unknown>) {
+  const fields: Record<string, string | null> = {};
+  for (const key of ["contact_id", "service_id", "professional_id", "request_id"] as const) {
+    const value = body[key];
+    if (value === undefined) continue;
+    if (value !== "" && value !== null && !isUuid(value)) throw new AppointmentInputError("Contacto, serviço ou profissional inválido.");
+    fields[key] = value ? String(value) : null;
+  }
+  for (const [key, limit] of [["customer_name", 150], ["notes", 1000]] as const) {
+    const value = body[key];
+    if (value === undefined) continue;
+    if (key === "notes" && value === null) { fields.notes = null; continue; }
+    if (typeof value !== "string" || value.trim().length > limit) throw new AppointmentInputError("Confere o nome e as notas.");
+    fields[key] = value.trim() || null;
+  }
+  if (body.customer_phone !== undefined) {
+    if (body.customer_phone === "" || body.customer_phone === null) fields.customer_phone = null;
+    else {
+      const phone = readContactPhone(body.customer_phone);
+      if (!phone) throw new AppointmentInputError("Indica um número de WhatsApp válido.");
+      fields.customer_phone = phone;
+    }
+  }
+  if (body.appointment_date !== undefined) {
+    if (!isValidDate(body.appointment_date)) throw new AppointmentInputError("Data inválida.");
+    fields.appointment_date = body.appointment_date;
+  }
+  for (const key of ["start_time", "end_time"] as const) {
+    const value = body[key];
+    if (value === undefined) continue;
+    if (key === "end_time" && (value === "" || value === null)) { fields.end_time = null; continue; }
+    if (typeof value !== "string" || (!time.test(value) && !(key === "end_time" && /^(24:00)(?::00)?$/.test(value)))) {
+      throw new AppointmentInputError("Horário inválido.");
+    }
+    fields[key] = value;
+  }
+  if (body.status !== undefined) {
+    if (typeof body.status !== "string" || !statuses.includes(body.status)) throw new AppointmentInputError("Estado de marcação inválido.");
+    fields.status = body.status;
+  }
+  return fields;
+}
+
+type Appointment = {
+  id: string; user_id: string; schedule_revision: string; appointment_date: string; start_time: string;
+  end_time: string; start_at: string | null; time_zone: string | null; customer_phone: string | null; status: string;
+  service_id: string | null; professional_id: string | null;
+};
+type ServiceLabel = { id: string; name: string; price: number; duration_minutes: number };
+type ProfessionalLabel = { id: string; name: string; role: string | null };
+
+async function saveAppointment(userId: string, id: string | null, body: Record<string, unknown>, publicRequest: boolean) {
+  const { data, error } = await supabaseAdmin.rpc("agentx_save_appointment", {
+    p_user: userId, p_appointment: id, p_input: saveFields(body), p_public: publicRequest
+  }).abortSignal(AbortSignal.timeout(10_000));
+  if (error) throw error;
+  if (!data?.appointment?.id) throw new Error("Appointment was not returned");
+  return data as { appointment: Appointment; replayed: boolean };
+}
+
+async function appointmentLabels(userId: string, rows: Appointment[]) {
+  const services = [...new Set(rows.map((row) => row.service_id).filter(Boolean))];
+  const professionals = [...new Set(rows.map((row) => row.professional_id).filter(Boolean))];
+  const [serviceResult, professionalResult] = await Promise.all([
+    services.length ? supabaseAdmin.from("services").select("id,name,price,duration_minutes").eq("user_id", userId).in("id", services).abortSignal(AbortSignal.timeout(8_000))
+      : { data: [], error: null },
+    professionals.length ? supabaseAdmin.from("professionals").select("id,name,role").eq("user_id", userId).in("id", professionals).abortSignal(AbortSignal.timeout(8_000))
+      : { data: [], error: null }
+  ]);
+  if (serviceResult.error || professionalResult.error) throw serviceResult.error || professionalResult.error;
+  const serviceById = new Map((serviceResult.data as ServiceLabel[] | null)?.map((item) => [item.id, item] as const));
+  const professionalById = new Map((professionalResult.data as ProfessionalLabel[] | null)?.map((item) => [item.id, item] as const));
+  return rows.map((row) => ({
+    ...row, services: row.service_id ? serviceById.get(row.service_id) ?? null : null,
+    professionals: row.professional_id ? professionalById.get(row.professional_id) ?? null : null
+  }));
+}
+
 router.get("/public/info/:userId", async (req, res) => {
+  const { userId } = req.params;
+  if (!isUuid(userId)) return res.status(404).json({ error: "Estabelecimento indisponível." });
   try {
-    const { userId } = req.params;
-    if (!userId) return res.status(400).json({ success: false, error: "ID de usuário obrigatório" });
-
-    // Fetch user profile
-    const { data: userProfile } = await supabaseAdmin
-      .from("users")
-      .select("id, name")
-      .eq("id", userId)
-      .single();
-
-    // Fetch active services
-    const { data: services } = await supabaseAdmin
-      .from("services")
-      .select("id,name,description,duration_minutes,price")
-      .eq("user_id", userId)
-      .eq("active", true)
-      .order("name", { ascending: true });
-
-    // Fetch active professionals
-    const { data: professionals } = await supabaseAdmin
-      .from("professionals")
-      .select("id,name,role,working_days,start_time,end_time")
-      .eq("user_id", userId)
-      .eq("active", true)
-      .order("name", { ascending: true });
-
-    res.json({
-      success: true,
-      data: {
-        business: userProfile || { id: userId, name: "Marcações" },
-        services: services || [],
-        professionals: professionals || []
-      }
-    });
-  } catch (err: any) {
-    console.error("[Appointments] Error in /public/info:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const signal = AbortSignal.timeout(8_000);
+    const [profile, services, professionals, zone] = await Promise.all([
+      supabaseAdmin.from("users").select("id,name").eq("id", userId).abortSignal(signal).maybeSingle(),
+      supabaseAdmin.from("services").select("id,name,description,duration_minutes,price")
+        .eq("user_id", userId).eq("active", true).order("name").abortSignal(signal),
+      supabaseAdmin.from("professionals").select("id,name,role")
+        .eq("user_id", userId).eq("active", true).order("name").abortSignal(signal),
+      getAppointmentTimeZone(userId)
+    ]);
+    if (profile.error || services.error || professionals.error) throw profile.error || services.error || professionals.error;
+    if (!profile.data) return res.status(404).json({ error: "Estabelecimento indisponível." });
+    return res.json({ success: true, data: {
+      business: profile.data, services: services.data ?? [], professionals: professionals.data ?? [], timeZone: zone
+    } });
+  } catch (error) {
+    return appointmentError(res, error, true);
   }
 });
 
-// Calculate free slots publicly for a specific date, professional & service
 router.get("/public/slots", async (req, res) => {
+  const { userId, serviceId, professionalId, date } = req.query;
+  if (!isUuid(userId) || !isValidDate(date) || (serviceId && !isUuid(serviceId)) || (professionalId && !isUuid(professionalId))) {
+    return res.status(400).json({ error: "Confere o estabelecimento, a data e o serviço." });
+  }
   try {
-    const { userId, professionalId, serviceId, date } = req.query;
-
-    if (!userId || !date) {
-      return res.status(400).json({ success: false, error: "Parâmetros incompletos (userId e date são obrigatórios)" });
-    }
-
-    // Fetch service duration
-    let durationMinutes = 30;
-    if (serviceId) {
-      const { data: service } = await supabaseAdmin
-        .from("services")
-        .select("duration_minutes")
-        .eq("id", serviceId as string).eq("user_id", userId as string).eq("active", true)
-        .maybeSingle();
-      if (!service) return res.status(404).json({ success: false, error: "Serviço indisponível." });
-      if (service?.duration_minutes) durationMinutes = service.duration_minutes;
-    }
-
-    // Fetch professional working hours or use default
-    let workingDays = ["mon", "tue", "wed", "thu", "fri", "sat"];
-    let startTime = "08:00";
-    let endTime = "17:00";
-    let breakStart: string | null = "12:00";
-    let breakEnd: string | null = "13:00";
-
-    if (professionalId) {
-      const { data: prof } = await supabaseAdmin
-        .from("professionals")
-        .select("*")
-        .eq("id", professionalId as string).eq("user_id", userId as string).eq("active", true)
-        .maybeSingle();
-      if (!prof) return res.status(404).json({ success: false, error: "Profissional indisponível." });
-      if (prof) {
-        if (prof.working_days && prof.working_days.length > 0) workingDays = prof.working_days;
-        if (prof.start_time) startTime = prof.start_time;
-        if (prof.end_time) endTime = prof.end_time;
-        breakStart = prof.break_start || null;
-        breakEnd = prof.break_end || null;
-      }
-    }
-
-    // Fetch existing appointments on that date (excluding cancelled)
-    let query = supabaseAdmin
-      .from("appointments")
-      .select("start_time, end_time")
-      .eq("user_id", userId as string)
-      .eq("appointment_date", date as string)
-      .neq("status", "cancelled");
-
-    if (professionalId) {
-      query = query.eq("professional_id", professionalId as string);
-    }
-
-    const { data: existingApps } = await query;
-
-    const slots = calculateSlots(
-      workingDays,
-      startTime,
-      endTime,
-      breakStart,
-      breakEnd,
-      durationMinutes,
-      date as string,
-      existingApps || []
-    );
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) return res.status(400).json({ success: false, error: "Data inválida." });
-    const timeZone = await getAppointmentTimeZone(String(userId));
-    const available = slots.filter((time) =>
-      appointmentInstant({ appointment_date: String(date), start_time: time }, timeZone).getTime() > Date.now());
-    res.json({ success: true, slots: available, durationMinutes });
-  } catch (err: any) {
-    console.error("[Appointments] Error in /public/slots:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const { data, error } = await supabaseAdmin.rpc("agentx_available_appointment_slots", {
+      p_user: userId, p_service: serviceId || null, p_professional: professionalId || null, p_date: date
+    }).abortSignal(AbortSignal.timeout(8_000));
+    if (error) throw error;
+    if (!Array.isArray(data?.slots)) throw new Error("Appointment slots were not returned");
+    return res.json({ success: true, ...data });
+  } catch (error) {
+    return appointmentError(res, error, true);
   }
 });
 
-// Create booking publicly (from patient booking page)
 router.post("/public/book", async (req, res) => {
   try {
-    const {
-      userId,
-      serviceId,
-      professionalId,
-      customerName,
-      customerPhone,
-      appointmentDate,
-      startTime,
-      notes
-    } = req.body;
+    const { userId, serviceId, professionalId, customerName, customerPhone, appointmentDate, startTime, notes, requestId } = req.body ?? {};
+    if (!isUuid(userId)) return res.status(404).json({ error: "Estabelecimento indisponível." });
+    const { appointment, replayed } = await saveAppointment(userId, null, {
+      service_id: serviceId, professional_id: professionalId, customer_name: customerName, customer_phone: customerPhone,
+      appointment_date: appointmentDate, start_time: startTime, notes, request_id: requestId
+    }, true);
 
-    if (!userId || !customerName || !customerPhone || !appointmentDate || !startTime) {
-      return res.status(400).json({ success: false, error: "Preencha todos os campos obrigatórios." });
-    }
-
-    const cleanPhone = readContactPhone(customerPhone);
-
-    // Get service details
-    let durationMinutes = 30;
-    if (serviceId) {
-      const { data: service } = await supabaseAdmin
-        .from("services")
-        .select("name, duration_minutes, price")
-        .eq("id", serviceId).eq("user_id", userId).eq("active", true)
-        .maybeSingle();
-      if (!service) return res.status(404).json({ success: false, error: "Serviço indisponível." });
-      if (service) {
-        durationMinutes = service.duration_minutes || 30;
-      }
-    }
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !cleanPhone) {
-      return res.status(400).json({ success: false, error: "Data, horário ou telefone inválido." });
-    }
-    if (professionalId) {
-      const { data: professional, error } = await supabaseAdmin.from("professionals").select("id")
-        .eq("id", professionalId).eq("user_id", userId).eq("active", true).maybeSingle();
-      if (error) throw error;
-      if (!professional) return res.status(404).json({ success: false, error: "Profissional indisponível." });
-    }
-
-    // Calculate end time
-    const [h, m] = startTime.split(":").map(Number);
-    const endMinutes = h * 60 + m + durationMinutes;
-    if (endMinutes > 24 * 60 || !(appointmentInstant({ appointment_date: appointmentDate, start_time: startTime },
-      await getAppointmentTimeZone(userId)).getTime() > Date.now())) {
-      return res.status(400).json({ success: false, error: "Escolhe um horário futuro dentro do dia de atendimento." });
-    }
-    const endTime = `${Math.floor(endMinutes / 60).toString().padStart(2, "0")}:${(endMinutes % 60).toString().padStart(2, "0")}`;
-
-    // Verify slot is still available
-    let conflictQuery = supabaseAdmin
-      .from("appointments")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("appointment_date", appointmentDate)
-      .neq("status", "cancelled")
-      .lt("start_time", endTime).gt("end_time", startTime);
-
-    if (professionalId) {
-      conflictQuery = conflictQuery.eq("professional_id", professionalId);
-    }
-
-    const { data: conflicts, error: conflictError } = await conflictQuery;
-    if (conflictError) throw conflictError;
-    if (conflicts && conflicts.length > 0) {
-      return res.status(409).json({ success: false, error: "Este horário acabou de ser reservado. Por favor, escolha outro horário." });
-    }
-
-    const contact = await saveContactIdentity(userId, {
-      phone: cleanPhone, name: customerName, tags: ["Agendamento Online", "Paciente/Cliente"]
-    });
-    if (!contact?.id) throw new Error("Não foi possível guardar o contacto da marcação.");
-
-    // Create appointment
-    const { data: appointment, error: insertError } = await supabaseAdmin
-      .from("appointments")
-      .insert({
-        user_id: userId,
-        contact_id: contact.id,
-        service_id: serviceId || null,
-        professional_id: professionalId || null,
-        customer_name: customerName,
-        customer_phone: cleanPhone,
-        appointment_date: appointmentDate,
-        start_time: startTime,
-        end_time: endTime,
-        status: "scheduled",
-        notes: notes || null,
-      })
-      .select(`
-        *,
-        services (id, name, price, duration_minutes),
-        professionals (id, name, role)
-      `)
-      .single();
-
-    if (insertError) throw insertError;
-
-    // Send instant WhatsApp Confirmation to Patient if user has active session
-    try {
-      const jid = `${cleanPhone}@s.whatsapp.net`;
-      const dateFormatted = new Date(appointmentDate + "T00:00:00").toLocaleDateString("pt-BR", {
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-        year: "numeric"
-      });
-
-      const confirmText = `Recebemos o teu pedido de marcação para ${dateFormatted}, às ${startTime}. Se precisares de alterar o horário, responde a esta mensagem para falar com a equipa.`;
-
-      await whatsappManager.sendMessage(userId, jid, confirmText);
-      console.log(`[Appointments] WhatsApp confirmation sent to ${jid}`);
-    } catch (msgErr: any) {
-      console.warn("[Appointments] Could not send WhatsApp confirmation (session may be disconnected):", msgErr.message);
-    }
-
-    res.json({
-      success: true,
-      message: "Agendamento realizado com sucesso!",
-      data: appointment
-    });
-  } catch (err: any) {
-    console.error("[Appointments] Error in /public/book:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const [labels, delivery] = await Promise.allSettled([
+      appointmentLabels(userId, [appointment]),
+      dispatchAppointmentNotification(userId, appointment.id, appointment.schedule_revision, "confirmation")
+    ]);
+    const display = labels.status === "fulfilled" ? labels.value[0] : null;
+    const confirmation = delivery.status === "fulfilled" && delivery.value.status !== "ineligible"
+      ? delivery.value.status : "uncertain";
+    return res.json({ success: true, confirmation, replayed, data: {
+      id: appointment.id, appointment_date: appointment.appointment_date, start_time: appointment.start_time,
+      end_time: appointment.end_time, time_zone: appointment.time_zone,
+      services: display?.services ? { name: display.services.name } : null,
+      professionals: display?.professionals ? { name: display.professionals.name } : null
+    } });
+  } catch (error) {
+    return appointmentError(res, error, true);
   }
 });
 
-// ==========================================
-// 🔒 AUTHENTICATED ENDPOINTS (DASHBOARD)
-// ==========================================
-
-// Apply authentication middleware to all routes below
 router.use(authenticate);
 
-// ------------------------------------------
-// 📅 APPOINTMENTS CRUD
-// ------------------------------------------
-router.get("/", async (req, res) => {
+router.get("/", async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { startDate, endDate, professionalId, status } = req.query;
+  if ((startDate !== undefined && !isValidDate(startDate)) || (endDate !== undefined && !isValidDate(endDate))
+      || (professionalId !== undefined && !isUuid(professionalId))
+      || (status !== undefined && (typeof status !== "string" || !statuses.includes(status)))) {
+    return res.status(400).json({ error: "Filtros da agenda inválidos." });
+  }
   try {
-    const userId = (req as any).user.id;
-    const { startDate, endDate, professionalId, status } = req.query;
-
-    let query = supabaseAdmin
-      .from("appointments")
-      .select(`
-        *,
-        services (id, name, price, duration_minutes),
-        professionals (id, name, role, phone)
-      `)
-      .eq("user_id", userId)
-      .order("appointment_date", { ascending: true })
-      .order("start_time", { ascending: true });
-
+    let query = supabaseAdmin.from("appointments").select("*").eq("user_id", userId)
+      .order("appointment_date").order("start_time");
     if (startDate) query = query.gte("appointment_date", startDate as string);
     if (endDate) query = query.lte("appointment_date", endDate as string);
     if (professionalId) query = query.eq("professional_id", professionalId as string);
     if (status) query = query.eq("status", status as string);
-
-    const { data, error } = await query;
+    const { data, error } = await query.abortSignal(AbortSignal.timeout(8_000));
     if (error) throw error;
-
-    res.json({ success: true, data });
-  } catch (err: any) {
-    console.error("[Appointments] Error fetching appointments:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const appointments = (data ?? []) as Appointment[];
+    if (!appointments.length) return res.json({ success: true, data: [] });
+    const ids = appointments.map((item) => item.id);
+    const notificationRows = [];
+    // Bound PostgREST URLs and avoid reading obsolete revisions into the response.
+    for (let index = 0; index < ids.length; index += 100) {
+      const result = await supabaseAdmin.from("agentx_appointment_notifications")
+        .select("appointment_id,revision,kind,status,updated_at,expires_at").eq("user_id", userId)
+        .in("appointment_id", ids.slice(index, index + 100)).abortSignal(AbortSignal.timeout(8_000));
+      if (result.error) throw result.error;
+      notificationRows.push(...(result.data ?? []));
+    }
+    const byRevision = new Map<string, Record<string, string>>();
+    const now = Date.now();
+    for (const row of notificationRows) {
+      const statuses = byRevision.get(row.revision) ?? {};
+      if (row.status === "retry" && Date.parse(row.expires_at) <= now) continue;
+      statuses[row.kind] = row.status === "sending" && Date.parse(row.updated_at) + 120_000 <= now ? "uncertain" : row.status;
+      byRevision.set(row.revision, statuses);
+    }
+    const labelled = await appointmentLabels(userId, appointments);
+    return res.json({ success: true, data: labelled.map((row) => ({
+      ...row, notification_statuses: byRevision.get(row.schedule_revision) ?? {}
+    })) });
+  } catch (error) {
+    return appointmentError(res, error);
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", async (req: AuthRequest, res) => {
   try {
-    const userId = (req as any).user.id;
-    const {
-      service_id,
-      professional_id,
-      contact_id,
-      customer_name,
-      customer_phone,
-      appointment_date,
-      start_time,
-      end_time,
-      status,
-      notes
-    } = req.body;
-
-    if (!customer_name || !appointment_date || !start_time) {
-      return res.status(400).json({ success: false, error: "Nome, data e horário são obrigatórios." });
-    }
-
-    // Calculate end time if not provided
-    let calculatedEndTime = end_time;
-    if (!calculatedEndTime) {
-      let durationMinutes = 30;
-      if (service_id) {
-        const { data: s } = await supabaseAdmin.from("services").select("duration_minutes").eq("id", service_id).maybeSingle();
-        if (s?.duration_minutes) durationMinutes = s.duration_minutes;
-      }
-      const [h, m] = start_time.split(":").map(Number);
-      const total = h * 60 + m + durationMinutes;
-      calculatedEndTime = `${Math.floor(total / 60).toString().padStart(2, "0")}:${(total % 60).toString().padStart(2, "0")}`;
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from("appointments")
-      .insert({
-        user_id: userId,
-        contact_id: contact_id || null,
-        service_id: service_id || null,
-        professional_id: professional_id || null,
-        customer_name,
-        customer_phone: customer_phone || null,
-        appointment_date,
-        start_time,
-        end_time: calculatedEndTime,
-        status: status || "scheduled",
-        notes: notes || null
-      })
-      .select(`
-        *,
-        services (id, name, price, duration_minutes),
-        professionals (id, name, role)
-      `)
-      .single();
-
-    if (error) throw error;
-
-    res.json({ success: true, data });
-  } catch (err: any) {
-    console.error("[Appointments] Error creating appointment:", err);
-    res.status(500).json({ success: false, error: err.message });
+    const { appointment, replayed } = await saveAppointment(req.user!.id, null, req.body ?? {}, false);
+    return res.json({ success: true, data: appointment, replayed });
+  } catch (error) {
+    return appointmentError(res, error);
   }
 });
 
-router.post("/:id/reminder", async (req, res) => {
+router.put("/:id", async (req: AuthRequest, res) => {
+  if (!isUuid(req.params.id)) return res.status(404).json({ error: "Marcação não encontrada." });
   try {
-    const userId = (req as any).user.id;
-    const { data, error } = await supabaseAdmin.from("appointments")
-      .select("appointment_date,start_time,customer_phone,status")
-      .eq("id", req.params.id).eq("user_id", userId).maybeSingle();
+    const { appointment } = await saveAppointment(req.user!.id, req.params.id, req.body ?? {}, false);
+    return res.json({ success: true, data: appointment });
+  } catch (error) {
+    return appointmentError(res, error);
+  }
+});
+
+router.post("/:id/reminder", async (req: AuthRequest, res) => {
+  if (!isUuid(req.params.id)) return res.status(404).json({ error: "Marcação não encontrada." });
+  const userId = req.user!.id;
+  try {
+    const { data: appointment, error } = await supabaseAdmin.from("appointments")
+      .select("appointment_date,start_time,start_at,time_zone,schedule_revision,customer_phone,status")
+      .eq("id", req.params.id).eq("user_id", userId).abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
     if (error) throw error;
-    if (!data) return res.status(404).json({ error: "Marcação não encontrada." });
-    const jid = scheduledContactJid({ phone: data.customer_phone });
-    const timeZone = await getAppointmentTimeZone(userId);
-    const instant = appointmentInstant(data, timeZone).getTime();
-    if (!jid || !["scheduled", "confirmed"].includes(data.status) || !(instant > Date.now())) {
+    if (!appointment) return res.status(404).json({ error: "Marcação não encontrada." });
+    const now = new Date();
+    const zone = appointment.time_zone ? appointmentZone(appointment.time_zone) : await getAppointmentTimeZone(userId);
+    if (!appointment.customer_phone || !["scheduled", "confirmed"].includes(appointment.status)
+      || !(appointmentInstant(appointment, zone).getTime() > now.getTime())) {
       return res.status(409).json({ error: "A marcação precisa de estar ativa, no futuro e ter um número WhatsApp válido." });
     }
-    const sent = await whatsappManager.sendMessage(userId, jid, appointmentReminderMessage(data, timeZone));
-    if (!sent?.key?.id) {
-      return res.status(503).json({ error: "O WhatsApp não confirmou o envio. Consulta a conversa antes de tentar novamente." });
-    }
+    const result = await dispatchAppointmentNotification(userId, req.params.id, appointment.schedule_revision, manualAppointmentKind(appointment, zone, now));
+    if (result.status === "sent") return res.json({ success: true, ...result });
+    if (result.status === "retry") return res.status(503).json({ error: "O WhatsApp está desligado. O lembrete fica na fila para quando voltar a ligar." });
+    if (result.status === "sending") return res.status(409).json({ error: "Já há um envio em curso para este lembrete." });
+    return res.status(409).json({ error: result.status === "uncertain"
+      ? "O WhatsApp ainda não confirmou o envio. Verifica a conversa para evitar duplicados."
+      : "A marcação mudou ou já passou. Atualiza a agenda." });
+  } catch (error) {
+    return appointmentError(res, error);
+  }
+});
+
+router.delete("/:id", async (req: AuthRequest, res) => {
+  if (!isUuid(req.params.id)) return res.status(404).json({ error: "Marcação não encontrada." });
+  try {
+    const { data, error } = await supabaseAdmin.rpc("agentx_delete_appointment", {
+      p_user: req.user!.id, p_appointment: req.params.id
+    }).abortSignal(AbortSignal.timeout(8_000));
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Marcação não encontrada." });
     return res.json({ success: true });
   } catch (error) {
-    const offline = error instanceof Error && error.message === "WhatsApp session not connected.";
-    return res.status(503).json({ error: offline
-      ? "Liga o WhatsApp antes de enviar o lembrete."
-      : "Não foi possível confirmar o envio. Consulta a conversa antes de tentar novamente." });
+    return appointmentError(res, error);
   }
 });
 
-router.put("/:id", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const { id } = req.params;
-    const updates = req.body;
-    const { user_id: _account, ...fields } = updates;
+async function saveResource(table: "services" | "professionals", userId: string, id: unknown, payload: object) {
+  if (id && !isUuid(id)) throw new AppointmentInputError("Identificador inválido.");
+  const query = id ? supabaseAdmin.from(table).update(payload).eq("id", id).eq("user_id", userId)
+    : supabaseAdmin.from(table).insert({ ...payload, user_id: userId });
+  const { data, error } = await query.select().abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
+  if (error) throw error;
+  return data;
+}
 
-    const { data, error } = await supabaseAdmin
-      .from("appointments")
-      .update(fields)
-      .eq("id", id)
-      .eq("user_id", userId)
-      .select(`
-        *,
-        services (id, name, price, duration_minutes),
-        professionals (id, name, role)
-      `)
-      .single();
-
-    if (error) throw error;
-
-    res.json({ success: true, data });
-  } catch (err: any) {
-    console.error("[Appointments] Error updating appointment:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.delete("/:id", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const { id } = req.params;
-
-    const { error } = await supabaseAdmin
-      .from("appointments")
-      .delete()
-      .eq("id", id)
-      .eq("user_id", userId);
-
-    if (error) throw error;
-
-    res.json({ success: true, message: "Agendamento excluído com sucesso." });
-  } catch (err: any) {
-    console.error("[Appointments] Error deleting appointment:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ------------------------------------------
-// 🛠️ SERVICES CRUD
-// ------------------------------------------
-router.get("/services", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const { data, error } = await supabaseAdmin
-      .from("services")
-      .select("*")
-      .eq("user_id", userId)
-      .order("name", { ascending: true });
-
-    if (error) throw error;
-    res.json({ success: true, data });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post("/services", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const { id, name, description, duration_minutes, price, active } = req.body;
-
-    if (!name) return res.status(400).json({ success: false, error: "Nome do serviço é obrigatório." });
-
-    if (id) {
-      const { data, error } = await supabaseAdmin
-        .from("services")
-        .update({
-          name,
-          description: description || null,
-          duration_minutes: duration_minutes || 30,
-          price: price || 0,
-          active: active !== undefined ? active : true
-        })
-        .eq("id", id)
-        .eq("user_id", userId)
-        .select()
-        .single();
+for (const table of ["services", "professionals"] as const) {
+  router.get(`/${table}`, async (req: AuthRequest, res) => {
+    try {
+      const { data, error } = await supabaseAdmin.from(table).select("*").eq("user_id", req.user!.id).order("name")
+        .abortSignal(AbortSignal.timeout(8_000));
       if (error) throw error;
       return res.json({ success: true, data });
-    } else {
-      const { data, error } = await supabaseAdmin
-        .from("services")
-        .insert({
-          user_id: userId,
-          name,
-          description: description || null,
-          duration_minutes: duration_minutes || 30,
-          price: price || 0,
-          active: active !== undefined ? active : true
-        })
-        .select()
-        .single();
-      if (error) throw error;
-      return res.json({ success: true, data });
+    } catch (error) {
+      return appointmentError(res, error);
     }
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.delete("/services/:id", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const { id } = req.params;
-
-    const { error } = await supabaseAdmin
-      .from("services")
-      .delete()
-      .eq("id", id)
-      .eq("user_id", userId);
-
-    if (error) throw error;
-    res.json({ success: true, message: "Serviço removido com sucesso." });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ------------------------------------------
-// 👨‍⚕️ PROFESSIONALS CRUD
-// ------------------------------------------
-router.get("/professionals", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const { data, error } = await supabaseAdmin
-      .from("professionals")
-      .select("*")
-      .eq("user_id", userId)
-      .order("name", { ascending: true });
-
-    if (error) throw error;
-    res.json({ success: true, data });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-router.post("/professionals", async (req, res) => {
-  try {
-    const userId = (req as any).user.id;
-    const {
-      id,
-      name,
-      role,
-      email,
-      phone,
-      working_days,
-      start_time,
-      end_time,
-      break_start,
-      break_end,
-      active
-    } = req.body;
-
-    if (!name) return res.status(400).json({ success: false, error: "Nome do profissional é obrigatório." });
-
-    const payload = {
-      name,
-      role: role || null,
-      email: email || null,
-      phone: phone || null,
-      working_days: working_days || ["mon", "tue", "wed", "thu", "fri"],
-      start_time: start_time || "08:00",
-      end_time: end_time || "17:00",
-      break_start: break_start || "12:00",
-      break_end: break_end || "13:00",
-      active: active !== undefined ? active : true
-    };
-
-    if (id) {
-      const { data, error } = await supabaseAdmin
-        .from("professionals")
-        .update(payload)
-        .eq("id", id)
-        .eq("user_id", userId)
-        .select()
-        .single();
+  });
+  router.delete(`/${table}/:id`, async (req: AuthRequest, res) => {
+    if (!isUuid(req.params.id)) return res.status(404).json({ error: "Registo não encontrado." });
+    try {
+      const { data, error } = await supabaseAdmin.from(table).delete().eq("id", req.params.id).eq("user_id", req.user!.id)
+        .select("id").abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
       if (error) throw error;
-      return res.json({ success: true, data });
-    } else {
-      const { data, error } = await supabaseAdmin
-        .from("professionals")
-        .insert({ user_id: userId, ...payload })
-        .select()
-        .single();
-      if (error) throw error;
-      return res.json({ success: true, data });
+      if (!data) return res.status(404).json({ error: "Registo não encontrado." });
+      return res.json({ success: true });
+    } catch (error) {
+      return appointmentError(res, error);
     }
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+  });
+}
+
+router.post("/services", async (req: AuthRequest, res) => {
+  const { id, name, description, duration_minutes = 30, price = 0, active = true } = req.body ?? {};
+  if (typeof name !== "string" || !name.trim() || name.trim().length > 150 || !Number.isInteger(duration_minutes)
+    || duration_minutes < 1 || duration_minutes > 1440 || !Number.isFinite(Number(price)) || Number(price) < 0
+    || typeof active !== "boolean" || (description && (typeof description !== "string" || description.length > 1000))) {
+    return res.status(400).json({ error: "Confere o nome, duração e preço do serviço." });
+  }
+  try {
+    const data = await saveResource("services", req.user!.id, id, {
+      name: name.trim(), description: description?.trim() || null, duration_minutes, price: Number(price), active
+    });
+    if (!data) return res.status(404).json({ error: "Serviço não encontrado." });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return appointmentError(res, error);
   }
 });
 
-router.delete("/professionals/:id", async (req, res) => {
+router.post("/professionals", async (req: AuthRequest, res) => {
+  const { id, name, role, email, phone, working_days = days.slice(0, 5), start_time = "08:00", end_time = "17:00",
+    break_start = "12:00", break_end = "13:00", active = true } = req.body ?? {};
+  const opens = typeof start_time === "string" ? start_time.slice(0, 5) : "";
+  const closes = typeof end_time === "string" ? end_time.slice(0, 5) : "";
+  const pauseFrom = typeof break_start === "string" ? break_start.slice(0, 5) : "";
+  const pauseTo = typeof break_end === "string" ? break_end.slice(0, 5) : "";
+  if (typeof name !== "string" || !name.trim() || name.trim().length > 150
+    || !Array.isArray(working_days) || working_days.some((day) => !days.includes(day))
+    || !time.test(start_time) || !time.test(end_time) || opens >= closes || typeof active !== "boolean"
+    || ([role, email, phone].some((value) => value != null && (typeof value !== "string" || value.length > 150)))
+    || (Boolean(break_start) !== Boolean(break_end))
+    || (break_start && (!time.test(break_start) || !time.test(break_end) || pauseFrom < opens || pauseTo > closes || pauseFrom >= pauseTo))) {
+    return res.status(400).json({ error: "Confere os dias de trabalho, o horário e o intervalo." });
+  }
   try {
-    const userId = (req as any).user.id;
-    const { id } = req.params;
-
-    const { error } = await supabaseAdmin
-      .from("professionals")
-      .delete()
-      .eq("id", id)
-      .eq("user_id", userId);
-
-    if (error) throw error;
-    res.json({ success: true, message: "Profissional removido com sucesso." });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    const data = await saveResource("professionals", req.user!.id, id, {
+      name: name.trim(), role: role?.trim() || null, email: email?.trim() || null, phone: phone?.trim() || null,
+      working_days: [...new Set(working_days)], start_time: opens, end_time: closes,
+      break_start: pauseFrom || null, break_end: pauseTo || null, active
+    });
+    if (!data) return res.status(404).json({ error: "Profissional não encontrado." });
+    return res.json({ success: true, data });
+  } catch (error) {
+    return appointmentError(res, error);
   }
 });
 

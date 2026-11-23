@@ -2,7 +2,13 @@
 
 ## 1. Visão Geral
 
-O módulo de agendamento de mensagens permite que tanto os administradores humanos (via interface `/schedule`) quanto os agentes inteligentes (via instruções de linguagem natural no chat) programem o envio futuro de mensagens, avisos e faturas em PDF diretamente para os contactos no WhatsApp.
+Em **Agenda**, escolha **Contacto**, **Grupo** ou **Status**, componha a mensagem, indique a data e grave. As publicações para **Grupo** aparecem na conversa do grupo e aceitam texto, imagens, vídeo ou documentos. O servidor guarda o agendamento e tenta o envio na hora escolhida, mesmo com o painel fechado. A ligação WhatsApp tem de estar ativa no servidor.
+
+Em **Marcações**, configure serviços e horários, crie uma marcação ou partilhe o link público. O separador **Lembretes** mostra a confirmação e os lembretes por WhatsApp, com opções automáticas de 24 h e 2 h quando ativadas. O painel usa o fuso horário configurado na empresa.
+
+Em **Grupos**, a conta ligada precisa de permissão de administrador para abrir ou fechar a conversa aos membros, gerir participantes e ativar **Comprovativos no grupo**. Para publicidade imediata, **Promoção** envia texto ou detalhes de um produto do catálogo para a conversa selecionada.
+
+Para submeter um comprovativo, o cliente inclui o número `AGX-…` no texto do recibo ou na legenda de uma imagem ou PDF de até 5 MiB. O AgentX verifica o número do participante e associa a prova ao pedido dele. Em **Pedidos → Comprovativos**, a equipa pode descarregar o anexo privado e registar a aprovação ou rejeição depois de conferir o pagamento no prestador. Os dados escritos no texto ou na legenda ajudam a revisão. A equipa lê o conteúdo das imagens e dos PDF no anexo descarregado.
 
 ---
 
@@ -64,6 +70,5 @@ O agente compreende instruções relativas e absolutas em Português sem exigir 
 
 ## 5. Resiliência e Recuperação de Falhas
 
-- **Tarefas Órfãs:** Se o servidor for reiniciado enquanto uma mensagem estiver com status `processing`, o scheduler identifica automaticamente tarefas órfãs com mais de 15 minutos e reverte-as para `pending` para reprocessamento seguro.
-- **Novas Tentativas:** Em caso de falha de conexão temporária, o scheduler aplica até 3 tentativas com intervalo progressivo de 5 minutos antes de marcar definitivamente como `failed`.
+- O servidor bloqueia o agendamento enquanto tenta enviar. Uma falha confirmada antes do envio permite nova tentativa. Se o envio ficar sem confirmação, a Agenda indica que é necessário consultar o WhatsApp antes de repetir.
 

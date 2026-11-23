@@ -80,18 +80,20 @@ export class CommerceService {
     });
     if (error) throw error;
     if (!data?.id) throw new Error("A base de dados não confirmou a receção do comprovativo.");
-    if (data.created) {
-      try {
-        const settings = await sellerSettings(userId);
-        if (settings?.notification_phone && settings.notification_phone !== normalizeContactPhone(order.customer_phone)) {
-          const message = `AgentX: o pedido ${order.order_number} tem um comprovativo pendente. Abra Vendedor → Comprovativos e confirme o recebimento no prestador.`;
-          await whatsappManager.sendMessage(userId, `${settings.notification_phone}@s.whatsapp.net`, message);
-        }
-      } catch {
-        console.warn("[Commerce] Could not send seller proof notification.");
-      }
-    }
+    if (data.created) await this.notifyProofReviewer(userId, order);
     return data as { id: string; created: boolean };
+  }
+
+  async notifyProofReviewer(userId: string, order: { order_number: string; customer_phone: string }) {
+    try {
+      const settings = await sellerSettings(userId);
+      if (settings?.notification_phone && settings.notification_phone !== normalizeContactPhone(order.customer_phone)) {
+        await whatsappManager.sendMessage(userId, `${settings.notification_phone}@s.whatsapp.net`,
+          `AgentX: o pedido ${order.order_number} tem um comprovativo pendente. Abra Vendedor → Comprovativos e confirme o recebimento no prestador.`);
+      }
+    } catch {
+      console.warn("[Commerce] Could not send seller proof notification.");
+    }
   }
 
   async approveOrder(orderId: string, adminUserId: string, confirmation: {

@@ -76,6 +76,7 @@ interface Verification {
   proof_type: string;
   proof_raw_text?: string;
   proof_media_url?: string;
+  extracted_data?: { source?: string };
   currency?: string;
   confidence_score: number;
   created_at: string;
@@ -109,6 +110,21 @@ function safeProofUrl(value: string) {
     return url.protocol === "https:" || (url.protocol === "http:" && url.origin === window.location.origin) ? url.href : null;
   } catch {
     return null;
+  }
+}
+
+async function saveGroupProof(id: string) {
+  try {
+    const { base64, name } = await apiFetch(`/api/commerce/verifications/${id}/attachment`);
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  } catch {
+    toast.error("Não foi possível descarregar o comprovativo.");
   }
 }
 
@@ -644,6 +660,7 @@ export default function Orders() {
                     <CardDescription className="font-mono text-xs">
                       Cliente: +{ver.customer_phone} {ver.sender_name && `(${ver.sender_name})`}
                     </CardDescription>
+                    {ver.extracted_data?.source === "whatsapp_group" && <span className="text-xs text-slate-600">Grupo do WhatsApp</span>}
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="bg-white p-3 rounded-xl border border-slate-100">
@@ -682,6 +699,9 @@ export default function Orders() {
                         Abrir comprovativo anexado
                       </a>
                     )}
+                    {ver.proof_media_url?.startsWith("agentx-group-proof:") && <Button variant="outline" size="sm" onClick={() => void saveGroupProof(ver.id)}>
+                      <FileText size={16} className="mr-2" /> Descarregar comprovativo
+                    </Button>}
                     {!ver.order_id && <p className="text-sm text-amber-800">Este comprovativo ainda não tem um pedido associado.</p>}
                     <div className="flex gap-3 pt-2">
                       {ver.order_id && ver.recipientEvidence?.recipientMatch !== "mismatch" && (

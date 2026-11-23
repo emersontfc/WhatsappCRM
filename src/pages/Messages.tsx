@@ -40,7 +40,9 @@ import { cn } from "../lib/utils";
 import { ApiError, apiFetch } from "../lib/api";
 import { mergeMessage } from "../lib/chatMessages";
 import { useActivation } from "../lib/useActivation";
-import { VoiceRecorder } from "../components/VoiceRecorder";
+import { VoiceRecorder, type VoiceSendOutcome } from "../components/VoiceRecorder";
+import { uploadVoiceAudio, useVoicePlayback } from "../lib/voiceAudio";
+import { isAudioAttachment } from "../../shared/voiceAudio";
 import { Contact, Message, Lead, LeadStage, LEAD_STAGES } from "../types";
 import { getContactDisplay, formatPhoneNumber } from "./Contacts";
 
@@ -106,6 +108,8 @@ function VoiceMessagePlayer({ src, isOut }: { src: string; isOut: boolean }) {
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playAfterLoad = useRef(false);
+  const voice = useVoicePlayback(src);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -133,7 +137,18 @@ function VoiceMessagePlayer({ src, isOut }: { src: string; isOut: boolean }) {
     };
   }, [src]);
 
+  useEffect(() => {
+    if (!voice.url || !playAfterLoad.current || !audioRef.current) return;
+    playAfterLoad.current = false;
+    audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+  }, [voice.url]);
+
   const togglePlay = () => {
+    if (!voice.url) {
+      playAfterLoad.current = true;
+      voice.load();
+      return;
+    }
     if (!audioRef.current) return;
     if (isPlaying) {
       audioRef.current.pause();
@@ -172,10 +187,12 @@ function VoiceMessagePlayer({ src, isOut }: { src: string; isOut: boolean }) {
       "flex items-center gap-2 p-2 rounded-xl my-1 min-w-[200px] max-w-[280px]",
       isOut ? "bg-emerald-700/50 text-white" : "bg-slate-100 text-slate-800"
     )}>
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={voice.url} preload="metadata" />
       <button
         type="button"
         onClick={togglePlay}
+        disabled={voice.loading}
+        aria-label={voice.loading ? "A carregar nota de voz" : isPlaying ? "Pausar nota de voz" : "Ouvir nota de voz"}
         className={cn(
           "w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow-sm",
           isOut ? "bg-white text-emerald-700 hover:bg-slate-100" : "bg-emerald-600 text-white hover:bg-emerald-700"
@@ -197,7 +214,7 @@ function VoiceMessagePlayer({ src, isOut }: { src: string; isOut: boolean }) {
           )}
         />
         <div className="flex justify-between items-center text-[10px] font-mono leading-none opacity-80">
-          <span>{formatSec(currentTime > 0 ? currentTime : duration)}</span>
+          <span>{voice.failed ? "Áudio indisponível" : formatSec(currentTime > 0 ? currentTime : duration)}</span>
           <button
             type="button"
             onClick={cyclePlaybackRate}
@@ -347,6 +364,11 @@ export default function Messages() {
 
   // Keep the open conversation independent from optional lead and pack requests.
   const contactId = selectedContact?.id;
+  const currentChat = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    currentChat.current = contactId;
+    return () => { currentChat.current = undefined; };
+  }, [contactId]);
   useEffect(() => {
     if (!selectedContact || !contactId || !userId) return;
     let active = true;
@@ -464,7 +486,11 @@ export default function Messages() {
   };
 
   const handleSelectContact = (contact: Contact) => {
-    if (contact.id !== contactId) setMessages([]);
+    if (contact.id !== contactId) {
+      currentChat.current = contact.id;
+      setMessages([]);
+      setIsRecording(false);
+    }
     setSelectedContact(contact);
     setShowCrmPanel(false);
     setShowChatOnMobile(true);
@@ -477,32 +503,35 @@ export default function Messages() {
 
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedContact || !userId) return;
+    const destination = selectedContact?.id;
+    if (!file || !destination || !userId || isUploadingAttachment) return;
 
     setIsUploadingAttachment(true);
-    const toastId = toast.loading("Enviando anexo...");
+    const toastId = toast.loading("A preparar anexo…");
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const uploadRes = await apiFetch("/api/media/upload", {
-        method: "POST",
-        body: formData
-      });
-
-      if (!uploadRes.success || !uploadRes.url) {
-        throw new Error(uploadRes.error || "Falha no envio do anexo");
+      const audio = isAudioAttachment(file.type, file.name);
+      let upload;
+      if (audio) {
+        upload = await uploadVoiceAudio(file, file.name);
+      } else {
+        const body = new FormData();
+        body.append("file", file);
+        upload = await apiFetch("/api/media/upload", { method: "POST", body });
+        if (!upload?.success || !upload.url) throw new Error("Não foi possível carregar o anexo.");
       }
 
-      let mType = "document";
-      if (file.type.startsWith("image/")) mType = "image";
-      else if (file.type.startsWith("video/")) mType = "video";
-      else if (file.type.startsWith("audio/")) mType = "audio";
+      if (currentChat.current !== destination) {
+        toast.error("A conversa mudou. Seleciona o anexo de novo para enviar.", { id: toastId });
+        return;
+      }
 
-      await handleSend(undefined, uploadRes.url, mType, undefined, undefined, file.name, file.type);
-      toast.success("Anexo enviado com sucesso!", { id: toastId });
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao enviar anexo", { id: toastId });
+      const mediaType = audio ? "audio" : file.type.startsWith("image/") ? "image"
+        : file.type.startsWith("video/") ? "video" : "document";
+      const outcome = await handleSend(undefined, upload.url, mediaType, "", upload.duration, file.name, upload.mimetype || file.type);
+      if (outcome === "sent") toast.success("Anexo enviado.", { id: toastId });
+      else toast.dismiss(toastId);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível enviar o anexo.", { id: toastId });
     } finally {
       setIsUploadingAttachment(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -536,13 +565,15 @@ export default function Messages() {
     duration?: number,
     fileName?: string,
     mimetype?: string
-  ) => {
+  ): Promise<VoiceSendOutcome> => {
     if (e) e.preventDefault();
     const textToSend = (textOverride !== undefined ? textOverride : newMessage).trim();
-    if ((!textToSend && !mediaUrl) || !selectedContact || !userId) return;
+    if ((!textToSend && !mediaUrl) || !selectedContact || !userId || selectedContact.id !== currentChat.current) {
+      return "failed";
+    }
     if (!isActivated) {
       toast.error("Ative seu plano para enviar mensagens.");
-      return;
+      return "failed";
     }
 
     const tempId = `temp-${crypto.randomUUID()}`;
@@ -564,7 +595,6 @@ export default function Messages() {
     // 🚀 1. Instant optimistic update in conversation
     setMessages(prev => [...prev, optimisticMsg]);
     if (textOverride === undefined) setNewMessage("");
-    setIsRecording(false);
     setShowQuickReplies(false);
 
     try {
@@ -620,15 +650,18 @@ export default function Messages() {
             : message);
         });
       }
+      return "sent";
     } catch (err: any) {
       console.error("Failed to send message:", err);
       // Remove failed optimistic message and restore input text
       setMessages(prev => prev.filter(m => m.id !== tempId));
       const definitivelyRejected = err instanceof ApiError && err.status !== undefined && err.status < 500;
-      if (definitivelyRejected && !mediaUrl && textToSend && textOverride === undefined) {
+      if (definitivelyRejected && currentChat.current === selectedContact.id &&
+          !mediaUrl && textToSend && textOverride === undefined) {
         setNewMessage((draft) => draft || textToSend);
       }
       toast.error(definitivelyRejected ? err.message : "Envio por confirmar. Verifica no WhatsApp antes de repetir.");
+      return definitivelyRejected ? "failed" : "unconfirmed";
     }
   };
 
@@ -1266,11 +1299,16 @@ export default function Messages() {
                 ref={fileInputRef}
                 onChange={handleFileSelected}
                 className="hidden"
-                accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                accept="image/*,video/*,audio/*,.mp3,.m4a,.aac,.wav,.ogg,.opus,.flac,.pdf,.doc,.docx,.xls,.xlsx,.txt"
               />
               {isRecording ? (
                 <VoiceRecorder
-                  onSend={(url, duration) => handleSend(undefined, url, "audio", undefined, duration)}
+                  key={contactId}
+                  onSend={async (url, duration, media) => {
+                    const outcome = await handleSend(undefined, url, "audio", "", duration, "nota-de-voz.ogg", media?.mimetype);
+                    if (outcome === "sent" && currentChat.current === contactId) setIsRecording(false);
+                    return outcome;
+                  }}
                   onCancel={() => setIsRecording(false)}
                 />
               ) : (
@@ -1296,7 +1334,7 @@ export default function Messages() {
                     className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 text-slate-400 hover:text-emerald-600 rounded-xl"
                     onClick={handleAttachmentClick}
                     disabled={!isActivated || isUploadingAttachment}
-                    title="Anexar arquivo, foto ou documento"
+                    title="Anexar áudio, foto, vídeo ou documento"
                   >
                     <Paperclip size={18} />
                   </Button>
