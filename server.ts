@@ -1,5 +1,7 @@
 import "./backend/loadEnv.ts";
 import express from "express";
+import { randomUUID } from "node:crypto";
+import { publicConfig } from "./shared/publicConfig.ts";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import cors from "cors";
@@ -21,7 +23,9 @@ import { authenticate } from "./backend/middleware/auth.ts";
 import fs from "fs";
 
 import { whatsappManager } from "./backend/whatsappManager.ts";
-import { supabaseAdmin } from "./backend/supabaseAdmin.ts";
+import { supabaseAdmin, supabaseAdminConfigured } from "./backend/supabaseAdmin.ts";
+import { registerOperations } from "./backend/routes/operations.ts";
+import { startDigitalDeliveryWorker, type DeliveryWorkerState } from "./backend/services/digitalDeliveryWorker.ts";
 
 async function initDatabase() {
   try {
@@ -438,17 +442,18 @@ async function initDatabase() {
       END $$;
     `;
 
-    // Try to check if tables exist
-    const { error: checkError } = await supabaseAdmin.from('plans').select('id').limit(1);
-    const { error: agentsCheckError } = await supabaseAdmin.from('agents').select('id').limit(1);
-    const { error: leadsCheckError } = await supabaseAdmin.from('leads').select('id').limit(1);
-    const { error: remindersCheckError } = await supabaseAdmin.from('reminders').select('id').limit(1);
-    const { error: statusCheckError } = await supabaseAdmin.from('scheduled_status').select('id').limit(1);
-    const { error: automationsColumnError } = await supabaseAdmin.from('automations').select('media_filename').limit(1);
-    const { error: servicesCheckError } = await supabaseAdmin.from('services').select('id').limit(1);
-    const { error: professionalsCheckError } = await supabaseAdmin.from('professionals').select('id').limit(1);
-    const { error: appointmentsCheckError } = await supabaseAdmin.from('appointments').select('id').limit(1);
-    
+    const signal = AbortSignal.timeout(8_000);
+    const probe = (table: string, column = "id") => supabaseAdmin.from(table)
+      .select(column).limit(0).abortSignal(signal);
+    const [
+      { error: checkError }, { error: agentsCheckError }, { error: leadsCheckError },
+      { error: remindersCheckError }, { error: statusCheckError }, { error: automationsColumnError },
+      { error: servicesCheckError }, { error: professionalsCheckError }, { error: appointmentsCheckError }
+    ] = await Promise.all([
+      probe("plans"), probe("agents"), probe("leads"), probe("reminders"), probe("scheduled_status"),
+      probe("automations", "media_filename"), probe("services"), probe("professionals"), probe("appointments")
+    ]);
+
     const isMissing = (err: any) => err && (
       err.code === 'PGRST116' || 
       err.code === 'PGRST204' || 
@@ -469,16 +474,15 @@ async function initDatabase() {
 
     if (plansMissing || agentsMissing || leadsMissing || remindersMissing || statusMissing || columnsMissing || servicesMissing || professionalsMissing || appointmentsMissing) {
       console.log(`[Database] Missing required tables or columns. Attempting to create/update...`);
-      const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
+      const { error: createError } = await supabaseAdmin.rpc('exec_sql', { sql_query: sql }).abortSignal(AbortSignal.timeout(12_000));
       
       if (createError) {
         console.warn("[Database] Could not run automatic migration via exec_sql RPC.");
-        console.warn("[Database] PLEASE RUN THIS SQL IN SUPABASE SQL EDITOR TO FIX DATABASE:");
-        console.warn(sql);
+        console.warn("[Database] Review the schema migrations before activating modules:", createError.code);
       } else {
         console.log("[Database] Database tables created/updated successfully.");
         // Force another reload notification
-        await supabaseAdmin.rpc('exec_sql', { sql_query: "NOTIFY pgrst, 'reload schema';" });
+        await supabaseAdmin.rpc('exec_sql', { sql_query: "NOTIFY pgrst, 'reload schema';" }).abortSignal(AbortSignal.timeout(5_000));
       }
     } else {
       console.log("[Database] All required database tables and columns already exist.");
@@ -493,22 +497,32 @@ async function startServer() {
   console.log("[Startup] NODE_ENV:", process.env.NODE_ENV);
   console.log("[Startup] PORT:", process.env.PORT);
   
-  if (supabaseAdmin) {
-    await initDatabase();
-  } else {
-    console.warn("[Startup] Skipping database initialization because Supabase Admin is not available.");
-  }
-
   const app = express();
   const PORT = process.env.PORT || 3000;
+  const lifecycle = new AbortController();
+  const runtimeEnv = publicConfig(process.env);
+  const release = /^[0-9a-f]{7,40}$/.test(process.env.AGENTX_RELEASE ?? "") ? process.env.AGENTX_RELEASE! : null;
+  const schedulerEnabled = supabaseAdminConfigured && process.env.DISABLE_SCHEDULER !== "true";
+  const deliveryEnabled = supabaseAdminConfigured && process.env.DISABLE_DIGITAL_DELIVERY_WORKER !== "true";
+  let delivery: ReturnType<typeof startDigitalDeliveryWorker> | undefined;
+  const deliveryState: DeliveryWorkerState = deliveryEnabled ? "starting" : "disabled";
 
   // Trust reverse proxy (Nginx, Traefik, Docker, Cloudflare)
   app.set("trust proxy", 1);
 
   app.use(cors({
     origin: true,
-    credentials: true
+    credentials: true,
+    exposedHeaders: ["X-Request-Id"]
   }));
+  app.use("/api", (req, res, next) => {
+    const requestId = randomUUID();
+    res.set("X-Request-Id", requestId);
+    if (req.path !== "/ready") res.once("finish", () => {
+      if (res.statusCode >= 500) console.warn("[API] Request failed", { requestId, method: req.method, status: res.statusCode });
+    });
+    next();
+  });
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -530,44 +544,19 @@ async function startServer() {
     next();
   });
 
-  // Update RLS policy for logs
-  try {
-    const sql = `
-      DROP POLICY IF EXISTS "Admins can view all logs" ON public.logs;
-      CREATE POLICY "Users can view their own logs" ON public.logs
-        FOR SELECT
-        USING (auth.uid() = user_id OR EXISTS (
-            SELECT 1 FROM public.users
-            WHERE users.id = auth.uid()
-            AND users.role = 'admin'
-          ));
-    `;
-    await supabaseAdmin.rpc('exec_sql', { sql_query: sql });
-    console.log("[Database] RLS policy for logs updated successfully.");
-  } catch (err) {
-    console.error("[Database] Error updating RLS policy for logs:", err);
-  }
-
-  app.get("/api/debug/auth", (req, res) => {
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "NOT_SET";
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "NOT_SET";
-    
-    res.json({
-      success: true,
-      supabaseUrl: supabaseUrl === "NOT_SET" ? "NOT_SET" : supabaseUrl.substring(0, 15) + "...",
-      hasServiceRoleKey: serviceRoleKey !== "NOT_SET" && serviceRoleKey.length > 50,
-      nodeEnv: process.env.NODE_ENV,
-      timestamp: new Date().toISOString()
-    });
-  });
-
-  app.get("/api/debug/db", async (req, res) => {
-    try {
-      const { data, error } = await supabaseAdmin.from('agents').select('id').limit(1);
-      res.json({ success: true, data, error });
-    } catch (err: any) {
-      res.json({ success: false, error: err.message });
-    }
+  registerOperations(app, {
+    databaseConfigured: supabaseAdminConfigured,
+    frontendReady: () => {
+      if (process.env.NODE_ENV !== "production") return true;
+      const backendUrl = (process.env.SUPABASE_URL || runtimeEnv.VITE_SUPABASE_URL).trim().replace(/\/+$/, "");
+      return Boolean(runtimeEnv.VITE_SUPABASE_ANON_KEY && runtimeEnv.VITE_SUPABASE_URL &&
+        runtimeEnv.VITE_SUPABASE_URL.replace(/\/+$/, "") === backendUrl &&
+        fs.existsSync(path.join(process.cwd(), "dist", "index.html")));
+    },
+    release,
+    schedulerEnabled,
+    whatsappStatus: (userId) => whatsappManager.getSession(userId)?.status,
+    deliveryStatus: () => delivery?.status() ?? { state: deliveryState, lastSuccessAt: null }
   });
 
   // API Routes
@@ -634,22 +623,9 @@ async function startServer() {
     fs.mkdirSync(sessionsDir, { recursive: true });
   }
 
-  // Catch-all for unmatched API routes
-  app.all("/api/*", (req, res) => {
-    res.status(404).json({ 
-      success: false, 
-      error: `API route not found: ${req.method} ${req.originalUrl}` 
-    });
+  app.all(["/api", "/api/*"], (_req, res) => {
+    res.status(404).json({ success: false, error: "Rota da API indisponível." });
   });
-
-  // Disable problematic background tasks for now if requested
-  if (process.env.DISABLE_SCHEDULER !== "true") {
-    try {
-      startScheduler();
-    } catch (err) {
-      console.error("Failed to start scheduler:", err);
-    }
-  }
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -689,13 +665,8 @@ async function startServer() {
       
       try {
         let html = fs.readFileSync(indexPath, "utf-8");
-        const runtimeEnv = {
-          VITE_SUPABASE_URL: (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "https://xhnxhfhmplstqiavswgo.supabase.co").trim(),
-          VITE_SUPABASE_ANON_KEY: (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim(),
-          VITE_API_URL: (process.env.VITE_API_URL || "").trim()
-        };
-
-        const envScript = `<script>window.__ENV__ = ${JSON.stringify(runtimeEnv)};</script>`;
+        const envJson = JSON.stringify(runtimeEnv).replace(/</g, "\\u003c");
+        const envScript = `<script>window.__ENV__ = ${envJson};</script>`;
         if (html.includes("<head>")) {
           html = html.replace("<head>", `<head>\n    ${envScript}`);
         } else {
@@ -740,11 +711,19 @@ async function startServer() {
     console.error("CRITICAL: Uncaught Exception:", err);
   });
 
+  let scheduler: ReturnType<typeof startScheduler> | undefined;
   const server = app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`[Startup] Server listening on port ${PORT}`);
+    const address = server.address();
+    console.log(`[Startup] Server listening on port ${typeof address === "object" ? address?.port : PORT}`);
+    if (supabaseAdminConfigured) void initDatabase();
+    if (schedulerEnabled) scheduler = startScheduler();
+    if (deliveryEnabled) {
+      delivery = startDigitalDeliveryWorker(lifecycle.signal);
+      void delivery.completion.catch((error) => console.error("[Digital delivery] Worker stopped:", error));
+    }
     
     // Reconnect existing WhatsApp sessions in background
-    if (process.env.DISABLE_WHATSAPP_RECONNECT !== "true") {
+    if (supabaseAdminConfigured && process.env.DISABLE_WHATSAPP_RECONNECT !== "true") {
       whatsappManager.reconnectAllSessions().catch(err => {
         console.error("Failed to start session reconnection process:", err);
       });
@@ -756,6 +735,8 @@ async function startServer() {
   const gracefulShutdown = (signal: string) => {
     if (isShuttingDown) return;
     isShuttingDown = true;
+    lifecycle.abort();
+    scheduler?.stop();
     console.log(`[Shutdown] Received ${signal}. Starting graceful shutdown...`);
 
     try {

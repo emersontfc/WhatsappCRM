@@ -53,6 +53,7 @@ export default function Agent() {
   const [testMessage, setTestMessage] = useState("");
   const [testResponse, setTestResponse] = useState("");
   const [models, setModels] = useState<Record<string, string[]>>({});
+  const [sharedGeminiConfigured, setSharedGeminiConfigured] = useState<boolean | null>(null);
   const [config, setConfig] = useState<AgentConfig>({
     is_active: false,
     provider: "gemini",
@@ -78,6 +79,7 @@ export default function Agent() {
       const response = await apiFetch("/api/agent/providers/models");
       if (response.success) {
         setModels(response.data);
+        if (typeof response.sharedGeminiConfigured === "boolean") setSharedGeminiConfigured(response.sharedGeminiConfigured);
       }
     } catch (err: any) {
       console.error("Error fetching models:", err);
@@ -360,7 +362,7 @@ export default function Agent() {
 
               {config.provider === "gemini" && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
-                  {!process.env.GEMINI_API_KEY && (
+                  {sharedGeminiConfigured === false && (
                     <div className="bg-amber-50 p-4 rounded-xl border border-amber-100 flex gap-3">
                       <Info className="text-amber-600 shrink-0" size={20} />
                       <p className="text-xs text-amber-800 leading-relaxed">
@@ -368,7 +370,7 @@ export default function Agent() {
                       </p>
                     </div>
                   )}
-                  {process.env.GEMINI_API_KEY && (
+                  {sharedGeminiConfigured === true && (
                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex gap-3">
                       <Info className="text-blue-600 shrink-0" size={20} />
                       <p className="text-xs text-blue-800 leading-relaxed">
@@ -378,7 +380,7 @@ export default function Agent() {
                   )}
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-slate-700">
-                      Gemini API Key {process.env.GEMINI_API_KEY ? "(Opcional)" : "(Obrigatório)"}
+                      Chave Gemini {sharedGeminiConfigured === true ? "(opcional)" : sharedGeminiConfigured === false ? "(obrigatória)" : ""}
                     </label>
                     <div className="relative">
                       <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />

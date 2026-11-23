@@ -3,8 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
 const supabaseServiceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "").trim();
+export const supabaseAdminConfigured = Boolean(supabaseUrl && supabaseServiceRoleKey);
 
-if (!supabaseUrl || !supabaseServiceRoleKey) {
+if (!supabaseAdminConfigured) {
   const missing = [];
   if (!supabaseUrl) missing.push("SUPABASE_URL");
   if (!supabaseServiceRoleKey) missing.push("SUPABASE_SERVICE_ROLE_KEY");

@@ -42,9 +42,13 @@ VOLUME ["/app/uploads", "/app/whatsapp_sessions_data"]
 # Expose HTTP port
 EXPOSE 3000
 
-# Container healthcheck against /api/health
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -f http://localhost:3000/api/health || exit 1
+# Stage the release identifier after the build so it does not invalidate the source layers.
+ARG AGENTX_RELEASE=
+ENV AGENTX_RELEASE=$AGENTX_RELEASE
+
+# Verify the frontend and core Supabase schema before accepting a release.
+HEALTHCHECK --interval=30s --timeout=8s --start-period=20s --retries=3 \
+  CMD curl -fsS --max-time 7 http://localhost:3000/api/ready || exit 1
 
 # Start the unified backend and production static server
 CMD ["node", "./node_modules/tsx/dist/cli.mjs", "server.ts"]

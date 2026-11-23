@@ -2,14 +2,14 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
+import { publicConfig } from './shared/publicConfig.ts';
 
 export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
+  const env = publicConfig(loadEnv(mode, '.', 'VITE_'));
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
+    envPrefix: 'AGENTX_PUBLIC_',
+    define: Object.fromEntries(Object.entries(env).map(([key, value]) => [`import.meta.env.${key}`, JSON.stringify(value)])),
     resolve: {
       alias: {
         '@': path.resolve(process.cwd(), '.'),

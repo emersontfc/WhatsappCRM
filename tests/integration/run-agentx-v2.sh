@@ -64,8 +64,22 @@ SQL
   cat supabase/migrations/15_whatsapp_group_moderation.sql
   cat supabase/migrations/16_whatsapp_recurring_posts.sql
   cat tests/integration/schedule-legacy-fixture.sql
+  cat <<'SQL'
+CREATE FUNCTION public.exec_sql(text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN NULL; END; $$;
+SQL
+  cat supabase/migrations/18_agentx_operations.sql
+  echo "SELECT public.test_assert(NOT public.agentx_schedule_contract_ready(), 'operations check detects the legacy phone constraint');"
   cat supabase/migrations/17_whatsapp_schedule_compatibility.sql
   cat supabase/migrations/17_whatsapp_schedule_compatibility.sql
+  cat supabase/migrations/18_agentx_operations.sql
+  cat <<'SQL'
+SELECT public.test_assert(public.agentx_schedule_contract_ready(), 'operations check verifies the repaired schedule contract');
+SELECT public.test_assert(NOT has_function_privilege('anon', 'public.exec_sql(text)', 'EXECUTE')
+ AND NOT has_function_privilege('authenticated', 'public.exec_sql(text)', 'EXECUTE')
+ AND has_function_privilege('service_role', 'public.exec_sql(text)', 'EXECUTE'), 'legacy SQL helper is restricted to the server');
+SELECT public.test_assert(NOT has_function_privilege('authenticated', 'public.agentx_schedule_contract_ready()', 'EXECUTE'),
+ 'platform schema check requires the server role');
+SQL
   cat tests/integration/schedule-compatibility.sql
   cat tests/integration/whatsapp-sales-and-recurrence.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }

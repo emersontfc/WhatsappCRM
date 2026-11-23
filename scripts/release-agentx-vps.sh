@@ -65,7 +65,7 @@ git -C "$repo" archive "$commit" | tar -x -C "$stage/source"
 printf '\n.env\n.env.*\nuploads\nwhatsapp_sessions_data\n' >> "$stage/source/.dockerignore"
 
 printf 'A preparar a imagem %s com o AgentX em execução.\n' "$revision"
-docker build --label "org.opencontainers.image.revision=$commit" -t "$release_image" "$stage/source"
+docker build --build-arg "AGENTX_RELEASE=$commit" --label "org.opencontainers.image.revision=$commit" -t "$release_image" "$stage/source"
 
 old_image=$(docker inspect --format '{{.Image}}' "$container")
 if ! docker image tag "$old_image" "$rollback_image" 2>/dev/null; then

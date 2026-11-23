@@ -72,6 +72,8 @@ BEGIN
   EXECUTE sql_query;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+REVOKE ALL ON FUNCTION public.exec_sql(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.exec_sql(text) TO service_role;
 
 -- 6. Recarregar cache do PostgREST
 NOTIFY pgrst, 'reload schema';

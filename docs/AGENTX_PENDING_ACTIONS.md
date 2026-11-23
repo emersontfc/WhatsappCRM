@@ -9,8 +9,7 @@ Este documento regista bloqueios externos, dependências de fornecedores e açõ
 | Item | Descrição | Ação Necessária | Responsável | Estado |
 |---|---|---|---|---|
 | **Revogação da Chave Supabase** | A chave `service_role` esteve commitada em commits antigos do repositório público/privado. | No painel do Supabase (*Project Settings -> API*), clicar em **Generate new secret** para a `service_role key`. Atualizar a nova chave exclusivamente no `.env` do servidor de produção. | Administrador | ⚠️ Pendente de ação humana |
-| **Configuração de Domínio DNS** | O domínio `agentx.kazix.site` precisa apontar para o IP público da VPS. | Criar registo `A` no DNS do domínio `agentx.kazix.site` apontando para o IP da VPS Ubuntu. | Administrador | ⚠️ Pendente |
-| **Certificado SSL Let's Encrypt** | O Nginx precisa emitir o certificado HTTPS para `agentx.kazix.site`. | Após o DNS propagar, executar na VPS: `sudo certbot --nginx -d agentx.kazix.site`. | Administrador / DevOps | ⚠️ Pendente |
+| **Acesso à VPS** | O domínio público responde por HTTPS. A porta SSH recusou a ligação do ambiente de desenvolvimento. | Executar a publicação a partir da sessão administrativa da VPS e conferir a revisão em `/api/ready`. | Administrador / DevOps | Publicação pendente |
 
 ---
 
@@ -18,6 +17,14 @@ Este documento regista bloqueios externos, dependências de fornecedores e açõ
 
 | Módulo | Dependência | Estado Atual | Próximo Passo |
 |---|---|---|---|
-| **Pagamentos M-Pesa / eMola** | API Oficial dos Provedores (Vodacom / Movitel) | Fluxo manual funcional com M-Pesa (`84 885 8288`), eMola (`87 620 0662`) e validação via senhas de licença. | Preparar arquitetura de webhook para quando o cliente obtiver credenciais corporativas de API M-Pesa. |
-| **Meta WhatsApp Cloud API** | Conta Meta Business Verificada e Token de Produção | Baileys multi-device 100% ativo e funcional. | Interface de transporte abstrata `IWhatsAppTransport` implementada para permitir virada de chave no futuro. |
+| **Pagamentos manuais** | Confirmação independente no prestador | Os testes PostgreSQL cobrem aprovação concorrente e entrega única no fluxo v2. | Usar contas de teste para verificar o percurso no painel com comprovativo, revisão e acesso digital. |
+| **WhatsApp** | Sessão Baileys ligada e permissões do número | A API e os cenários simulados cobrem mensagens, anúncios e permissões. | Usar um número e grupo de teste para confirmar os envios, a receção e os estados apresentados na Agenda. |
+
+## 3. VALIDAÇÃO DA PRÓXIMA PUBLICAÇÃO
+
+1. Abra `/api/ready` e compare `release` com o commit publicado. Em **Estado da operação**, confirme a base, a ligação WhatsApp e o processador de entregas.
+2. Use um contacto de teste para receber e responder a uma mensagem. Confirme a conversa no painel. Agende um segundo envio e confirme a receção e o estado na agenda.
+3. Use um grupo de teste com um administrador e um membro. Confirme o envio do anúncio, a próxima ocorrência e a recusa de uma alteração feita pela conta sem permissão.
+4. Valide uma venda de teste desde a consulta ao catálogo e criação do pedido até à revisão humana. Nos pedidos digitais, confirme o link do comprador autorizado e a unicidade da entrega.
+5. Faça uma marcação de teste no fuso horário da empresa e confirme o lembrete no WhatsApp e a sua indicação no painel.
 

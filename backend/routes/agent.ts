@@ -11,6 +11,7 @@ router.get("/providers/models", async (req: AuthRequest, res) => {
   console.log("[Agent API] Fetching providers/models...");
   res.json({
     success: true,
+    sharedGeminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
     data: {
       gemini: ["gemini-3-flash-preview", "gemini-3.1-flash-preview", "gemini-3.1-pro-preview"],
       openai: ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4o"],

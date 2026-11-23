@@ -9,5 +9,6 @@ uploads/*
 whatsapp_sessions_data/*
 !whatsapp_sessions_data/.gitkeep
 *.log
-.env.local
+.env
+.env.*
 

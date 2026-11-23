@@ -87,14 +87,14 @@ sudo docker compose up -d --build
 
 Em staging, execute `psql -X -f migrations/apply_agentx_v2.sql` com a ligação PostgreSQL Supabase configurada em `PGDATABASE`. Faça backup antes de repetir o processo em produção. A atualização cria as tabelas v2 e mantém os pedidos, produtos, verificações e configurações existentes nas respetivas tabelas. O menu **Vendas & Pedidos** dá acesso a **Pedidos digitais**.
 
-Inicie também o worker no mesmo ambiente da aplicação para processar as entregas aprovadas:
+O servidor processa as entregas aprovadas automaticamente com as credenciais Supabase do backend. Para operar com um processo separado, define `DISABLE_DIGITAL_DELIVERY_WORKER=true` no servidor e inicia o perfil `commerce-v2`:
 
 ```bash
 sudo docker compose --profile commerce-v2 up -d --build
 sudo docker compose --profile commerce-v2 logs --tail=50 digital-worker
 ```
 
-Em instalações PM2, execute `npm run worker:digital` como processo supervisionado com as mesmas variáveis Supabase do backend. Valide primeiro o fluxo com contas de teste de comprador e financeiro. Consulte [o guia de Pedidos digitais](docs/AGENTX_V2_MILESTONE_1.md) para rollback e detalhes do fluxo.
+Em instalações PM2 com processamento separado, execute `npm run worker:digital` como processo supervisionado no mesmo ambiente Supabase. Valide primeiro o fluxo com contas de teste de comprador e financeiro. [Guia de Pedidos digitais](docs/AGENTX_V2_MILESTONE_1.md)
 
 ### 2. Verificar status e logs em tempo real:
 ```bash
@@ -195,9 +195,10 @@ sudo certbot --nginx -d seudominio.com -d www.seudominio.com
 | **Ver logs ao vivo** | `docker compose logs -f agentx` | `pm2 logs agentx-crm` |
 | **Reiniciar sistema** | `docker compose restart agentx` | `pm2 restart agentx-crm` |
 | **Ver uso de memória/CPU** | `docker stats agentx-crm` | `pm2 monit` |
-| **Testar Healthcheck API** | `curl -f http://localhost:3000/api/health` | `curl -f http://localhost:3000/api/health` |
+| **Verificar se o processo responde** | `curl -f http://localhost:3000/api/health` | `curl -f http://localhost:3000/api/health` |
+| **Verificar a versão e o acesso ao Supabase** | `curl -f http://localhost:3000/api/ready` | `curl -f http://localhost:3000/api/ready` |
 
 ---
 
-Tudo pronto! Sua plataforma **AgentX** está 100% preparada para atender clientes em escala na sua VPS! 🚀
+`/api/ready` verifica a compilação, a configuração pública e as tabelas essenciais do CRM. No painel autenticado, **Estado da operação** mostra também a ligação WhatsApp, as migrações necessárias e o estado do processamento de entregas. A validação de cada módulo em produção usa as contas e números de teste da empresa.
 

@@ -1,4 +1,5 @@
 import { Workflows } from "../components/Workflows";
+import { OperationsStatus } from "../components/OperationsStatus";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
@@ -407,32 +408,6 @@ useEffect(() => {
 
     return () => clearInterval(interval);
   }, [userId, chartMetric]);
-
-  const debugAuth = async () => {
-    try {
-      const frontendUrl = (import.meta.env.VITE_SUPABASE_URL || "NOT_SET").substring(0, 15) + "...";
-      const backendResponse = await apiFetch("/api/debug/auth");
-      
-      const backendUrl = backendResponse.supabaseUrl;
-      const match = frontendUrl === backendUrl;
-      
-      if (match) {
-        toast.success("Configuração de Auth consistente entre Frontend e Backend.");
-      } else {
-        toast.error(`Inconsistência de Auth detectada! Frontend: ${frontendUrl}, Backend: ${backendUrl}. Verifique as variáveis de ambiente no Render.`);
-      }
-      
-      console.log("Debug Auth Result:", {
-        frontendUrl,
-        backendUrl,
-        match,
-        backendInfo: backendResponse
-      });
-    } catch (err: any) {
-      console.error("Debug auth failed:", err);
-      toast.error("Falha ao verificar configuração de auth: " + err.message);
-    }
-  };
 
   const fetchRecentMessages = async (uId: string) => {
     if (!uId) return;
@@ -1025,6 +1000,7 @@ useEffect(() => {
       </div>
 
       <Workflows accountId={userId} niche={niche} whatsappStatus={status} free={isFree} />
+      {userId && <OperationsStatus key={userId} accountId={userId} />}
 
       {/* Stats Grid - 3 Dynamic Niche KPIs + WhatsApp Plan Limit */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">

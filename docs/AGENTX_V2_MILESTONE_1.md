@@ -5,7 +5,7 @@ Este marco liga uma encomenda digital a um comprador com conta Supabase Auth. O 
 ## Executar em ambiente de teste
 
 1. Use um projeto Supabase de teste e credenciais da base de dados. Com `PGDATABASE` definido com a ligação PostgreSQL de uma sessão autorizada, execute `psql -X -f migrations/apply_agentx_v2.sql`. O script aplica as quatro migrações por ordem, ignora etapas já aplicadas e verifica os objetos necessários no fim. Em Supabase SQL Editor, execute os quatro ficheiros datados por ordem; o script agregador usa comandos exclusivos do `psql`.
-2. Inicie a aplicação com `npm run dev` e o processo de entrega com `npm run worker:digital`. O worker usa `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`. Execute-o como processo separado e supervisione os seus logs. Em Docker Compose, ative o perfil `commerce-v2` após as migrações com `docker compose --profile commerce-v2 up -d --build`.
+2. Inicie a aplicação com `npm run dev`. O servidor processa a outbox de entregas usando `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`. Para executar `npm run worker:digital` como processo separado, configure `DISABLE_DIGITAL_DELIVERY_WORKER=true` no servidor web e use as mesmas credenciais Supabase.
 3. Abra **Pedidos digitais** em `/digital-orders`. Use sessões de teste distintas para o titular da empresa, o responsável financeiro e o comprador. As rotas abaixo usam o prefixo `/api/v2/commerce` e o cabeçalho `Authorization: Bearer <access_token>`.
 4. Crie uma encomenda de teste, submeta um comprovativo simulado e peça a entrega antes e depois da revisão. Confirme também que o download falha com a sessão de outro comprador.
 
@@ -92,6 +92,10 @@ Aplique as migrações 14 a 17 em `supabase/migrations`, por ordem, depois das m
 Em bases que já receberam 12 a 16, execute apenas `17_whatsapp_schedule_compatibility.sql`
 no SQL Editor. A migração permite que a agenda guarde mensagens sem preencher a coluna
 antiga `phone`, mantém o histórico e aplica o isolamento entre contas na agenda.
+
+Depois, aplique `18_agentx_operations.sql`. A migração restringe a função SQL administrativa
+à credencial de servidor e permite ao painel diagnosticar as restrições que impedem
+agendar contactos, grupos e Status. As duas migrações podem ser executadas novamente.
 
 - Uma consulta comercial pode criar ou atualizar o lead. Um pedido novo fica ligado ao lead
   e aparece em **Vendas & Pedidos** com pagamento pendente. Repetir a mesma mensagem

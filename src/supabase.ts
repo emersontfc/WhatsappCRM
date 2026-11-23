@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { isPublicSupabaseKey } from "../shared/publicConfig";
 
 // Safely obtain runtime (window.__ENV__) or build-time (import.meta.env) credentials
 const win = typeof window !== "undefined" ? (window as any) : {};
@@ -23,16 +24,7 @@ if (supabaseUrl && !supabaseUrl.startsWith("http")) {
   supabaseUrl = `https://${supabaseUrl}.supabase.co`;
 }
 
-// Key validator: ensures it's a real 3-part JWT, not a placeholder
-const isValidKey = (key: string) => Boolean(
-  key && 
-  key.split(".").length === 3 && 
-  !key.includes("COLE_") && 
-  !key.includes("sua_chave") &&
-  !key.includes("SUA_CHAVE")
-);
-
-const isValidAnonKey = isValidKey(supabaseAnonKey);
+const isValidAnonKey = isPublicSupabaseKey(supabaseAnonKey);
 
 export const supabase = (supabaseUrl && isValidAnonKey) 
   ? createClient(supabaseUrl, supabaseAnonKey)
@@ -90,39 +82,8 @@ export const getSession = async () => {
   return sessionPromise;
 };
 
-// Helper to get current user with simple caching to avoid concurrent auth lock issues
-let cachedUser: any = null;
-let lastUserFetchTime = 0;
-let userPromise: Promise<any> | null = null;
-const USER_CACHE_TTL = 1000 * 60; // 1 minute
-
 export const getUser = async () => {
-  const now = Date.now();
-  if (cachedUser && (now - lastUserFetchTime < USER_CACHE_TTL)) {
-    return cachedUser;
-  }
-
-  if (userPromise) {
-    return userPromise;
-  }
-
-  userPromise = (async () => {
-    try {
-      const session = await getSession();
-      const user = session?.user || null;
-      console.log("getUser: Fetched user from session:", user?.email);
-      cachedUser = user;
-      lastUserFetchTime = Date.now();
-      return cachedUser;
-    } catch (err) {
-      console.error("Error in getUser:", err);
-      return null;
-    } finally {
-      userPromise = null;
-    }
-  })();
-
-  return userPromise;
+  return (await getSession())?.user ?? null;
 };
 
 // Helper to get current user ID
