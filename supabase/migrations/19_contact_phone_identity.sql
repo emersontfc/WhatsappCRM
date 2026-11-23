@@ -21,30 +21,62 @@ BEGIN
 END;
 $$;
 
--- Keep legacy rows and their foreign keys. New phone writes must use one identity per account.
-ALTER TABLE public.contacts ALTER COLUMN phone DROP NOT NULL;
+-- Retain historical duplicate rows and their references. Reserve each phone for one contact.
+ALTER TABLE public.contacts ALTER COLUMN phone DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS agentx_legacy_phone_duplicate boolean NOT NULL DEFAULT false;
+DROP TRIGGER IF EXISTS agentx_guard_contact_phone ON public.contacts;
+DROP INDEX IF EXISTS public.agentx_contact_unique_canonical_phone;
+
+WITH ranked AS (
+  SELECT c.id, row_number() OVER (
+    PARTITION BY c.user_id, normalized.phone
+    ORDER BY (c.phone = normalized.phone) DESC, c.created_at NULLS LAST, c.id
+  ) AS position
+  FROM public.contacts c
+  CROSS JOIN LATERAL (SELECT public.agentx_contact_phone(c.phone) AS phone) normalized
+  WHERE NOT c.agentx_legacy_phone_duplicate AND normalized.phone IS NOT NULL
+    AND normalized.phone IS DISTINCT FROM NULLIF(regexp_replace(c.lid, '[:@].*$', ''), '')
+)
+UPDATE public.contacts c SET agentx_legacy_phone_duplicate = true
+FROM ranked
+WHERE c.id = ranked.id AND ranked.position > 1;
+
 CREATE INDEX IF NOT EXISTS agentx_contact_phone_lookup ON public.contacts (user_id, public.agentx_contact_phone(phone));
-CREATE UNIQUE INDEX IF NOT EXISTS agentx_contact_unique_canonical_phone ON public.contacts (user_id, phone)
-  WHERE phone = public.agentx_contact_phone(phone)
-    AND phone IS DISTINCT FROM NULLIF(regexp_replace(lid, '[:@].*$', ''), '');
+CREATE UNIQUE INDEX agentx_contact_unique_canonical_phone ON public.contacts (user_id, public.agentx_contact_phone(phone))
+  WHERE NOT agentx_legacy_phone_duplicate
+    AND public.agentx_contact_phone(phone) IS NOT NULL
+    AND public.agentx_contact_phone(phone) IS DISTINCT FROM NULLIF(regexp_replace(lid, '[:@].*$', ''), '');
 
 CREATE OR REPLACE FUNCTION public.agentx_guard_contact_phone()
 RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
 DECLARE
-  canonical text;
+  canonical text := public.agentx_contact_phone(NEW.phone);
+  new_lid text := regexp_replace(COALESCE(NEW.lid, ''), '[:@].*$', '');
+  old_lid text;
 BEGIN
+  -- The migration marks historical duplicates. Writes cannot claim that exception for a new identity.
+  NEW.agentx_legacy_phone_duplicate := false;
+  IF TG_OP = 'UPDATE' THEN
+    old_lid := regexp_replace(COALESCE(OLD.lid, ''), '[:@].*$', '');
+    IF OLD.user_id = NEW.user_id AND OLD.phone IS NOT DISTINCT FROM NEW.phone
+      AND (canonical = old_lid) IS NOT DISTINCT FROM (canonical = new_lid) THEN
+      NEW.agentx_legacy_phone_duplicate := OLD.agentx_legacy_phone_duplicate;
+      RETURN NEW;
+    END IF;
+  END IF;
+
   IF NEW.phone IS NULL OR btrim(NEW.phone) = '' THEN
     NEW.phone := NULL;
     RETURN NEW;
   END IF;
-  canonical := public.agentx_contact_phone(NEW.phone);
-  IF canonical IS NULL OR canonical = regexp_replace(COALESCE(NEW.lid, ''), '[:@].*$', '') THEN
+  IF canonical IS NULL OR canonical = new_lid THEN
     RAISE EXCEPTION 'Introduce um número de telefone válido' USING ERRCODE = '22023';
   END IF;
   NEW.phone := canonical;
   -- Serialise by account so a legacy variant and a canonical insert cannot race.
   PERFORM pg_advisory_xact_lock(hashtextextended('agentx-contact:' || NEW.user_id::text, 0));
-  IF TG_OP = 'UPDATE' AND OLD.user_id = NEW.user_id AND public.agentx_contact_phone(OLD.phone) = canonical THEN
+  IF TG_OP = 'UPDATE' AND OLD.user_id = NEW.user_id AND public.agentx_contact_phone(OLD.phone) = canonical AND canonical <> old_lid THEN
+    NEW.agentx_legacy_phone_duplicate := OLD.agentx_legacy_phone_duplicate;
     RETURN NEW;
   END IF;
   IF EXISTS (
@@ -58,8 +90,7 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS agentx_guard_contact_phone ON public.contacts;
-CREATE TRIGGER agentx_guard_contact_phone BEFORE INSERT OR UPDATE OF phone, user_id ON public.contacts
+CREATE TRIGGER agentx_guard_contact_phone BEFORE INSERT OR UPDATE OF phone, user_id, lid, agentx_legacy_phone_duplicate ON public.contacts
   FOR EACH ROW EXECUTE FUNCTION public.agentx_guard_contact_phone();
 
 CREATE OR REPLACE FUNCTION public.agentx_save_contact(
@@ -83,7 +114,7 @@ BEGIN
     SELECT * INTO saved FROM public.contacts c
     WHERE c.user_id = p_user_id AND public.agentx_contact_phone(c.phone) = phone_number
       AND phone_number <> regexp_replace(COALESCE(c.lid, ''), '[:@].*$', '')
-    ORDER BY (c.phone = phone_number) DESC, c.created_at NULLS LAST, c.id LIMIT 1;
+    ORDER BY c.agentx_legacy_phone_duplicate, (c.phone = phone_number) DESC, c.created_at NULLS LAST, c.id LIMIT 1;
   END IF;
   IF saved.id IS NULL AND contact_lid IS NOT NULL THEN
     SELECT * INTO saved FROM public.contacts c

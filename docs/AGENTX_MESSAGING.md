@@ -116,6 +116,6 @@ O teste cria PostgreSQL e PostgREST descartáveis e inicia o servidor real do Ag
 
 ## Migração 19 e importação de contactos
 
-Aplique `supabase/migrations/19_contact_phone_identity.sql` antes de atualizar o servidor. A pré-verificação da versão exige a migração. As gravações passam a reutilizar o contacto pelo número internacional na mesma conta. A migração preserva as linhas e conversas antigas, incluindo eventuais duplicados históricos.
+Aplique `supabase/migrations/19_contact_phone_identity.sql` antes de atualizar o servidor. A pré-verificação da versão exige a migração. Se a versão anterior da migração falhou com erro `23505` ao criar o índice, execute novamente o ficheiro completo atualizado. A migração preserva os contactos e as conversas existentes. Quando há duplicados históricos, escolhe um contacto por número e por conta para reutilizar nas próximas gravações.
 
 O CSV aceita as colunas `Nome,Telefone` e separadores de vírgula ou ponto e vírgula. Por exemplo, `84 123 4567`, `+258 84 123 4567` e `00258 841234567` são gravados como `258841234567`. A importação do WhatsApp usa o número telefónico quando a integração o fornece e ignora contactos que só têm um identificador interno.

@@ -140,8 +140,21 @@ try {
   assert.equal((await call("/chats", -1)).status, 401);
 
   const legacyId = "00000000-0000-4000-8000-000000000013";
+  const primaryId = "00000000-0000-4000-8000-000000000015";
+  const duplicateId = "00000000-0000-4000-8000-000000000016";
   assert.equal((await saveContact("258849998888", -1)).status, 401);
   assert.equal((await saveContact("104928502847592@lid")).status, 400);
+  const exactMatch = await saveContact("+258 85 777 7777");
+  assert.equal(exactMatch.status, 200);
+  assert.deepEqual((await exactMatch.json()).data,
+    { id: primaryId, phone: "258857777777", name: "Contacto guardado", created: false });
+  const history = await call(`/chats/${duplicateId}/messages`);
+  assert.equal((await history.json()).messages[0].msg_id, "legacy-duplicate-message");
+  const exactRows = await fetch(new URL(`/contacts?user_id=eq.${owner}&phone=eq.258857777777&select=id,agentx_legacy_phone_duplicate&order=id`, rest),
+    { headers: { authorization: `Bearer ${serviceKey}` } });
+  assert.deepEqual(await exactRows.json(), [
+    { id: primaryId, agentx_legacy_phone_duplicate: false }, { id: duplicateId, agentx_legacy_phone_duplicate: true }
+  ]);
   const legacy = await saveContact("258849998888");
   assert.equal(legacy.status, 200);
   assert.deepEqual((await legacy.json()).data,
@@ -150,7 +163,7 @@ try {
   assert.equal(legacyHistory[0].msg_id, "legacy-contact-message");
   const synced = await call("/sync-contacts", 0, {});
   assert.equal(synced.status, 200);
-  assert.deepEqual(await synced.json(), { success: true, total: 4, savedCount: 2, activeChatsCount: 0, cleanedCount: 0, withoutPhone: 1, failed: 0 });
+  assert.deepEqual(await synced.json(), { success: true, total: 6, savedCount: 2, activeChatsCount: 0, cleanedCount: 0, withoutPhone: 1, failed: 0 });
   const resolvedContact = await saveContact("83 123 4567");
   assert.equal(resolvedContact.status, 200);
   assert.equal((await resolvedContact.json()).data.phone, "258831234567");
@@ -181,9 +194,14 @@ try {
   ]);
   const directDuplicate = await fetch(new URL("/contacts", rest), {
     method: "POST", headers: { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ user_id: owner, name: "Duplicado", phone: "0861234567" })
+    body: JSON.stringify({ user_id: owner, name: "Duplicado", phone: "0861234567", agentx_legacy_phone_duplicate: true })
   });
   assert.equal(directDuplicate.status, 409);
+  const changeDuplicate = await fetch(new URL(`/contacts?id=eq.${duplicateId}`, rest), {
+    method: "PATCH", headers: { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ phone: "0861234567" })
+  });
+  assert.equal(changeDuplicate.status, 409);
 
   let page;
   if (process.env.AGENTX_INBOX_BROWSER === "1") {

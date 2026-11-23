@@ -9,7 +9,7 @@ CREATE TABLE public.contacts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
   name text, phone text, lid text, tags text[], notes text, unread_count integer DEFAULT 0,
   last_message_at timestamptz, last_message_text text, ai_paused boolean DEFAULT false,
-  created_at timestamptz DEFAULT now(), UNIQUE(user_id, phone)
+  created_at timestamptz DEFAULT now()
 );
 CREATE TABLE public.messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
@@ -38,9 +38,13 @@ INSERT INTO public.contacts (id, user_id, name, phone, lid, tags) VALUES
   ('00000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000002', 'Cliente da outra loja', '258870000001', NULL, '{}');
 INSERT INTO public.contacts (id, user_id, name, phone, tags, created_at) VALUES
   ('00000000-0000-4000-8000-000000000013', '00000000-0000-4000-8000-000000000001', 'Contacto legado', '+258 84 999 8888', '{}', '2026-01-01'),
-  ('00000000-0000-4000-8000-000000000014', '00000000-0000-4000-8000-000000000001', 'Variante legada', '849998888', '{}', '2026-02-01');
+  ('00000000-0000-4000-8000-000000000014', '00000000-0000-4000-8000-000000000001', 'Variante legada', '849998888', '{}', '2026-02-01'),
+  ('00000000-0000-4000-8000-000000000015', '00000000-0000-4000-8000-000000000001', 'Primeiro contacto', '258857777777', '{}', '2026-01-01'),
+  ('00000000-0000-4000-8000-000000000016', '00000000-0000-4000-8000-000000000001', 'Contacto duplicado antigo', '258857777777', '{}', '2026-02-01');
 INSERT INTO public.messages (user_id, contact_id, type, text, msg_id, timestamp)
 VALUES ('00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000022',
         'inbound', 'Mensagem privada da outra loja', 'other-store-message', now()),
        ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000014',
-        'inbound', 'Histórico de um contacto anterior à migração', 'legacy-contact-message', '2026-02-02');
+        'inbound', 'Histórico de um contacto anterior à migração', 'legacy-contact-message', '2026-02-02'),
+       ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000016',
+        'inbound', 'Histórico do duplicado anterior à migração', 'legacy-duplicate-message', '2026-02-03');
