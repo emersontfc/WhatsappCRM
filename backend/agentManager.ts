@@ -4,6 +4,9 @@ import { GoogleGenAI } from "@google/genai";
 import { commerceService } from "./services/commerceService.ts";
 import { executeAction } from "./actionEngine.ts";
 import { executeToolByName, getToolsPromptDescription, UserRole, ToolResult } from "./tools/index.ts";
+import { submitPaymentProofTool } from "./tools/commerce/submitPaymentProof.ts";
+import { parseMozambicanReceiptSMS } from "./services/paymentProofSms.ts";
+import { normalizeContactPhone } from "../shared/contactPhone.ts";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "your-fallback-encryption-key-32-chars-long";
 const IV_LENGTH = 16;
@@ -502,12 +505,8 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
   } else if (toolName === "getProductsCatalog" && Array.isArray(result.data)) {
     const list = result.data.map((p: any, i: number) => `*${i + 1}. ${p.name}* — ${p.price}\n   _${p.description || "Sem descrição"}_ · Stock: ${p.stock ?? 0}`).join("\n\n");
     formatted = `📦 *Catálogo de Produtos & Serviços:*\n\n${list || "Nenhum produto corresponde à pesquisa."}${list && result.message ? `\n\n${result.message}` : ""}`;
-  } else if (toolName === "createOrder" && result.data) {
-    formatted = `🛍️ *Pedido ${result.data.orderNumber} Criado com Sucesso!*\n\n💰 *Total:* ${result.data.total}\n💳 *Método:* ${result.data.paymentMethod.toUpperCase()}\n\nℹ️ *Instruções:* ${result.data.instructions}`;
   } else if (toolName === "getOrderStatus" && result.data) {
     formatted = `🔍 *Situação do Pedido ${result.data.orderNumber}:*\n\n📋 *Status:* ${result.data.statusLabel}\n💰 *Valor:* ${result.data.total}`;
-  } else if (toolName === "submitPaymentProof" && result.data) {
-    formatted = `🧾 *Comprovativo Registrado com Sucesso!*\n\n📌 *Referência:* ${result.data.reference}\n💰 *Valor Informado:* ${result.data.amount} MT\n💳 *Provedor:* ${result.data.provider.toUpperCase()}\n\n⏳ O pagamento foi enviado para validação pelo financeiro e seu pedido será liberado logo após confirmação!`;
   } else if (toolName === "getFinancialMetrics" && result.data) {
     formatted = `📊 *Métricas Financeiras (${result.data.period}):*\n\n💰 *Faturamento Aprovado:* ${Number(result.data.totalRevenue).toLocaleString("pt-MZ")} MT\n✅ *Vendas Concluídas:* ${result.data.paidOrdersCount} pedidos\n⏳ *Comprovativos Pendentes:* ${result.data.pendingVerificationsCount}\n🛒 *Pedidos em Aberto:* ${result.data.awaitingPaymentCount}`;
   } else if (toolName === "qualifyLead" && result.data) {
@@ -519,9 +518,9 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
   return formatted;
 }
 
-export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false, sourceMessageId?: string) {
+export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false, sourceMessageId?: string, contactId?: string) {
   try {
-    console.log(`[AI Engine] Checking agents for ${userId}, text: "${text}" (isSelfMessage: ${isSelfMessage})`);
+    console.log(`[AI Engine] Checking agents for ${userId} (isSelfMessage: ${isSelfMessage})`);
     const { data: agents, error } = await supabaseAdmin
       .from("agents")
       .select("*")
@@ -556,7 +555,12 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     const cleanSenderLid = isLid ? jid.split("@")[0].split(":")[0].replace(/\D/g, "") : "";
 
     let contactData: any = null;
-    if (isLid && cleanSenderLid) {
+    if (contactId) {
+      const { data } = await supabaseAdmin.from("contacts").select("id, ai_paused, name, phone, tags")
+        .eq("id", contactId).eq("user_id", userId).maybeSingle();
+      contactData = data;
+    }
+    if (!contactData && isLid && cleanSenderLid) {
       const { data: byLid } = await supabaseAdmin
         .from("contacts")
         .select("id, ai_paused, name, phone, tags")
@@ -617,8 +621,8 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
                     (Boolean(myPhone) && cleanSenderPhone === myPhone);
 
     const role: UserRole = isOwner ? "admin" : "lead";
-    const linkedPhone = String(contactData?.phone || "").replace(/\D/g, "");
-    const toolPhone = cleanSenderPhone || (linkedPhone !== cleanSenderLid ? linkedPhone : "");
+    const linkedPhone = normalizeContactPhone(contactData?.phone);
+    const toolPhone = normalizeContactPhone(cleanSenderPhone) || (linkedPhone !== cleanSenderLid ? linkedPhone : "") || "";
 
 
     console.log(`[AI Engine] Message evaluation for ${jid}:`);
@@ -632,6 +636,17 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     // Leads are skipped if human takeover (ai_paused) is active
     if (!isOwner && contactData?.ai_paused) {
       console.log(`[AI Engine] AI is paused for contact ${cleanSenderPhone || cleanSenderLid} (${contactData.name || "Human assumed"}). Skipping AI.`);
+      return;
+    }
+
+    const toolContext = {
+      userId, phone: toolPhone, jid, role, whatsappManager, userPhone: myPhone, contactId: contactData?.id,
+      contactName: contactData?.name, messageId: sourceMessageId, incomingText: text
+    };
+    const receipt = role === "lead" ? parseMozambicanReceiptSMS(text) : null;
+    if (receipt && receipt.confidenceScore >= 0.9 && receipt.transactionReference && receipt.amount > 0) {
+      const proof = await submitPaymentProofTool.execute({}, toolContext);
+      await whatsappManager.sendMessage(userId, jid, proof.message);
       return;
     }
 
@@ -751,24 +766,14 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         
         // 1. Tool Registry execution (New Agentic Architecture)
         if (parsed.tool) {
-          console.log(`[AI Engine] Executing Tool: "${parsed.tool}" for role "${role}" with args:`, JSON.stringify(parsed.args));
-          const toolResult = await executeToolByName(parsed.tool, parsed.args || {}, {
-            userId,
-            phone: toolPhone,
-            jid,
-            role,
-            whatsappManager,
-            userPhone: myPhone,
-            contactId: contactData?.id,
-            contactName: contactData?.name,
-            messageId: sourceMessageId,
-            incomingText: text
-          });
+          console.log(`[AI Engine] Executing Tool: "${parsed.tool}" for role "${role}"`);
+          const toolResult = await executeToolByName(parsed.tool, parsed.args || {}, toolContext);
 
           if (toolResult) {
             actionResult = toolResult;
-            const formatted = formatToolOutputForWhatsApp(parsed.tool, toolResult);
-            if (["getProductsCatalog", "createOrder", "get_booking_link"].includes(parsed.tool) || !finalReply.trim()) {
+            const formatted = role === "lead" && ["createOrder", "submitPaymentProof"].includes(parsed.tool)
+              ? toolResult.message : formatToolOutputForWhatsApp(parsed.tool, toolResult);
+            if (["getProductsCatalog", "createOrder", "submitPaymentProof", "get_booking_link"].includes(parsed.tool) || !finalReply.trim()) {
               finalReply = formatted;
             } else {
               finalReply = `${finalReply}\n\n${formatted}`;

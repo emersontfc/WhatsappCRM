@@ -1,5 +1,6 @@
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
+import { isSellerMethod, sellerMethods } from "../../../shared/seller.ts";
 
 export const createOrderTool: ToolDefinition = {
   name: "createOrder",
@@ -63,10 +64,19 @@ export const createOrderTool: ToolDefinition = {
       const order = result.order;
       const orderMethod = order.payment_method;
       const totalFormatted = `${order.total_amount} ${order.currency}`;
+      if (order.status !== "created" && order.status !== "awaiting_payment") {
+        const instructions = order.status === "verification_pending" ? "O comprovativo aguarda revisão. Aguarde o resultado."
+          : order.status === "paid" || order.status === "fulfilled" ? "O pagamento já foi confirmado."
+          : "Consulte o estado do pedido com a equipa antes de pagar.";
+        return { success: true, message: `Pedido ${order.order_number} · ${totalFormatted}. ${instructions}` };
+      }
 
       // 4. Instructions based on payment method
       let instructions = "";
-      if (orderMethod === "mpesa") {
+      const destination = order.seller_payment;
+      if (destination && isSellerMethod(destination.method)) {
+        instructions = `Pague ${totalFormatted} por ${sellerMethods[destination.method]} para ${destination.recipient} (titular: ${destination.name}). Envie o texto do comprovativo nesta conversa com o número ${order.order_number}.`;
+      } else if (orderMethod === "mpesa") {
         instructions = `Envie ${totalFormatted} via M-Pesa para o número oficial da empresa e envie o comprovativo (SMS ou print) nesta conversa.`;
       } else if (orderMethod === "emola") {
         instructions = `Envie ${totalFormatted} via e-Mola para o número oficial da empresa e envie o comprovativo nesta conversa.`;
@@ -76,7 +86,7 @@ export const createOrderTool: ToolDefinition = {
 
       return {
         success: true,
-        message: `Pedido ${order.order_number} criado com sucesso no valor de ${totalFormatted}! ${instructions}`,
+        message: `Pedido ${order.order_number} · ${totalFormatted}. ${instructions}`,
         data: {
           orderNumber: order.order_number,
           orderId: order.id,
@@ -88,8 +98,9 @@ export const createOrderTool: ToolDefinition = {
     } catch (err: any) {
       return {
         success: false,
-        message: `Erro ao criar pedido: ${err.message}`,
-        error: err.message
+        message: err.code === "22023" || err.code === "P0001"
+          ? "O produto ainda não está disponível nas condições pedidas. Confirma o stock e a entrega com a equipa."
+          : "Não foi possível criar o pedido. Tenta novamente ou fala com a equipa."
       };
     }
   }

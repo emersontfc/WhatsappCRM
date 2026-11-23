@@ -23,6 +23,7 @@ import Leads from "./pages/Leads";
 import ActivityLog from "./pages/ActivityLog";
 import Appointments from "./pages/Appointments";
 import Orders from "./pages/Orders";
+import Seller from "./pages/Seller";
 import DigitalOrders from "./pages/DigitalOrders";
 import PublicBooking from "./pages/PublicBooking";
 import Docs from "./pages/Docs";
@@ -89,6 +90,10 @@ export default function App() {
         <Route
           path="/appointments"
           element={user ? <Layout><Appointments key={user?.id} /></Layout> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/seller"
+          element={user ? <Layout><Seller key={user.id} /></Layout> : <Navigate to="/login" replace />}
         />
         <Route
           path="/orders"

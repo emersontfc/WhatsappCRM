@@ -2,6 +2,9 @@ import { randomBytes } from "node:crypto";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { PRODUCT_FILE_BUCKET } from "./catalogDeliverables.ts";
 import { whatsappManager } from "../whatsappManager.ts";
+import { normalizeContactPhone } from "../../shared/contactPhone.ts";
+import type { ExtractedPaymentData } from "./paymentProofSms.ts";
+import { sellerSettings } from "./sellerWorkspace.ts";
 
 export interface CreateOrderParams {
   userId: string;
@@ -48,11 +51,11 @@ export class CommerceService {
   }
 
   async createOrder(params: CreateOrderParams) {
-    const { data: order, error } = await supabaseAdmin.rpc("agentx_whatsapp_create_order", {
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_create_order", {
       p_user: params.userId,
       p_product: params.productId,
       p_quantity: params.quantity,
-      p_phone: params.customerPhone.replace(/\D/g, ""),
+      p_phone: normalizeContactPhone(params.customerPhone),
       p_customer: params.customerName,
       p_contact: params.contactId ?? null,
       p_method: params.paymentMethod,
@@ -63,170 +66,66 @@ export class CommerceService {
     return { order };
   }
 
-  /**
-   * Submits a payment proof for an order or user, pending admin review
-   */
-  async submitPaymentProof(params: {
-    userId: string;
-    orderId?: string;
-    customerPhone: string;
-    provider: string;
-    transactionReference: string;
-    amount: number;
-    senderPhone?: string;
-    senderName?: string;
-    proofType: "sms" | "image" | "pdf" | "text";
-    proofRawText?: string;
-    proofMediaUrl?: string;
-    confidenceScore?: number;
-    extractedData?: any;
-  }) {
-    const { 
-      userId, 
-      orderId, 
-      customerPhone, 
-      provider, 
-      transactionReference, 
-      amount, 
-      senderPhone, 
-      senderName, 
-      proofType, 
-      proofRawText, 
-      proofMediaUrl, 
-      confidenceScore = 0.85, 
-      extractedData = {} 
-    } = params;
-
-    const cleanPhone = customerPhone.replace(/\D/g, "");
-
-    if (orderId) {
-      const { data: eligible, error } = await supabaseAdmin.from("orders").select("id")
-        .eq("id", orderId).eq("user_id", userId).eq("customer_phone", cleanPhone)
-        .in("status", ["created", "awaiting_payment", "verification_pending", "rejected"]).maybeSingle();
-      if (error || !eligible) throw new Error("Pedido indisponível para receber comprovativos.");
-    }
-
-    // 1. Create verification record
-    const { data: verification, error: verErr } = await supabaseAdmin
-      .from("payment_verifications")
-      .insert({
-        order_id: orderId || null,
-        user_id: userId,
-        customer_phone: cleanPhone,
-        provider,
-        transaction_reference: transactionReference,
-        amount,
-        currency: "MT",
-        sender_phone: senderPhone || "",
-        sender_name: senderName || "",
-        proof_type: proofType,
-        proof_raw_text: proofRawText || "",
-        proof_media_url: proofMediaUrl || "",
-        confidence_score: confidenceScore,
-        extracted_data: extractedData,
-        status: "pending",
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (verErr) throw verErr;
-
-    // 2. If orderId exists, update order status to verification_pending
-    if (orderId) {
-      await supabaseAdmin
-        .from("orders")
-        .update({
-          status: "verification_pending",
-          proof_url: proofMediaUrl || null,
-          proof_data: { verificationId: verification.id, ...extractedData },
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", orderId).eq("user_id", userId)
-        .in("status", ["created", "awaiting_payment", "verification_pending", "rejected"]);
-
-      await this.recordTimelineEvent({
-        userId,
-        orderId,
-        phone: cleanPhone,
-        step: "verification_pending",
-        description: `Comprovativo ${transactionReference} (${amount} MT) recebido. Pendente de validação humana.`,
-        metadata: { verificationId: verification.id, provider, amount }
-      });
-    }
-
-    return { success: true, verification };
-  }
-
-  /**
-   * Approves an order by an authorized human administrator and triggers digital fulfillment
-   */
-  async approveOrder(orderId: string, adminUserId: string, notes?: string) {
-    const { data: order, error } = await supabaseAdmin.rpc("agentx_catalog_approve_order", {
-      p_user: adminUserId, p_order: orderId, p_note: notes?.trim() || "Pagamento conferido no prestador."
+  async submitPaymentProof(userId: string, order: { id: string; order_number: string; customer_phone: string },
+    messageId: string | undefined, proof: ExtractedPaymentData) {
+    const { data, error } = await supabaseAdmin.rpc("agentx_seller_submit_proof", {
+      p_user: userId, p_order: order.id, p_phone: order.customer_phone, p_source_message: messageId ?? null,
+      p_proof: {
+        provider: proof.provider, transaction_reference: proof.transactionReference,
+        amount: proof.amount, sender_phone: proof.senderPhone ?? "", sender_name: proof.senderName ?? "",
+        proof_type: proof.provider === "other" ? "text" : "sms", proof_raw_text: proof.rawText,
+        confidence_score: proof.confidenceScore, extracted_data: proof
+      }
     });
     if (error) throw error;
-    const fulfillment = await this.fulfillOrder(orderId, adminUserId);
-    return { success: true, order, fulfillment };
+    if (!data?.id) throw new Error("A base de dados não confirmou a receção do comprovativo.");
+    if (data.created) {
+      try {
+        const settings = await sellerSettings(userId);
+        if (settings?.notification_phone && settings.notification_phone !== normalizeContactPhone(order.customer_phone)) {
+          const message = `AgentX: o pedido ${order.order_number} tem um comprovativo pendente. Abra Vendedor → Comprovativos e confirme o recebimento no prestador.`;
+          await whatsappManager.sendMessage(userId, `${settings.notification_phone}@s.whatsapp.net`, message);
+        }
+      } catch {
+        console.warn("[Commerce] Could not send seller proof notification.");
+      }
+    }
+    return data as { id: string; created: boolean };
+  }
+
+  async approveOrder(orderId: string, adminUserId: string, method: string, reference: string, amount: string) {
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_approve_order", {
+      p_user: adminUserId, p_order: orderId, p_method: method, p_reference: reference, p_amount: amount,
+      p_note: "Liquidação conferida no prestador pelo responsável da conta."
+    });
+    if (error) throw error;
+    try {
+      const fulfillment = await this.fulfillOrder(orderId, adminUserId);
+      return { success: true, order, fulfillment };
+    } catch {
+      return { success: true, order,
+        fulfillment: { delivered: false, message: "Pagamento confirmado. Consulta o pedido para verificar ou retomar a entrega." } };
+    }
   }
 
   /**
    * Rejects an order with explicit reason
    */
   async rejectOrder(orderId: string, adminUserId: string, reason: string) {
-    const nowISO = new Date().toISOString();
-    const { data: order, error: getErr } = await supabaseAdmin
-      .from("orders")
-      .select("id, user_id, customer_phone, order_number")
-      .eq("id", orderId).eq("user_id", adminUserId)
-      .eq("status", "verification_pending").single();
-
-    if (getErr || !order) throw new Error("Pedido não encontrado.");
-
-    const { data: rejected, error: updateError } = await supabaseAdmin
-      .from("orders")
-      .update({
-        status: "rejected",
-        rejected_reason: reason,
-        approved_by: adminUserId,
-        approved_at: nowISO,
-        updated_at: nowISO
-      })
-      .eq("id", orderId).eq("user_id", adminUserId).eq("status", "verification_pending")
-      .select("id").maybeSingle();
-    if (updateError || !rejected) throw new Error("O pedido já saiu da fila de verificação.");
-
-    await supabaseAdmin
-      .from("payment_verifications")
-      .update({
-        status: "rejected",
-        reviewed_by: adminUserId,
-        reviewed_at: nowISO
-      })
-      .eq("order_id", orderId).eq("user_id", adminUserId).eq("status", "pending");
-
-    await this.recordTimelineEvent({
-      userId: order.user_id,
-      orderId,
-      phone: order.customer_phone,
-      step: "admin_rejected",
-      description: `Pedido ${order.order_number} rejeitado: ${reason}`,
-      metadata: { reason, adminUserId }
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_reject_order", {
+      p_user: adminUserId, p_order: orderId, p_reason: reason
     });
-
-    // Notify customer on WhatsApp
+    if (error) throw error;
+    let notified = false;
     try {
-      const jid = `${order.customer_phone}@s.whatsapp.net`;
-      await whatsappManager.sendMessage(
-        order.user_id,
-        jid,
-        `⚠️ *Aviso sobre o Pedido ${order.order_number}*\n\nNão foi possível validar o seu pagamento pelo seguinte motivo: *${reason}*.\n\nPor favor, envie um novo comprovativo legível ou fale com o nosso suporte.`
-      );
-    } catch (e) {
-      console.warn("[CommerceService] Could not send rejection message:", e);
+      const result = await whatsappManager.sendMessage(adminUserId,
+        `${normalizeContactPhone(order.customer_phone)}@s.whatsapp.net`,
+        `O comprovativo do pedido ${order.order_number} foi rejeitado. Motivo: ${reason}. Envie um novo comprovativo ou fale com a equipa.`);
+      notified = Boolean(result?.key?.id);
+    } catch {
+      console.warn("[Commerce] Could not send rejection notification.");
     }
-
-    return { success: true };
+    return { success: true, notified };
   }
 
   /**
@@ -282,8 +181,10 @@ export class CommerceService {
     if (!claim) return { success: false, delivered: false, message: "Outro processo está a tratar da entrega." };
 
     try {
+      const payment = order.payment_reference
+        ? `\nValor recebido: ${order.total_amount} ${order.currency}. Referência: ${order.payment_reference}.\n` : "";
       const result = await whatsappManager.sendMessage(userId, `${order.customer_phone}@s.whatsapp.net`,
-        `Pagamento confirmado para o pedido *${order.order_number}*.\n\n${lines.join("\n\n")}\n\nObrigado pela compra!`);
+        `Pagamento confirmado para o pedido *${order.order_number}*.${payment}\n\n${lines.join("\n\n")}\n\nObrigado pela compra!`);
       if (!result?.key?.id) throw new Error("Envio sem identificador WhatsApp.");
     } catch (error) {
       const disconnected = error instanceof Error && error.message === "WhatsApp session not connected.";

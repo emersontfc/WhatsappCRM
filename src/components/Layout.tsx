@@ -152,6 +152,7 @@ export default function Layout({ children }: LayoutProps) {
     {
       title: "Vendas e clientes",
       items: [
+        { name: "Vendedor", path: "/seller", icon: ShoppingCart },
         { name: "Catálogo e pedidos", path: "/orders", icon: ShoppingCart },
         { name: "Pedidos digitais", path: "/digital-orders", icon: ShoppingCart },
         { name: "Leads", path: "/leads", icon: UserPlus },

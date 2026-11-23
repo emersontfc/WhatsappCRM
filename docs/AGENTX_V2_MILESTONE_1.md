@@ -67,6 +67,16 @@ O fluxo por organização em **Pedidos digitais** continua a usar a descarga aut
 comprador. Uma reversão do container deve manter o esquema novo para preservar ficheiros,
 aprovações e pedidos que tenham sido criados entretanto.
 
+## Piloto Vendedor pelo WhatsApp
+
+Aplique `supabase/migrations/20_seller_workspace.sql` depois das migrações 12, 14 e 19 e antes de publicar a versão. A atualização preserva o catálogo, os pedidos e os comprovativos existentes. A verificação antes da publicação exige o esquema novo. A versão anterior pode continuar a operar com as tabelas e colunas adicionadas.
+
+Abra **Vendedor** em `/seller`. Ligue o WhatsApp, ative um agente com perfil **Vendas** ou **Multifuncional**, publique um produto com stock e configure o destino de pagamento. Os produtos digitais precisam de um ficheiro privado ou conteúdo de entrega. O agente guarda as instruções de pagamento no pedido para que uma alteração posterior do destino só afete novos pedidos.
+
+O cliente pode enviar um SMS ou um comprovativo em texto pelo WhatsApp. Inclua o número do pedido se tiver mais de um aberto. A receção cria um comprovativo pendente e envia um aviso ao número indicado, se estiver configurado. O titular da conta abre o painel, confere o recebimento no prestador e introduz o método, a referência oficial e o montante. O mesmo pagamento confirmado só pode liquidar um pedido por conta e por método. A entrega digital usa um link temporário e a confirmação por WhatsApp.
+
+O teste `tests/integration/run-agentx-inbox.sh` verifica o fluxo com PostgreSQL e PostgREST. Use `AGENTX_INBOX_BROWSER=1` após compilar para incluir a configuração e a aprovação no navegador. A IA, o transporte WhatsApp e o Storage são simulados neste ensaio. A operação com números reais e ficheiros privados precisa de teste num ambiente de homologação.
+
 ## Agenda e comandos pelo WhatsApp
 
 Aplique `supabase/migrations/13_whatsapp_operator.sql` antes de atualizar o backend.

@@ -21,10 +21,10 @@ describe("guided home screen", () => {
     expect(view).toContain("/appointments?context=clinic&amp;tab=agenda&amp;new=appointment");
   });
 
-  it("starts a salon appointment or sales publication in the correct mode", () => {
+  it("opens the seller workspace, sales publication and salon agenda", () => {
     expect(display("services")).toContain("/appointments?context=salon&amp;tab=agenda&amp;new=appointment");
     const sales = display("retail");
-    expect(sales).toContain("/orders?tab=products");
+    expect(sales).toContain('href="/seller"');
     expect(sales).toContain("/schedule?new=status");
   });
 
@@ -33,6 +33,6 @@ describe("guided home screen", () => {
     expect(view).toContain("#ligar-whatsapp");
     expect(view).toContain("/activate");
     expect(view).not.toContain("/schedule?new=status");
-    expect(view).toContain("/orders?tab=products");
+    expect(view).toContain('href="/seller"');
   });
 });

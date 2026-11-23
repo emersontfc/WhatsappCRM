@@ -381,7 +381,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
               console.log(`[WhatsApp] Processing message for ${userId} (from: ${jid}, text: "${text}", isSelf: ${isSelfMessage})`);
               const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, !!(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage));
               if (!handledByAutomation) {
-                await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined);
+                await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined, saved?.contact_id);
               }
             } else if (isGroupOrBroadcast) {
               console.log(`[WhatsApp] Skipping group/broadcast message for ${userId} (jid: ${jid})`);

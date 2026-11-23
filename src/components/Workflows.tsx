@@ -30,8 +30,7 @@ const workflows = {
     description: "Criar catálogo, responder a clientes e publicar Status.",
     icon: ShoppingBag,
     tasks: [
-      { label: "Preparar o catálogo", detail: "Adiciona produtos, preços, stock e ficheiros de entrega.", to: "/orders?tab=products" },
-      { label: "Configurar o agente de vendas", detail: "Seleciona Vendas na especialização do agente e guarda.", to: "/agent?focus=specialization", plan: true },
+      { label: "Abrir o Vendedor", detail: "Prepara a loja, configura o pagamento e acompanha pedidos e entregas.", to: "/seller" },
       { label: "Criar um Status", detail: "Publica agora ou escolhe quando publicar e repetir.", to: "/schedule?new=status", plan: true },
       { label: "Acompanhar leads e pedidos", detail: "Retoma conversas comerciais e acompanha os pedidos criados.", to: "/leads" }
     ]

@@ -5,8 +5,9 @@ const requirements = {
   agent: [["agents", "id,user_id,provider,is_active"]],
   agenda: [["scheduled_messages", "id,user_id,target_type,group_jid,attempts,repeat_days,error"],
     ["scheduled_status", "id,user_id,caption,attempts,repeat_days,error"]],
-  sales: [["products", "id,user_id,price,stock"], ["orders", "id,user_id,status,lead_id"],
-    ["order_items", "id,order_id,product_id"], ["payment_verifications", "id,user_id,order_id"], ["leads", "id,user_id,stage"]],
+  sales: [["products", "id,user_id,price,stock,deliverable_path"], ["orders", "id,user_id,status,lead_id,seller_payment"],
+    ["order_items", "id,order_id,product_id"], ["payment_verifications", "id,user_id,order_id,source_message_id"],
+    ["leads", "id,user_id,stage"], ["agentx_seller_settings", "user_id,payment_method"], ["agentx_seller_settlements", "order_id"]],
   delivery: [["agentx_orders", "id,organization_id,status"], ["agentx_digital_deliveries", "organization_id,order_id"]],
   bookings: [["services", "id,user_id,active"], ["appointments", "id,user_id,appointment_date,reminder_24h_sent,reminder_2h_sent"]],
   groups: [["group_rules", "user_id,group_jid,active"], ["agentx_group_events", "id,user_id,group_jid,outcome"]]

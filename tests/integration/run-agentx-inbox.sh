@@ -21,6 +21,9 @@ done
 docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < tests/integration/agentx-inbox-fixture.sql >/dev/null
 docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/19_contact_phone_identity.sql >/dev/null
 docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/19_contact_phone_identity.sql >/dev/null
+for migration in 08_agentx_2_0_commerce_operations 12_catalog_deliverables 14_whatsapp_sales_pipeline 20_seller_workspace; do
+  docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < "supabase/migrations/${migration}.sql" >/dev/null
+done
 
 export AGENTX_FIXTURE_JWT_SECRET="agentx-inbox-jwt-test-secret-local-only"
 rest="$(docker run --rm -d --network "$network" -p 127.0.0.1::3000 \

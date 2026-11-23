@@ -16,9 +16,12 @@ async function check() {
   const { supabaseAdminConfigured } = await import("../backend/supabaseAdmin.ts");
   if (!supabaseAdminConfigured) return "Configura SUPABASE_SERVICE_ROLE_KEY com a chave privada do backend.";
   const { makePlatformChecks } = await import("../backend/services/platformChecks.ts");
-  const crm = await makePlatformChecks(true).check("crm");
+  const checks = makePlatformChecks(true);
+  const [crm, sales] = await Promise.all([checks.check("crm"), checks.check("sales")]);
   if (crm === "migration_required") return "O Supabase respondeu, mas o esquema principal do CRM precisa de atualização.";
   if (crm !== "ready") return "O contentor não conseguiu consultar o CRM. Verifica a chave privada e a ligação ao Supabase.";
+  if (sales === "migration_required") return "O esquema das vendas precisa de atualização. Confirma a migração 20.";
+  if (sales !== "ready") return "O contentor não conseguiu consultar o esquema das vendas.";
   return null;
 }
 

@@ -26,6 +26,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { Badge } from "../components/ui/Badge";
 import { Input } from "../components/ui/Input";
 import { cn } from "../lib/utils";
+import { isSellerMethod, sellerMethods } from "../../shared/seller";
 
 interface Product {
   id: string;
@@ -83,6 +84,7 @@ interface Verification {
     currency?: string;
     customer_name: string;
     customer_phone: string;
+    payment_method?: string;
   };
 }
 
@@ -112,7 +114,7 @@ export default function Orders() {
   const tab = searchParams.get("tab");
   const activeTab = tab === "verifications" || tab === "products" || tab === "timeline" ? tab : "orders";
   const setActiveTab = (next: string) => setSearchParams({ tab: next });
-  const [approval, setApproval] = useState<{ id: string; number: string; amount: number; currency: string } | null>(null);
+  const [approval, setApproval] = useState<{ id: string; number: string; amount: number; currency: string; method?: string } | null>(null);
   const [approving, setApproving] = useState(false);
   const [approvalError, setApprovalError] = useState("");
   const approvalDialog = useRef<HTMLDialogElement>(null);
@@ -126,8 +128,11 @@ export default function Orders() {
   const [products, setProducts] = useState<Product[]>([]);
   const [verifications, setVerifications] = useState<Verification[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const query = searchParams.get("q") ?? "";
+  const status = searchParams.get("status") ?? "all";
+  const [search, setSearch] = useState(query);
+  const [statusFilter, setStatusFilter] = useState(status);
+  useEffect(() => { setSearch(query); setStatusFilter(status); }, [query, status]);
 
   // Product modal
   const [showProductModal, setShowProductModal] = useState(false);
@@ -236,18 +241,20 @@ export default function Orders() {
       return;
     }
     setApprovalError("");
-    setApproval({ id, number: current.order_number, amount: current.total_amount, currency: current.currency || "MT" });
+    setApproval({ id, number: current.order_number, amount: current.total_amount, currency: current.currency || "MT", method: current.payment_method });
   }
 
   async function approveOrder(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!approval || approving || new FormData(event.currentTarget).get("verified") !== "on") return;
+    const values = new FormData(event.currentTarget);
+    if (!approval || approving || values.get("verified") !== "on") return;
     setApproving(true);
     setApprovalError("");
     try {
       const res = await apiFetch(`/api/commerce/orders/${approval.id}/approve`, {
         method: "POST",
-        body: JSON.stringify({ settlementVerified: true, notes: "Liquidação conferida no prestador pelo responsável da conta." })
+        body: JSON.stringify({ settlementVerified: true, settlementMethod: values.get("method"),
+          settlementReference: values.get("reference"), settlementAmount: values.get("amount") })
       });
       if (!res.success) throw new Error(res.error || "Não foi possível confirmar o pagamento.");
       if (res.fulfillment?.delivered) toast.success("Pagamento confirmado e envio aceite pelo WhatsApp.");
@@ -283,7 +290,7 @@ export default function Orders() {
       });
 
       if (res.success) {
-        toast.info("Pedido rejeitado e cliente notificado.");
+        toast.info(res.notified ? "Pedido rejeitado e cliente notificado." : "Pedido rejeitado. O aviso ao cliente ficou por confirmar.");
         fetchData();
       }
     } catch (err: any) {
@@ -352,6 +359,9 @@ export default function Orders() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <Link to="/seller" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
+            Vendedor
+          </Link>
           <Link to="/digital-orders" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
             Pedidos digitais
           </Link>
@@ -621,7 +631,7 @@ export default function Orders() {
                       </span>
                     </div>
                     <CardTitle className="text-lg font-black text-slate-900 mt-2">
-                      Transação: {ver.transaction_reference}
+                      {ver.transaction_reference ? `Transação: ${ver.transaction_reference}` : "Referência por conferir"}
                     </CardTitle>
                     <CardDescription className="font-mono text-xs">
                       Cliente: +{ver.customer_phone} {ver.sender_name && `(${ver.sender_name})`}
@@ -630,7 +640,9 @@ export default function Orders() {
                   <CardContent className="space-y-4">
                     <div className="bg-white p-3 rounded-xl border border-slate-100">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Valor do Comprovativo</p>
-                      <p className="text-2xl font-black text-emerald-600">{ver.amount} {ver.currency || "MT"}</p>
+                      <p className="text-xl font-bold text-slate-900">
+                        {Number(ver.amount) > 0 ? `${ver.amount} ${ver.currency || "MT"}` : "Valor por conferir"}
+                      </p>
                       {ver.orders && (
                         <p className="text-xs text-slate-500 mt-1">
                           Correspondente ao Pedido: <span className="font-bold text-slate-900">{ver.orders.order_number}</span> (Total: {ver.orders.total_amount} {ver.orders.currency || "MT"})
@@ -766,6 +778,20 @@ export default function Orders() {
               <h2 id="approval-title" className="text-lg font-bold">Confirmar pagamento</h2>
               <p className="mt-1 text-sm text-slate-600">Pedido {approval.number} · {approval.amount} {approval.currency}</p>
             </div>
+            <label className="grid gap-1 text-sm font-medium">Método confirmado
+              <select className="rounded-lg border border-slate-300 bg-white p-2" name="method" required disabled={approving}
+                defaultValue={isSellerMethod(approval.method) ? approval.method : ""}>
+                <option value="">Escolher método</option>
+                {Object.entries(sellerMethods).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                <option value="other">Outro</option>
+              </select>
+            </label>
+            <label className="grid gap-1 text-sm font-medium">Referência oficial da transação
+              <Input name="reference" required minLength={4} maxLength={80} disabled={approving} />
+            </label>
+            <label className="grid gap-1 text-sm font-medium">Valor recebido em {approval.currency}
+              <Input name="amount" required inputMode="decimal" placeholder="0,00" maxLength={13} disabled={approving} />
+            </label>
             <label className="flex items-start gap-2 text-sm">
               <input className="mt-1" type="checkbox" name="verified" required disabled={approving} />
               Confirmei no prestador a referência, o valor e a moeda recebida.

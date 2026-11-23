@@ -15,6 +15,7 @@ const run = promisify(execFile);
 let workerCalls = 0;
 let brokenCrm = false;
 let missingContactMigration = false;
+let missingSellerMigration = false;
 
 const supabase = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -44,6 +45,10 @@ const supabase = createServer((req, res) => {
   if (url.pathname === "/rest/v1/contacts" && brokenCrm) {
     res.statusCode = 400;
     return res.end(JSON.stringify({ code: "42703", message: "Schema fixture missing lid" }));
+  }
+  if (url.pathname === "/rest/v1/agentx_seller_settings" && missingSellerMigration) {
+    res.statusCode = 404;
+    return res.end(JSON.stringify({ code: "PGRST205", message: "Seller migration is missing" }));
   }
   if (req.method === "GET" && url.pathname.startsWith("/rest/v1/")) return res.end("[]");
   res.statusCode = 404;
@@ -125,6 +130,9 @@ try {
     await healthy.stop();
   }
 
+  missingSellerMigration = true;
+  await assert.rejects(preflight(), { code: 1, stderr: /migração 20/ });
+  missingSellerMigration = false;
   missingContactMigration = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
   missingContactMigration = false;
