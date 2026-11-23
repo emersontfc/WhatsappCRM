@@ -28,7 +28,9 @@ import { Card, CardContent } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 import { useActivation } from "../lib/useActivation";
+import { apiFetch } from "../lib/api";
 import { cn } from "../lib/utils";
+import { readContactPhone } from "../../shared/contactPhone";
 import { Lead, LeadStage, LEAD_STAGES, Contact } from "../types";
 
 export default function Leads() {
@@ -227,41 +229,20 @@ export default function Leads() {
     const userId = await getUserId();
     if (!userId) return;
 
-    let cleanPhone = newLeadPhone.replace(/\D/g, "");
-    if (!cleanPhone || cleanPhone.length < 8) {
-      toast.error("Por favor, digite um número de telefone válido (mínimo 8 dígitos).");
+    const cleanPhone = readContactPhone(newLeadPhone);
+    if (!cleanPhone) {
+      toast.error("Indica um número de telefone válido.");
       return;
-    }
-    if (cleanPhone.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanPhone.slice(0, 2))) {
-      cleanPhone = `258${cleanPhone}`;
     }
 
     setCreatingLead(true);
     try {
       // 1. Get or create contact
-      let contactId: string | null = null;
-      const { data: existingContact } = await supabase
-        .from("contacts")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("phone", cleanPhone)
-        .maybeSingle();
-
-      if (existingContact) {
-        contactId = existingContact.id;
-      } else {
-        const { data: newContact, error: cErr } = await supabase
-          .from("contacts")
-          .insert({
-            user_id: userId,
-            name: newLeadName.trim() || cleanPhone,
-            phone: cleanPhone,
-            tags: ["Lead Manual"]
-          })
-          .select("id")
-          .single();
-        if (!cErr && newContact) contactId = newContact.id;
-      }
+      const result = await apiFetch("/api/contacts", {
+        method: "POST",
+        body: JSON.stringify({ name: newLeadName.trim(), phone: newLeadPhone, tags: ["Lead Manual"] })
+      });
+      if (!result?.data?.id) throw new Error("A API não confirmou a gravação do contacto.");
 
       // 2. Insert or update lead
       const numericVal = newLeadValue ? parseFloat(newLeadValue) : null;
@@ -269,7 +250,7 @@ export default function Leads() {
         .from("leads")
         .upsert({
           user_id: userId,
-          contact_id: contactId,
+          contact_id: result.data.id,
           phone: cleanPhone,
           name: newLeadName.trim() || null,
           stage: newLeadStage,

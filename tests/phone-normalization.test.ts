@@ -1,4 +1,22 @@
 import { describe, it, expect } from "vitest";
+import { readContactPhone } from "../shared/contactPhone.ts";
+
+describe("Contact phone identity", () => {
+  it.each(["84 123 4567", "0841234567", "+258 (84) 123-4567", "00258 841234567", "258841234567:2@s.whatsapp.net"])(
+    "stores %s as the same international phone",
+    (phone) => expect(readContactPhone(phone)).toBe("258841234567")
+  );
+
+  it.each(["104928502847592@lid", "104928502847592", "12036302918234@g.us", "status@broadcast", "abc841234567"])(
+    "rejects %s as a contact phone",
+    (input) => expect(readContactPhone(input)).toBeNull()
+  );
+
+  it("keeps an explicit foreign country code and accepts the same number with its selected dialling code", () => {
+    expect(readContactPhone("+27 82 123 4567", "258")).toBe("27821234567");
+    expect(readContactPhone("082 123 4567", "27")).toBe("27821234567");
+  });
+});
 
 function normalizeJid(rawInput: string): { jid: string; isLid: boolean; isGroup: boolean; phone: string } {
   let cleanDigits = rawInput.replace(/@s\.whatsapp\.net|@g\.us|@broadcast|@newsletter|@lid/g, "").replace(/\D/g, "");

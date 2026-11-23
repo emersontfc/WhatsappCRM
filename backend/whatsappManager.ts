@@ -19,8 +19,12 @@ import path from "path";
 import os from "os";
 import { convertToOpus } from "./utils/audioConverter.ts";
 import { IWhatsAppTransport } from "./lib/whatsappTransport.ts";
+import { normalizeContactPhone } from "../shared/contactPhone.ts";
+import { saveContactIdentity } from "./services/contactIdentity.ts";
 
 const logger = pino({ level: "silent" });
+const lidFrom = (jid?: string | null) => /^(\d{5,20})(?::\d+)?@lid$/i.exec(jid ?? "")?.[1] ?? null;
+const phoneFromJid = (jid?: string | null) => /@(?:s\.whatsapp\.net|c\.us)$/i.test(jid ?? "") ? normalizeContactPhone(jid) : null;
 
 export class WhatsAppManager implements IWhatsAppTransport {
   private sessions: Map<string, { socket: any; status: string; qr?: string; pairingCode?: string; createdAt?: number }> = new Map();
@@ -630,261 +634,57 @@ export class WhatsAppManager implements IWhatsAppTransport {
     return true;
   }
 
-  private async syncContact(userId: string, contact: BaileysContact, isSaved = false) {
+  private async syncContact(userId: string, contact: BaileysContact, isSaved = false): Promise<string | null | undefined> {
+    const lid = lidFrom(contact.lid) ?? lidFrom(contact.id);
+    const savedName = this.isSavedContact(contact) ? contact.name?.trim() : undefined;
     try {
-      const jid = contact.id;
-      if (!jid || 
-          jid.includes("@g.us") || 
-          jid.includes("@lid") || 
-          jid.includes("@broadcast") || 
-          jid.includes("@newsletter") || 
-          jid.startsWith("120363")) return;
-
-      const phone = jid.split("@")[0].replace(/\D/g, "");
-      if (!phone || phone.length < 8 || phone.length > 15 || phone.startsWith("120363")) return;
-
-      const phoneNo258 = phone.startsWith("258") ? phone.slice(3) : phone;
-      const phoneWith258 = phone.startsWith("258") ? phone : `258${phone}`;
-
-      const { data: existingContact } = await supabaseAdmin
-        .from("contacts")
-        .select("id, tags, name")
-        .eq("user_id", userId)
-        .or(`phone.eq.${phone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-        .maybeSingle();
-
-      const savedName = this.isSavedContact(contact) ? (contact.name || "").trim() : "";
-      const name = savedName || contact.notify || contact.verifiedName || "";
-
-      if (!existingContact) {
-        // Seletividade: Não criar novo contacto a menos que esteja gravado na agenda ou tenha conversa ativa
-        if (!savedName && !isSaved) {
-          return;
-        }
-
-        console.log(`[WhatsApp] Creating new selective contact for user ${userId}: ${name || phone}`);
-        await supabaseAdmin.from("contacts").insert({
-          user_id: userId,
-          name: name || phone,
-          phone,
-          tags: ["WhatsApp"],
-          created_at: new Date().toISOString(),
-        });
-      } else {
-        const currentTags = Array.isArray(existingContact.tags) ? existingContact.tags : [];
-        const updatedTags = Array.from(new Set([...currentTags, "WhatsApp"]));
-        
-        // Update name only if it's better than what we have (not just the phone number)
-        const shouldUpdateName = savedName && savedName !== phone && (!existingContact.name || existingContact.name === phone);
-        
-        if (shouldUpdateName) {
-          console.log(`[WhatsApp] Updating name for user ${userId}, contact ${phone}: ${savedName}`);
-        }
-
-        await supabaseAdmin
-          .from("contacts")
-          .update({ 
-            name: shouldUpdateName ? savedName : existingContact.name,
-            tags: updatedTags
-          })
-          .eq("id", existingContact.id);
+      let phone = phoneFromJid(contact.id) ?? normalizeContactPhone(contact.phoneNumber);
+      if (!phone && lid) {
+        const mapping = this.sessions.get(userId)?.socket?.signalRepository?.lidMapping;
+        phone = phoneFromJid(await mapping?.getPNForLID(`${lid}@lid`));
       }
-    } catch (err) {
-      console.error("Sync contact error:", err);
+      if (!phone) return null;
+      const saved = await saveContactIdentity(userId, {
+        phone, lid,
+        name: savedName || contact.notify || contact.verifiedName,
+        tags: ["WhatsApp"], existingOnly: !savedName && !isSaved
+      });
+      return saved?.id;
+    } catch (error) {
+      console.error("[WhatsApp] Contact import failed:", (error as { code?: string })?.code ?? "unavailable");
     }
   }
 
-  public async getOrCreateContact(
-    userId: string, 
-    jid: string, 
-    pushName?: string,
-    altJid?: string
-  ): Promise<string> {
+  public async getOrCreateContact(userId: string, jid: string, pushName?: string, altJid?: string): Promise<string> {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(userId)) return "unknown";
+    const incomingPhone = phoneFromJid(jid);
+    const incomingLid = lidFrom(jid);
+    if (!incomingPhone && !incomingLid) return "unknown";
+
+    const me = this.getMe(userId);
+    const ownPhone = phoneFromJid(me?.id);
+    const ownLid = lidFrom(me?.lid) ?? lidFrom(me?.id);
+    if ((incomingPhone && incomingPhone === ownPhone) || (incomingLid && incomingLid === ownLid)) return "unknown";
+
+    let phone = incomingPhone ?? phoneFromJid(altJid);
+    let lid = incomingLid ?? lidFrom(altJid);
+    const mapping = this.sessions.get(userId)?.socket?.signalRepository?.lidMapping;
+    if (mapping) {
+      try {
+        if (incomingLid && !phone) phone = phoneFromJid(await mapping.getPNForLID(jid));
+        if (incomingPhone && !lid) lid = lidFrom(await mapping.getLIDForPN(jid));
+      } catch {
+        // A real phone can be linked later when WhatsApp provides the mapping.
+      }
+    }
+    if ((phone && phone === ownPhone) || (lid && lid === ownLid)) return "unknown";
+
     try {
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(userId)) return "unknown";
-
-      // Do NOT create contacts for groups, broadcast, or newsletters
-      if (
-        !jid || 
-        jid === "status@broadcast" || 
-        jid.includes("@g.us") || 
-        jid.includes("@broadcast") || 
-        jid.includes("@newsletter") || 
-        jid.startsWith("120363")
-      ) {
-        return "unknown";
-      }
-
-      // Check self-messages
-      const myInfo = this.getMe(userId);
-      const myPhone = myInfo?.id ? myInfo.id.split(":")[0].replace(/\D/g, "") : "";
-      const myLid = myInfo?.lid ? myInfo.lid.split(":")[0].replace(/\D/g, "") : "";
-      const currentDigits = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
-
-      if ((Boolean(myPhone) && currentDigits === myPhone) || (Boolean(myLid) && currentDigits === myLid)) {
-        return "unknown";
-      }
-
-      const isLid = jid.includes("@lid");
-      const isPn = jid.includes("@s.whatsapp.net");
-
-      let resolvedPhone = "";
-      let resolvedLid = "";
-
-      if (isLid) {
-        resolvedLid = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
-      } else if (isPn) {
-        resolvedPhone = jid.split("@")[0].split(":")[0].replace(/\D/g, "");
-      }
-
-      // Baileys 7 remoteJidAlt / participantAlt pairing
-      if (altJid && typeof altJid === "string") {
-        if (altJid.includes("@s.whatsapp.net") && !resolvedPhone) {
-          resolvedPhone = altJid.split("@")[0].split(":")[0].replace(/\D/g, "");
-        } else if (altJid.includes("@lid") && !resolvedLid) {
-          resolvedLid = altJid.split("@")[0].split(":")[0].replace(/\D/g, "");
-        }
-      }
-
-      // Baileys 7 Signal repository LID-PN store query
-      const session = this.sessions.get(userId);
-      if (session?.socket?.signalRepository?.lidMapping) {
-        try {
-          if (isLid && resolvedLid && !resolvedPhone) {
-            const pnResult = await session.socket.signalRepository.lidMapping.getPNForLID(jid);
-            if (pnResult && typeof pnResult === "string") {
-              resolvedPhone = pnResult.split("@")[0].split(":")[0].replace(/\D/g, "");
-            }
-          } else if (isPn && resolvedPhone && !resolvedLid) {
-            const lidResult = await session.socket.signalRepository.lidMapping.getLIDForPN(jid);
-            if (lidResult && typeof lidResult === "string") {
-              resolvedLid = lidResult.split("@")[0].split(":")[0].replace(/\D/g, "");
-            }
-          }
-        } catch (signalErr) {
-          // non-blocking
-        }
-      }
-
-      // Normalize Mozambique phone numbers (9 digits starting with 82-87)
-      if (resolvedPhone) {
-        if (resolvedPhone.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(resolvedPhone.slice(0, 2))) {
-          resolvedPhone = `258${resolvedPhone}`;
-        }
-      }
-
-      const phoneNo258 = resolvedPhone.startsWith("258") ? resolvedPhone.slice(3) : resolvedPhone;
-      const phoneWith258 = resolvedPhone.startsWith("258") ? resolvedPhone : `258${resolvedPhone}`;
-
-      let existingContact: any = null;
-
-      // 1. Search by real phone number if known
-      if (resolvedPhone && resolvedPhone.length >= 8) {
-        const { data: contactsByPhone } = await supabaseAdmin
-          .from("contacts")
-          .select("id, name, phone, lid, tags")
-          .eq("user_id", userId)
-          .or(`phone.eq.${resolvedPhone},phone.eq.${phoneNo258},phone.eq.${phoneWith258}`)
-          .limit(1);
-
-        if (contactsByPhone && contactsByPhone.length > 0) {
-          existingContact = contactsByPhone[0];
-        }
-      }
-
-      // 2. Search by LID if known
-      if (!existingContact && resolvedLid) {
-        const { data: contactsByLid } = await supabaseAdmin
-          .from("contacts")
-          .select("id, name, phone, lid, tags")
-          .eq("user_id", userId)
-          .eq("lid", resolvedLid)
-          .limit(1);
-
-        if (contactsByLid && contactsByLid.length > 0) {
-          existingContact = contactsByLid[0];
-        }
-      }
-
-      // 3. Fallback: check if contact historically had LID saved in phone column
-      if (!existingContact && resolvedLid) {
-        const { data: legacyContacts } = await supabaseAdmin
-          .from("contacts")
-          .select("id, name, phone, lid, tags")
-          .eq("user_id", userId)
-          .or(`phone.eq.${resolvedLid},phone.eq.${resolvedLid}@lid`)
-          .limit(1);
-
-        if (legacyContacts && legacyContacts.length > 0) {
-          existingContact = legacyContacts[0];
-        }
-      }
-
-      // If contact already exists, safely enrich attributes without false merges
-      if (existingContact) {
-        const updates: any = {};
-
-        if (resolvedLid && (!existingContact.lid || existingContact.lid !== resolvedLid)) {
-          updates.lid = resolvedLid;
-        }
-
-        if (resolvedPhone && (!existingContact.phone || existingContact.phone === existingContact.lid || existingContact.phone === resolvedLid)) {
-          updates.phone = resolvedPhone;
-        }
-
-        // Clean bogus phone if it was the raw LID
-        if (!resolvedPhone && existingContact.phone && (existingContact.phone === resolvedLid || existingContact.phone === `${resolvedLid}@lid`)) {
-          updates.phone = "";
-        }
-
-        const rawName = (existingContact.name || "").trim();
-        const isNumericOnly = !rawName || /^[\d\s+()\-#]+$/.test(rawName);
-        if (pushName && pushName.trim().length > 1 && (isNumericOnly || rawName === "Contacto WhatsApp")) {
-          updates.name = pushName.trim();
-        }
-
-        if (Object.keys(updates).length > 0) {
-          await supabaseAdmin
-            .from("contacts")
-            .update(updates)
-            .eq("id", existingContact.id);
-        }
-
-        return existingContact.id;
-      }
-
-      // 4. Create new contact: NEVER invent fake phone from LID!
-      const contactPhone = resolvedPhone || "";
-      const contactLid = resolvedLid || null;
-      let displayName = pushName?.trim();
-      if (!displayName) {
-        if (contactPhone) {
-          displayName = contactPhone;
-        } else if (contactLid) {
-          displayName = `WhatsApp (${contactLid.slice(-4)})`;
-        } else {
-          displayName = "Contacto WhatsApp";
-        }
-      }
-
-      const { data: newContact, error } = await supabaseAdmin
-        .from("contacts")
-        .insert({
-          user_id: userId,
-          name: displayName,
-          phone: contactPhone,
-          lid: contactLid,
-          tags: ["WhatsApp"],
-          created_at: new Date().toISOString(),
-        })
-        .select("id")
-        .single();
-
-      if (error) throw error;
-      return newContact.id;
-    } catch (err: any) {
-      console.error("[WhatsApp] Get or create contact error:", err.message);
+      const name = pushName?.trim() || null;
+      const saved = await saveContactIdentity(userId, { phone, lid, name, tags: ["WhatsApp"] });
+      return saved?.id ?? "unknown";
+    } catch (error) {
+      console.error("[WhatsApp] Failed to resolve the contact:", (error as { code?: string })?.code ?? "unavailable");
       return "unknown";
     }
   }
@@ -1221,116 +1021,38 @@ export class WhatsAppManager implements IWhatsAppTransport {
     return await session.socket.sendMessage(jid, { text });
   }
 
-  async cleanOrphanContactsFromPreviousSessions(userId: string): Promise<number> {
-    try {
-      console.log(`[WhatsApp] Cleaning orphan contacts from previous sessions for user ${userId}...`);
-      
-      const { data: contacts, error: cErr } = await supabaseAdmin
-        .from("contacts")
-        .select("id, name, phone, tags, last_message_at, created_at")
-        .eq("user_id", userId);
-        
-      if (cErr || !contacts || contacts.length === 0) return 0;
-
-      const { data: leads } = await supabaseAdmin
-        .from("leads")
-        .select("contact_id, phone")
-        .eq("user_id", userId);
-
-      const leadContactIds = new Set(leads?.map(l => l.contact_id).filter(Boolean));
-      const leadPhones = new Set(leads?.map(l => (l.phone || "").replace(/\D/g, "")).filter(Boolean));
-
-      const { data: messages } = await supabaseAdmin
-        .from("messages")
-        .select("contact_id")
-        .eq("user_id", userId);
-
-      const messageContactIds = new Set(messages?.map(m => m.contact_id).filter(Boolean));
-
-      // Get current session contacts in memory if available
-      const session = this.sessions.get(userId);
-      const currentPhones = new Set<string>();
-      if (session && (session as any).contactsMap) {
-        for (const [jid] of (session as any).contactsMap.entries()) {
-          const p = jid.split("@")[0].replace(/\D/g, "");
-          if (p) currentPhones.add(p);
-        }
-      }
-
-      const idsToDelete: string[] = [];
-
-      for (const c of contacts) {
-        const cleanP = (c.phone || "").replace(/\D/g, "");
-        const tags = Array.isArray(c.tags) ? c.tags : [];
-        const isManual = tags.includes("Manual") || tags.includes("Importado");
-        const hasLead = leadContactIds.has(c.id) || leadPhones.has(cleanP);
-        const hasMessages = messageContactIds.has(c.id) || Boolean(c.last_message_at);
-        const isInCurrentSession = currentPhones.size > 0 ? currentPhones.has(cleanP) : false;
-
-        // Keep contacts created in the current active session (today)
-        const isToday = c.created_at && c.created_at.startsWith(new Date().toISOString().slice(0, 10));
-
-        if (isManual || hasLead || hasMessages || isInCurrentSession || isToday) {
-          continue;
-        }
-
-        idsToDelete.push(c.id);
-      }
-
-      if (idsToDelete.length > 0) {
-        console.log(`[WhatsApp] Deleting ${idsToDelete.length} orphan contacts from previous sessions for user ${userId}...`);
-        for (let i = 0; i < idsToDelete.length; i += 100) {
-          const chunk = idsToDelete.slice(i, i + 100);
-          await supabaseAdmin.from("contacts").delete().in("id", chunk);
-        }
-      }
-
-      console.log(`[WhatsApp] Cleanup finished: ${idsToDelete.length} orphan contacts removed.`);
-      return idsToDelete.length;
-    } catch (err: any) {
-      console.error("[WhatsApp] Error cleaning orphan contacts:", err.message);
-      return 0;
-    }
-  }
-
   async syncCurrentSessionContacts(userId: string) {
     const session = this.sessions.get(userId);
     if (!session || session.status !== "connected") {
       throw new Error("WhatsApp não está conectado. Conecte primeiro no painel.");
     }
 
-    // 1. Clean orphan contacts from previous connections
-    const cleanedCount = await this.cleanOrphanContactsFromPreviousSessions(userId);
-
-    // 2. Sync any in-memory cached contacts from current session
-    if (session && (session as any).contactsMap) {
-      for (const contact of (session as any).contactsMap.values()) {
-        if (this.isSavedContact(contact)) {
-          await this.syncContact(userId, contact, true);
-        }
-      }
+    const synced = new Set<string>();
+    let withoutPhone = 0;
+    let failed = 0;
+    const cached: Map<string, BaileysContact> | undefined = (session as { contactsMap?: Map<string, BaileysContact> }).contactsMap;
+    for (const contact of cached?.values() ?? []) {
+      if (!this.isSavedContact(contact)) continue;
+      const id = await this.syncContact(userId, contact, true);
+      if (id) synced.add(id);
+      else if (id === null) withoutPhone++;
+      else failed++;
     }
 
-    // 3. Count saved contacts and active chats from current session in database
-    const { data: contacts } = await supabaseAdmin
+    const { data: contacts, error } = await supabaseAdmin
       .from("contacts")
-      .select("id, name, phone, last_message_at, tags")
+      .select("id, last_message_at")
       .eq("user_id", userId);
-
-    const savedCount = (contacts || []).filter(c => {
-      const raw = (c.name || "").trim();
-      const phone = (c.phone || "").replace(/\D/g, "");
-      return raw && raw !== phone && !/^[\d\s+()\-#]+$/.test(raw) && raw !== "</>" && raw !== "Sem Nome";
-    }).length;
-
-    const activeChatsCount = (contacts || []).filter(c => Boolean(c.last_message_at)).length;
+    if (error) throw new Error("Não foi possível consultar os contactos sincronizados.");
 
     return {
       success: true,
-      total: contacts?.length || 0,
-      savedCount,
-      activeChatsCount,
-      cleanedCount,
+      total: contacts.length,
+      savedCount: synced.size,
+      activeChatsCount: contacts.filter(c => Boolean(c.last_message_at)).length,
+      cleanedCount: 0,
+      withoutPhone,
+      failed,
     };
   }
 

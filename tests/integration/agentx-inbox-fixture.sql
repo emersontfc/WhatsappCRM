@@ -23,9 +23,11 @@ ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 CREATE POLICY fixture_profile ON public.users FOR SELECT TO authenticated
   USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
+CREATE POLICY fixture_own_contacts ON public.contacts FOR SELECT TO authenticated
+  USING (user_id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
-GRANT SELECT ON public.users TO authenticated;
+GRANT SELECT ON public.users, public.contacts TO authenticated;
 
 INSERT INTO public.users VALUES
   ('00000000-0000-4000-8000-000000000001', 'loja-a@example.invalid', 'admin', 'Admin'),
@@ -34,6 +36,11 @@ INSERT INTO public.subscriptions (user_id) SELECT id FROM public.users;
 INSERT INTO public.contacts (id, user_id, name, phone, lid, tags) VALUES
   ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000001', 'Contacto com LID', NULL, '45678123456', '{}'),
   ('00000000-0000-4000-8000-000000000022', '00000000-0000-4000-8000-000000000002', 'Cliente da outra loja', '258870000001', NULL, '{}');
+INSERT INTO public.contacts (id, user_id, name, phone, tags, created_at) VALUES
+  ('00000000-0000-4000-8000-000000000013', '00000000-0000-4000-8000-000000000001', 'Contacto legado', '+258 84 999 8888', '{}', '2026-01-01'),
+  ('00000000-0000-4000-8000-000000000014', '00000000-0000-4000-8000-000000000001', 'Variante legada', '849998888', '{}', '2026-02-01');
 INSERT INTO public.messages (user_id, contact_id, type, text, msg_id, timestamp)
 VALUES ('00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000022',
-        'inbound', 'Mensagem privada da outra loja', 'other-store-message', now());
+        'inbound', 'Mensagem privada da outra loja', 'other-store-message', now()),
+       ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000014',
+        'inbound', 'Histórico de um contacto anterior à migração', 'legacy-contact-message', '2026-02-02');

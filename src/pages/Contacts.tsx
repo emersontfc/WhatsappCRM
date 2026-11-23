@@ -22,6 +22,8 @@ import {
 import { toast } from "sonner";
 import { supabase, getUserId } from "../supabase";
 import { apiFetch } from "../lib/api";
+import { importContactsCsv } from "../lib/contactImport";
+import { normalizeContactPhone } from "../../shared/contactPhone";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Card, CardContent } from "../components/ui/Card";
@@ -32,11 +34,8 @@ import { Contact, Lead, LEAD_STAGES, LeadStage } from "../types";
 type FilterTab = "todos" | "whatsapp" | "manuais" | "com_lead";
 
 export function formatPhoneNumber(phone: string): string {
-  if (!phone) return "";
-  const clean = phone.replace(/\D/g, "");
-  if (clean.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(clean.slice(0, 2))) {
-    return `+258 ${clean.slice(0, 2)} ${clean.slice(2, 5)} ${clean.slice(5)}`;
-  }
+  const clean = normalizeContactPhone(phone);
+  if (!clean) return "";
   if (clean.length === 12 && clean.startsWith("258")) {
     return `+258 ${clean.slice(3, 5)} ${clean.slice(5, 8)} ${clean.slice(8)}`;
   }
@@ -49,16 +48,18 @@ export function formatPhoneNumber(phone: string): string {
   if (clean.length === 11 && clean.startsWith("27")) {
     return `+27 ${clean.slice(2, 4)} ${clean.slice(4, 7)} ${clean.slice(7)}`;
   }
-  if (clean.length === 15 && !clean.startsWith("258")) {
-    return `WhatsApp ID: ...${clean.slice(-6)}`;
-  }
-  return phone.startsWith("+") ? phone : (clean.length > 5 ? `+${clean}` : phone);
+  return `+${clean}`;
+}
+
+function getContactPhone(contact: { phone?: string | null; lid?: string | null }) {
+  const phone = normalizeContactPhone(contact.phone);
+  return phone === contact.lid?.split(/[:@]/)[0] ? null : phone;
 }
 
 export function getContactDisplay(contact: { name?: string | null; phone?: string | null; lid?: string | null }) {
-  const cleanPhone = (contact.phone || "").replace(/\D/g, "");
-  const formattedPhone = contact.phone ? formatPhoneNumber(contact.phone) : "";
-  const cleanLid = (contact.lid || "").replace(/\D/g, "");
+  const cleanPhone = getContactPhone(contact) ?? "";
+  const cleanLid = (contact.lid || (/@lid$/i.test(contact.phone ?? "") ? contact.phone : ""))?.split(/[:@]/)[0] || "";
+  const formattedPhone = cleanPhone ? formatPhoneNumber(cleanPhone) : "";
 
   const rawName = (contact.name || "").trim();
   const isNumericOnly = !rawName || /^[\d\s+()\-#]+$/.test(rawName);
@@ -80,7 +81,7 @@ export function getContactDisplay(contact: { name?: string | null; phone?: strin
 
     return {
       title: rawName,
-      subtitle: formattedPhone || (cleanLid ? `LID: ${cleanLid}` : null),
+      subtitle: formattedPhone || (cleanLid ? "Número ainda não disponível" : null),
       initials: initials || null,
       isRealName: true,
     };
@@ -89,7 +90,7 @@ export function getContactDisplay(contact: { name?: string | null; phone?: strin
   if (formattedPhone) {
     return {
       title: formattedPhone,
-      subtitle: cleanLid ? `LID: ${cleanLid}` : null,
+      subtitle: null,
       initials: null,
       isRealName: false,
     };
@@ -98,7 +99,7 @@ export function getContactDisplay(contact: { name?: string | null; phone?: strin
   if (cleanLid) {
     return {
       title: `WhatsApp (${cleanLid.slice(-4)})`,
-      subtitle: `LID: ${cleanLid}`,
+      subtitle: "Número ainda não disponível",
       initials: "WA",
       isRealName: false,
     };
@@ -146,10 +147,14 @@ export default function Contacts() {
       }
 
       await fetchContactsAndLeads();
-      toast.success(
-        `WhatsApp sincronizado! ${data.savedCount} gravados na agenda e ${data.activeChatsCount} conversas ativas.` +
-        (data.cleanedCount > 0 ? ` (${data.cleanedCount} contactos de sessões anteriores limpos)` : "")
-      );
+      const summary = [`${data.savedCount} contactos sincronizados`];
+      if (data.withoutPhone) summary.push(`${data.withoutPhone} sem número disponível`);
+      if (data.failed) {
+        summary.push(`${data.failed} falharam. Tenta sincronizar novamente.`);
+        toast.warning(summary.join(" · "));
+      } else {
+        toast.success(summary.join(" · "));
+      }
     } catch (err: any) {
       console.error("Error syncing contacts:", err);
       toast.error(err.message || "Erro ao sincronizar contactos do WhatsApp.");
@@ -438,134 +443,39 @@ export default function Contacts() {
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newContact.name || !newContact.phone) return;
-
-    if (planDetails && contacts.length >= planDetails.max_contacts) {
-      toast.error(`Limite de contatos atingido (${planDetails.max_contacts}). Faça upgrade do seu plano.`);
-      return;
-    }
+    if (!newContact.name.trim() || !newContact.phone.trim()) return;
 
     try {
-      const userId = await getUserId();
-      let phone = newContact.phone.replace(/\D/g, "");
-      const countryCode = newContact.countryCode.replace(/\D/g, "");
-
-      if (phone.length <= 10 && !phone.startsWith(countryCode)) {
-        phone = countryCode + phone;
-      }
-
-      const userTags = newContact.tags.split(",").map(t => t.trim()).filter(Boolean);
-      if (!userTags.includes("Manual")) {
-        userTags.push("Manual");
-      }
-
-      const { data: existingContact } = await supabase
-        .from("contacts")
-        .select("id, tags")
-        .eq("user_id", userId)
-        .eq("phone", phone)
-        .maybeSingle();
-
-      if (existingContact) {
-        const currentTags = Array.isArray(existingContact.tags) ? existingContact.tags : [];
-        const mergedTags = Array.from(new Set([...currentTags, ...userTags]));
-        await supabase
-          .from("contacts")
-          .update({ name: newContact.name, tags: mergedTags })
-          .eq("id", existingContact.id);
-      } else {
-        await supabase.from("contacts").insert({
-          user_id: userId,
-          name: newContact.name,
-          phone: phone,
-          tags: userTags,
-          created_at: new Date().toISOString(),
-        });
-      }
-
-      await fetchContactsAndLeads();
+      const result = await apiFetch("/api/contacts", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newContact.name, phone: newContact.phone, countryCode: newContact.countryCode,
+          tags: newContact.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
+        })
+      });
+      if (result?.success !== true || !result.data?.id) throw new Error("A API não confirmou a gravação do contacto.");
+      toast.success(result.data.created ? "Contacto adicionado." : "Contacto existente atualizado.");
       setNewContact({ name: "", phone: "", tags: "", countryCode: "258" });
       setIsAdding(false);
-      toast.success("Contacto adicionado com sucesso!");
-    } catch (err) {
-      console.error("Error adding contact:", err);
-      toast.error("Erro ao adicionar contato.");
+      await fetchContactsAndLeads();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível guardar o contacto.");
     }
   };
 
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const csv = event.target?.result as string;
-        const lines = csv.split('\n');
-        const userId = await getUserId();
-
-        const contactsToInsert = [];
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-
-          const parts = line.split(',');
-          if (parts.length >= 2) {
-            const name = parts[0].trim();
-            let phone = parts[1].replace(/\D/g, "");
-            if (phone.length <= 10 && !phone.startsWith("258")) {
-              phone = "258" + phone;
-            }
-            if (name && phone) {
-              contactsToInsert.push({
-                user_id: userId,
-                name,
-                phone,
-                tags: ["Importado"],
-                created_at: new Date().toISOString(),
-              });
-            }
-          }
-        }
-
-        if (contactsToInsert.length > 0) {
-          let successCount = 0;
-          for (const contact of contactsToInsert) {
-            try {
-              const { data: existing } = await supabase
-                .from("contacts")
-                .select("id, tags")
-                .eq("user_id", userId)
-                .eq("phone", contact.phone)
-                .maybeSingle();
-
-              if (existing) {
-                const currentTags = Array.isArray(existing.tags) ? existing.tags : [];
-                const mergedTags = Array.from(new Set([...currentTags, "Importado"]));
-                await supabase
-                  .from("contacts")
-                  .update({ name: contact.name, tags: mergedTags })
-                  .eq("id", existing.id);
-              } else {
-                await supabase.from("contacts").insert(contact);
-              }
-              successCount++;
-            } catch (err) {
-              console.error("Error processing contact in CSV:", err);
-            }
-          }
-          toast.success(`${successCount} contactos processados com sucesso!`);
-          await fetchContactsAndLeads();
-        } else {
-          toast.error("Nenhum contacto válido encontrado no CSV. Use o formato: Nome, Telefone");
-        }
-      } catch (err) {
-        console.error("Error importing contacts:", err);
-        toast.error("Erro ao importar contactos.");
-      }
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    };
-    reader.readAsText(file);
+    try {
+      const result = await importContactsCsv(file);
+      if (result.warning) toast.warning(result.message);
+      else toast.success(result.message);
+      await fetchContactsAndLeads();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível importar os contactos.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
   const handleDelete = async (id: string, e?: React.MouseEvent) => {
@@ -587,14 +497,14 @@ export default function Contacts() {
   // Filtered contacts calculation
   const filteredContacts = useMemo(() => {
     return contacts.filter(c => {
-      const cleanP = (c.phone || "").replace(/\D/g, "");
-      // Exclude WhatsApp groups, newsletters, and broadcast
-      if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanP.length < 7 || cleanP.length > 18) return false;
+      const phone = getContactPhone(c);
+      if (!phone) return false;
 
       // 1. Search filter
+      const searchDigits = search.replace(/\D/g, "");
       const matchesSearch =
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.phone.includes(search);
+        (c.name || "").toLowerCase().includes(search.toLowerCase()) ||
+        (searchDigits && phone.includes(searchDigits));
       if (!matchesSearch) return false;
 
       const tags = Array.isArray(c.tags) ? c.tags : [];
@@ -618,8 +528,7 @@ export default function Contacts() {
   const tabCounts = useMemo(() => {
     let wa = 0, man = 0, leadCount = 0, validTotal = 0;
     contacts.forEach(c => {
-      const cleanP = (c.phone || "").replace(/\D/g, "");
-      if (cleanP.startsWith("120363") || c.phone.includes("@g.us") || c.phone.includes("@broadcast") || c.phone.includes("@newsletter") || cleanP.length < 7 || cleanP.length > 18) return;
+      if (!getContactPhone(c)) return;
       validTotal++;
       const tags = Array.isArray(c.tags) ? c.tags : [];
       if (tags.includes("WhatsApp") || !tags.includes("Manual")) wa++;

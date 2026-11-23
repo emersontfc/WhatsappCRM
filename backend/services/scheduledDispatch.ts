@@ -1,15 +1,16 @@
 import { canPostInGroup, isGroupJid } from "./groupModeration.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
+import { normalizeContactPhone } from "../../shared/contactPhone.ts";
 
 type ScheduleTable = "scheduled_messages" | "scheduled_status";
 
 export function scheduledContactJid(contact: { phone?: string | null; lid?: string | null } | null): string | null {
-  const phone = contact?.phone?.replace(/\D/g, "");
-  const lid = contact?.lid?.split("@")[0].replace(/\D/g, "");
+  const phone = normalizeContactPhone(contact?.phone);
+  const rawLid = contact?.lid || (/@lid$/i.test(contact?.phone ?? "") ? contact?.phone : "");
+  const lid = /^(\d{5,20})(?::\d+)?(?:@lid)?$/i.exec(rawLid ?? "")?.[1];
   if (lid && (!phone || phone === lid)) return `${lid}@lid`;
-  if (!phone || phone.length < 8 || phone.length > 15) return null;
-  return `${phone.length === 9 && /^8[2-7]/.test(phone) ? "258" + phone : phone}@s.whatsapp.net`;
+  return phone ? `${phone}@s.whatsapp.net` : null;
 }
 
 export async function dispatchScheduled(table: ScheduleTable, id: string, userId: string, dueBefore?: string) {

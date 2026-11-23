@@ -12,7 +12,7 @@
 - **Problema Anterior:** A função `getOrCreateContact()` extraía dígitos cegamente de qualquer JID (`jid.split("@")[0].replace(/\D/g, "")`). Quando um utilizador enviava mensagem a partir de um identificador LID (ex: `104928502847592@lid`), o sistema interpretava esses 15 dígitos como se fossem um número telefónico e prefixava com o código moçambicano `258`, gerando telefones falsos (ex: `258104928502847592`) e duplicando contactos.
 - **Correção Definitiva:**
   - Separação clara entre identificadores de grupo (`@g.us`), transmissões (`@broadcast`), newsletters (`@newsletter`), telefones (`@s.whatsapp.net`) e LIDs (`@lid`).
-  - LIDs **nunca** geram números telefónicos falsos. Se o número real não estiver disponível, o contacto é guardado com `lid = "<digitos_lid>"` e `phone = ""`.
+  - LIDs são guardados no campo `lid`. A partir da migração 19, as conversas sem número conhecido usam `phone = NULL`.
   - Integração com Baileys 7: extração de `remoteJidAlt` e `participantAlt` dos metadados da mensagem para associar e emparelhar automaticamente o número de telefone real com o LID correspondente no mesmo contacto.
   - Consulta ao repositório Signal (`socket.signalRepository.lidMapping`) do Baileys para resolver pares LID/PN.
 
@@ -112,4 +112,10 @@ npm run build
 AGENTX_INBOX_BROWSER=1 bash tests/integration/run-agentx-inbox.sh
 ```
 
-O teste cria PostgreSQL e PostgREST descartáveis e inicia o servidor real do AgentX duas vezes. Verifica contas distintas, receção, envio, histórico e reentrega do mesmo evento sem duplicar a mensagem. A sessão de login e o transporte WhatsApp são simulados. O ensaio com números reais requer um ambiente separado e uma conta WhatsApp de teste.
+O teste cria PostgreSQL e PostgREST descartáveis e inicia o servidor real do AgentX duas vezes. Verifica contas distintas, gravações simultâneas de variantes do mesmo telefone, importação CSV, receção, envio, histórico e reentrega do mesmo evento. A sessão de login e o transporte WhatsApp são simulados. O ensaio com números reais requer um ambiente separado e uma conta WhatsApp de teste.
+
+## Migração 19 e importação de contactos
+
+Aplique `supabase/migrations/19_contact_phone_identity.sql` antes de atualizar o servidor. A pré-verificação da versão exige a migração. As gravações passam a reutilizar o contacto pelo número internacional na mesma conta. A migração preserva as linhas e conversas antigas, incluindo eventuais duplicados históricos.
+
+O CSV aceita as colunas `Nome,Telefone` e separadores de vírgula ou ponto e vírgula. Por exemplo, `84 123 4567`, `+258 84 123 4567` e `00258 841234567` são gravados como `258841234567`. A importação do WhatsApp usa o número telefónico quando a integração o fornece e ignora contactos que só têm um identificador interno.

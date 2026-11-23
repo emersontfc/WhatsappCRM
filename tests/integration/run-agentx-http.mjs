@@ -14,6 +14,7 @@ const revision = "a123bcd";
 const run = promisify(execFile);
 let workerCalls = 0;
 let brokenCrm = false;
+let missingContactMigration = false;
 
 const supabase = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -27,6 +28,13 @@ const supabase = createServer((req, res) => {
     return res.end("0");
   }
   if (url.pathname === "/rest/v1/rpc/agentx_schedule_contract_ready") return res.end("false");
+  if (url.pathname === "/rest/v1/rpc/agentx_contact_phone") {
+    if (missingContactMigration) {
+      res.statusCode = 404;
+      return res.end(JSON.stringify({ code: "PGRST202", message: "Contact migration is missing" }));
+    }
+    return res.end(JSON.stringify("258841234567"));
+  }
   if (url.pathname === "/auth/v1/user" && req.headers.authorization === `Bearer ${fakeToken}`) {
     return res.end(JSON.stringify({ id: fakeUser, aud: "authenticated", app_metadata: {}, user_metadata: {} }));
   }
@@ -117,6 +125,9 @@ try {
     await healthy.stop();
   }
 
+  missingContactMigration = true;
+  await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
+  missingContactMigration = false;
   brokenCrm = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
   const degraded = await startApp();

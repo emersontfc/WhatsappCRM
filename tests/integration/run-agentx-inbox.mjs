@@ -130,12 +130,60 @@ try {
   }
 
   app = await start();
-  const call = (route, index = 0, body) => fetch(app.base + "/api/whatsapp" + route, {
+  const api = (route, index = 0, body) => fetch(app.base + "/api" + route, {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...(index < 0 ? {} : { authorization: `Bearer ${userTokens[index]}` }) },
     body: JSON.stringify(body), signal: AbortSignal.timeout(12000)
   });
+  const call = (route, index, body) => api("/whatsapp" + route, index, body);
+  const saveContact = (phone, index = 0, name = "Contacto guardado") => api("/contacts", index, { phone, name });
   assert.equal((await call("/chats", -1)).status, 401);
+
+  const legacyId = "00000000-0000-4000-8000-000000000013";
+  assert.equal((await saveContact("258849998888", -1)).status, 401);
+  assert.equal((await saveContact("104928502847592@lid")).status, 400);
+  const legacy = await saveContact("258849998888");
+  assert.equal(legacy.status, 200);
+  assert.deepEqual((await legacy.json()).data,
+    { id: legacyId, phone: "258849998888", name: "Contacto guardado", created: false });
+  const { messages: legacyHistory } = await (await call("/chats/00000000-0000-4000-8000-000000000014/messages")).json();
+  assert.equal(legacyHistory[0].msg_id, "legacy-contact-message");
+  const synced = await call("/sync-contacts", 0, {});
+  assert.equal(synced.status, 200);
+  assert.deepEqual(await synced.json(), { success: true, total: 4, savedCount: 2, activeChatsCount: 0, cleanedCount: 0, withoutPhone: 1, failed: 0 });
+  const resolvedContact = await saveContact("83 123 4567");
+  assert.equal(resolvedContact.status, 200);
+  assert.equal((await resolvedContact.json()).data.phone, "258831234567");
+
+  const otherAccount = await saveContact("0849998888", 1);
+  assert.equal(otherAccount.status, 201);
+  assert.notEqual((await otherAccount.json()).data.id, legacyId);
+
+  const variants = await Promise.all([saveContact("+258 86 123 4567"), saveContact("(86) 123-4567")]);
+  assert.deepEqual(variants.map((result) => result.status).sort(), [200, 201]);
+  const variantRows = await Promise.all(variants.map(async (result) => (await result.json()).data));
+  assert.equal(variantRows[0].id, variantRows[1].id);
+  assert.ok(variantRows.every(({ phone }) => phone === "258861234567"));
+
+  const importResult = await api("/contacts/import", 0, {
+    csv: [
+      "\uFEFFNome;Telefone", "Contacto legado;00258 84 999 8888", '"Pessoa, Lda";258851234567:2@s.whatsapp.net',
+      "Apelido repetido;85 123 4567", "LID;104928502847592@lid", "LID sem sufixo;104928502847592",
+      "Grupo;12036302918234@g.us"
+    ].join("\r\n")
+  });
+  assert.equal(importResult.status, 200);
+  assert.deepEqual((await importResult.json()).data, { created: 1, updated: 1, invalid: 3, duplicates: 1, limited: 0 });
+  const stored = await fetch(new URL(`/contacts?user_id=eq.${owner}&phone=in.(258851234567,258861234567)&select=name,phone&order=phone`, rest),
+    { headers: { authorization: `Bearer ${serviceKey}` } });
+  assert.deepEqual(await stored.json(), [
+    { name: "Pessoa, Lda", phone: "258851234567" }, { name: "Contacto guardado", phone: "258861234567" }
+  ]);
+  const directDuplicate = await fetch(new URL("/contacts", rest), {
+    method: "POST", headers: { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ user_id: owner, name: "Duplicado", phone: "0861234567" })
+  });
+  assert.equal(directDuplicate.status, 409);
 
   let page;
   if (process.env.AGENTX_INBOX_BROWSER === "1") {
@@ -149,6 +197,27 @@ try {
     await page.locator('input[type="password"]').fill(password);
     await page.locator('button[type="submit"]').click();
     await page.waitForURL("**/dashboard", { timeout: 15000 });
+    await page.goto(app.base + "/contacts");
+    await page.getByRole("button", { name: "Novo Contacto" }).click();
+    await page.getByPlaceholder("Nome do cliente").fill("Contacto do navegador");
+    await page.getByPlaceholder("84 88 5828 8").fill("87 111 2222");
+    const [saved] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith("/api/contacts")),
+      page.getByRole("button", { name: "Guardar" }).click()
+    ]);
+    assert.equal(saved.status(), 201);
+    await page.getByText("Contacto do navegador", { exact: true }).waitFor();
+
+    const [imported] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith("/api/contacts/import")),
+      page.locator('input[type="file"][accept=".csv"]').setInputFiles({
+        name: "contactos.csv", mimeType: "text/csv",
+        buffer: Buffer.from("Nome,Telefone\nContacto atualizado,+258 87 111 2222\nRepetido,871112222")
+      })
+    ]);
+    assert.deepEqual((await imported.json()).data, { created: 0, updated: 1, invalid: 0, duplicates: 1, limited: 0 });
+    await page.getByText("Contacto atualizado", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Contacto do navegador", { exact: true }).count(), 0);
     await page.goto(app.base + "/messages");
     await page.getByRole("button", { name: /Contacto com LID/ }).waitFor({ timeout: 15000 });
   }
@@ -157,6 +226,7 @@ try {
   const { chats } = await (await call("/chats")).json();
   const contact = chats.find((chat) => chat.name === "Cliente de teste");
   assert.ok(contact);
+  assert.equal(contact.phone, "258840000001");
   assert.ok(!chats.some((chat) => chat.id === otherContact));
 
   const foreignSend = await call("/send", 0, { contactId: otherContact, jid: "258870000001@s.whatsapp.net", text: "Teste inválido" });
@@ -203,7 +273,7 @@ try {
     await history.getByText(reply, { exact: true }).waitFor();
     assert.equal(await history.getByText(reply, { exact: true }).count(), 1);
   }
-  console.log(`AgentX inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
+  console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
 } finally {
   await browser?.close();
   await app?.stop();

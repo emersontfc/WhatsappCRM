@@ -19,6 +19,7 @@ for attempt in {1..40}; do
   sleep 0.25
 done
 docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < tests/integration/agentx-inbox-fixture.sql >/dev/null
+docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 < supabase/migrations/19_contact_phone_identity.sql >/dev/null
 
 export AGENTX_FIXTURE_JWT_SECRET="agentx-inbox-jwt-test-secret-local-only"
 rest="$(docker run --rm -d --network "$network" -p 127.0.0.1::3000 \

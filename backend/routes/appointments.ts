@@ -4,6 +4,8 @@ import express from "express";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { authenticate } from "../middleware/auth.ts";
+import { saveContactIdentity } from "../services/contactIdentity.ts";
+import { readContactPhone } from "../../shared/contactPhone.ts";
 
 const router = express.Router();
 
@@ -217,11 +219,7 @@ router.post("/public/book", async (req, res) => {
       return res.status(400).json({ success: false, error: "Preencha todos os campos obrigatórios." });
     }
 
-    // Clean phone number
-    let cleanPhone = customerPhone.replace(/\D/g, "");
-    if (cleanPhone.length === 9 && ["82", "83", "84", "85", "86", "87"].includes(cleanPhone.slice(0, 2))) {
-      cleanPhone = `258${cleanPhone}`;
-    }
+    const cleanPhone = readContactPhone(customerPhone);
 
     // Get service details
     let durationMinutes = 30;
@@ -237,7 +235,7 @@ router.post("/public/book", async (req, res) => {
       }
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !scheduledContactJid({ phone: cleanPhone })) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !cleanPhone) {
       return res.status(400).json({ success: false, error: "Data, horário ou telefone inválido." });
     }
     if (professionalId) {
@@ -275,37 +273,17 @@ router.post("/public/book", async (req, res) => {
       return res.status(409).json({ success: false, error: "Este horário acabou de ser reservado. Por favor, escolha outro horário." });
     }
 
-    // Upsert / find contact
-    let contactId = null;
-    const { data: existingContact } = await supabaseAdmin
-      .from("contacts")
-      .select("id")
-      .eq("user_id", userId)
-      .or(`phone.eq.${cleanPhone},phone.eq.${cleanPhone.replace(/^258/, "")}`)
-      .maybeSingle();
-
-    if (existingContact) {
-      contactId = existingContact.id;
-    } else {
-      const { data: newContact } = await supabaseAdmin
-        .from("contacts")
-        .insert({
-          user_id: userId,
-          name: customerName,
-          phone: cleanPhone,
-          tags: ["Agendamento Online", "Paciente/Cliente"],
-        })
-        .select("id")
-        .single();
-      if (newContact) contactId = newContact.id;
-    }
+    const contact = await saveContactIdentity(userId, {
+      phone: cleanPhone, name: customerName, tags: ["Agendamento Online", "Paciente/Cliente"]
+    });
+    if (!contact?.id) throw new Error("Não foi possível guardar o contacto da marcação.");
 
     // Create appointment
     const { data: appointment, error: insertError } = await supabaseAdmin
       .from("appointments")
       .insert({
         user_id: userId,
-        contact_id: contactId,
+        contact_id: contact.id,
         service_id: serviceId || null,
         professional_id: professionalId || null,
         customer_name: customerName,

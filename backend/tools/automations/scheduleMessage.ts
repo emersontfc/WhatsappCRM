@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "../../supabaseAdmin.ts";
 import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { parseScheduledDateTime } from "../../utils/dateTimeParser.ts";
+import { saveContactIdentity } from "../../services/contactIdentity.ts";
+import { readContactPhone } from "../../../shared/contactPhone.ts";
 
 export const scheduleMessageTool: ToolDefinition = {
   name: "schedule_message",
@@ -61,31 +63,17 @@ export const scheduleMessageTool: ToolDefinition = {
       const sendDate = parsedDate.date;
 
       // 3. Resolve contact
-      let recipientRaw = String(args?.recipient || "").trim();
+      const recipientRaw = String(args?.recipient || "").trim();
       let contactName = recipientRaw;
       let contactPhone = "";
       let contactId = "";
 
-      let cleanPhone = recipientRaw.replace(/\D/g, "");
-      if (cleanPhone.length === 9 && /^8[2-7]/.test(cleanPhone)) {
-        cleanPhone = `258${cleanPhone}`;
-      }
-
-      if (cleanPhone.length >= 8) {
-        const { data } = await supabaseAdmin
-          .from("contacts")
-          .select("id, name, phone")
-          .eq("user_id", ctx.userId)
-          .eq("phone", cleanPhone)
-          .maybeSingle();
-
-        if (data) {
-          contactId = data.id;
-          contactName = data.name;
-          contactPhone = data.phone;
-        } else {
-          contactPhone = cleanPhone;
-        }
+      const cleanPhone = readContactPhone(recipientRaw);
+      if (cleanPhone) {
+        const saved = await saveContactIdentity(ctx.userId, { phone: cleanPhone, tags: ["Agendamento"] });
+        contactId = saved?.id ?? "";
+        contactName = saved?.name || cleanPhone;
+        contactPhone = saved?.phone || cleanPhone;
       } else if (recipientRaw.length >= 2) {
         const { data } = await supabaseAdmin
           .from("contacts")
@@ -100,21 +88,6 @@ export const scheduleMessageTool: ToolDefinition = {
           contactName = data.name;
           contactPhone = data.phone;
         }
-      }
-
-      // If contact does not exist yet in contacts table, create it automatically
-      if (!contactId && contactPhone) {
-        const { data: newC, error: cErr } = await supabaseAdmin
-          .from("contacts")
-          .insert({
-            user_id: ctx.userId,
-            name: contactName || contactPhone,
-            phone: contactPhone,
-            tags: ["Agendamento"]
-          })
-          .select("id")
-          .single();
-        if (newC) contactId = newC.id;
       }
 
       if (!contactId) {

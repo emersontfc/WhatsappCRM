@@ -30,6 +30,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../co
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { apiFetch } from "../lib/api";
+import { importContactsCsv } from "../lib/contactImport";
 import { UpgradePrompt } from "../components/UpgradePrompt";
 
 interface ScheduledMessage {
@@ -190,105 +191,16 @@ export default function Schedule() {
   const handleImportCSV = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const csv = event.target?.result as string;
-        const lines = csv.split('\n');
-        const userId = await getUserId();
-        
-        let importedCount = 0;
-        const contactsToInsert = [];
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-          
-          const parts = line.split(',');
-          if (parts.length >= 2) {
-            const name = parts[0].trim();
-            let phone = parts[1].replace(/\D/g, "");
-            
-            // Default country code for imports if not present (Mozambique: 9 digits)
-            if (phone.length <= 10 && !phone.startsWith("258")) {
-              phone = "258" + phone;
-            }
-            
-            if (name && phone) {
-              contactsToInsert.push({
-                user_id: userId,
-                name,
-                phone,
-                tags: ["Importado"],
-                created_at: new Date().toISOString(),
-              });
-              importedCount++;
-            }
-          }
-        }
-
-        if (contactsToInsert.length > 0) {
-          if (planDetails && contacts.length + contactsToInsert.length > planDetails.max_contacts) {
-            toast.error(`Limite de contatos atingido (${planDetails.max_contacts}). Você pode importar no máximo ${planDetails.max_contacts - contacts.length} contatos.`);
-            return;
-          }
-
-          let successCount = 0;
-          for (const contact of contactsToInsert) {
-            try {
-              const { data: existing } = await supabase
-                .from("contacts")
-                .select("id, tags")
-                .eq("user_id", userId)
-                .eq("phone", contact.phone)
-                .maybeSingle();
-
-              if (existing) {
-                const currentTags = Array.isArray(existing.tags) ? existing.tags : [];
-                const mergedTags = Array.from(new Set([...currentTags, "Importado"]));
-                await supabase
-                  .from("contacts")
-                  .update({ name: contact.name, tags: mergedTags })
-                  .eq("id", existing.id);
-              } else {
-                await supabase.from("contacts").insert(contact);
-              }
-              successCount++;
-            } catch (err) {
-              console.error("Error processing contact in CSV:", err);
-            }
-          }
-          toast.success(`${successCount} contatos processados com sucesso!`);
-          
-          // Manual refresh as fallback for real-time
-          const { data: refreshedContacts } = await supabase
-            .from("contacts")
-            .select("*")
-            .eq("user_id", userId);
-          
-          if (refreshedContacts) {
-            const manualContacts = refreshedContacts
-              .map(c => ({ ...c, tags: Array.isArray(c.tags) ? c.tags : [] }))
-              .filter(c => {
-                const tags = c.tags;
-                return tags.includes("Manual") || tags.includes("Importado");
-              });
-            setContacts(manualContacts);
-          }
-        } else {
-          toast.error("Nenhum contato válido encontrado no CSV. Use o formato: Nome, Telefone");
-        }
-      } catch (err) {
-        console.error("Error importing contacts:", err);
-        toast.error("Erro ao importar contatos.");
-      }
-      
-      if (csvInputRef.current) {
-        csvInputRef.current.value = '';
-      }
-    };
-    reader.readAsText(file);
+    try {
+      const result = await importContactsCsv(file);
+      if (result.warning) toast.warning(result.message);
+      else toast.success(result.message);
+      refreshAgenda();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Não foi possível importar os contactos.");
+    } finally {
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

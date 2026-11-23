@@ -30,6 +30,12 @@ export function makePlatformChecks(configured: boolean) {
         supabaseAdmin.from(table).select(columns).limit(0).abortSignal(signal)));
       if (results.some(({ error }) => error && !isSchemaError(error.code))) return "unavailable";
       if (results.some(({ error }) => error)) return "migration_required";
+      if (module === "crm") {
+        const { data, error } = await supabaseAdmin.rpc("agentx_contact_phone", { value: "841234567" }).abortSignal(signal);
+        if (error?.code === "PGRST202" || error?.code === "42883") return "migration_required";
+        if (error) return "unavailable";
+        return data === "258841234567" ? "ready" : "migration_required";
+      }
       if (module !== "agenda") return "ready";
 
       const { data, error } = await supabaseAdmin.rpc("agentx_schedule_contract_ready").abortSignal(signal);

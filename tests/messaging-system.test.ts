@@ -7,6 +7,16 @@ const mockMessages: any[] = [];
 vi.mock("../backend/supabaseAdmin.ts", () => {
   return {
     supabaseAdmin: {
+      rpc: async (method: string, input: { p_user_id: string; p_phone: string | null; p_lid: string | null; p_name: string | null }) => {
+        if (method !== "agentx_save_contact") throw new Error(`Unexpected RPC: ${method}`);
+        const { p_user_id: user_id, p_phone: phone, p_lid: lid, p_name: name } = input;
+        const existing = mockContacts.find((contact) => contact.user_id === user_id &&
+          ((phone && contact.phone === phone) || (lid && contact.lid === lid)));
+        if (existing) return { data: { ...existing, created: false }, error: null };
+        const contact = { id: `contact-${mockContacts.length + 1}`, user_id, phone, lid, name };
+        mockContacts.push(contact);
+        return { data: { ...contact, created: true }, error: null };
+      },
       from: (table: string) => {
         let currentTable = table;
         let filters: any = {};
@@ -205,9 +215,7 @@ describe("AgentX Messaging System — Baileys 7, LID Architecture & Deduplicatio
       const saved = mockContacts.find(c => c.id === contactId);
       expect(saved).toBeDefined();
       expect(saved.lid).toBe("104928502847592");
-      // O telefone DEVE ser vazio, JAMAIS conter os dígitos do LID ou prefixo 258 inventado
-      expect(saved.phone).toBe("");
-      expect(saved.phone).not.toContain("258104928502847592");
+      expect(saved.phone).toBeNull();
       expect(saved.name).toBe("Cliente Anónimo");
     });
 
@@ -250,7 +258,7 @@ describe("AgentX Messaging System — Baileys 7, LID Architecture & Deduplicatio
 
       const display = getContactDisplay(lidOnlyContact);
       expect(display.title).toBe("WhatsApp (7592)");
-      expect(display.subtitle).toBe("LID: 104928502847592");
+      expect(display.subtitle).toBe("Número ainda não disponível");
       expect(display.initials).toBe("WA");
     });
   });
