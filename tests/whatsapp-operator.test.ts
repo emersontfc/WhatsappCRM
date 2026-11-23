@@ -81,6 +81,32 @@ describe("shared scheduled dispatch", () => {
     expect(finish.update).toHaveBeenCalledWith({ status: "sent", error: null });
   });
 
+  it("dispatches an older schedule that only contains a phone", async () => {
+    const finish = query(null);
+    mocks.from.mockReturnValueOnce(query({ phone: "+258 84 123 4567", message: "Olá" })).mockReturnValueOnce(finish);
+    mocks.send.mockResolvedValue({ key: { id: "sent" } });
+    expect((await dispatchScheduled("scheduled_messages", "legacy", user)).status).toBe("sent");
+    expect(mocks.from).not.toHaveBeenCalledWith("contacts");
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, "Olá", undefined, undefined, undefined, undefined, undefined);
+  });
+
+  it("rejects a missing or foreign contact without falling back to the stored phone", async () => {
+    const contact = query(null);
+    mocks.from.mockReturnValueOnce(query({ contact_id: "other-contact", phone: "258841234567" }))
+      .mockReturnValueOnce(contact).mockReturnValueOnce(query(null));
+    expect((await dispatchScheduled("scheduled_messages", "id", user)).status).toBe("failed");
+    expect(contact.eq).toHaveBeenCalledWith("user_id", user);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("sends a text-only Status once the gateway accepts it", async () => {
+    mocks.from.mockReturnValueOnce(query({ caption: "Novidades", media_url: null, media_type: null }))
+      .mockReturnValueOnce(query(null));
+    mocks.send.mockResolvedValue({ key: { id: "status-id" } });
+    expect((await dispatchScheduled("scheduled_status", "text-status", user)).status).toBe("sent");
+    expect(mocks.send).toHaveBeenCalledWith(user, "status@broadcast", "Novidades", null, null, undefined, undefined, undefined);
+  });
+
   it("refuses announcements in admin-only groups unless this linked account is an admin", async () => {
     const item = { target_type: "group", group_jid: "12345@g.us", message: "Aviso" };
     mocks.from.mockReturnValueOnce(query(item)).mockReturnValueOnce(query(null));

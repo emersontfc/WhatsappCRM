@@ -36,6 +36,7 @@ interface ScheduledMessage {
   id: string;
   contact_id: string;
   contact_name: string;
+  phone?: string;
   message: string;
   media_url?: string;
   media_type?: string;
@@ -155,7 +156,7 @@ export default function Schedule() {
           setAgendaError(false);
           setContacts(nextContacts);
           setMessages([
-            ...messagesResult.data.map((item) => ({ ...item, contact_name: names.get(item.contact_id) ?? item.contact_name ?? "Contacto" })),
+            ...messagesResult.data.map((item) => ({ ...item, contact_name: names.get(item.contact_id) ?? item.contact_name ?? item.phone ?? "Contacto" })),
             ...statusResult.data.map((item) => ({ ...item, target_type: "status", message: item.caption, contact_name: "WhatsApp Status", contact_id: "status" }))
           ].sort((a, b) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at)));
         } finally {
@@ -309,7 +310,7 @@ export default function Schedule() {
       }
 
       const userId = await getUserId();
-      if (!userId) throw new Error("Usuário não identificado.");
+      if (!userId || userId === "guest-user") throw new Error("Inicia sessão para guardar o agendamento.");
 
       const fileExt = file.name.split('.').pop();
       const fileName = `${userId}/${Date.now()}.${fileExt}`;
@@ -425,9 +426,10 @@ export default function Schedule() {
           if (error) throw error;
           if (publishNow) {
             try {
-              await apiFetch("/api/whatsapp/send-scheduled", {
+              const result = await apiFetch("/api/whatsapp/send-scheduled", {
                 method: "POST", body: JSON.stringify({ id: data.id, type: "status" })
               });
+              if (result?.success !== true || result.status !== "sent") throw new Error("Envio por confirmar.");
               toast.success("Publicação aceite pelo WhatsApp.");
             } catch {
               toast.info("Status guardado. Confirma o estado na agenda.");
@@ -468,7 +470,7 @@ export default function Schedule() {
             .from("scheduled_messages")
             .insert(messagePayload);
           if (error) throw error;
-          toast.success("Mensagem/Fatura agendada com sucesso!");
+          toast.success(newMessage.target_type === "group" ? "Anúncio de grupo agendado." : "Mensagem agendada.");
         }
       }
 
@@ -486,9 +488,14 @@ export default function Schedule() {
         target_type: "contact",
         scheduled_at: formatForDateTimeInput(new Date(Date.now() + 15 * 60 * 1000))
       });
-    } catch (err: any) {
+    } catch (err) {
       console.error("Error saving scheduled message:", err);
-      toast.error(err.message || "Erro ao salvar agendamento.");
+      if (err && typeof err === "object" && "code" in err && err.code === "23502"
+        && "message" in err && typeof err.message === "string" && err.message.includes('column "phone"')) {
+        toast.error("A base de dados precisa da atualização 17 para guardar este agendamento.");
+      } else {
+        toast.error(err instanceof Error ? err.message : "Não foi possível guardar o agendamento. Tenta novamente.");
+      }
     } finally {
       setSavingSchedule(false);
     }
@@ -502,11 +509,11 @@ export default function Schedule() {
         body: JSON.stringify({ id: msg.id, type: msg.target_type || 'contact' })
       });
 
-      if (response.success) {
+      if (response?.success === true && response.status === "sent") {
         toast.success("Enviado com sucesso!", { id: `send-${msg.id}` });
         setMessages((items) => items.map((item) => item.id === msg.id ? { ...item, status: "sent" } : item));
       } else {
-        throw new Error(response.error || "Falha ao enviar");
+        throw new Error(response?.error || "Envio por confirmar. Verifica o estado na agenda.");
       }
     } catch (err: any) {
       toast.error(`Erro: ${err.message}`, { id: `send-${msg.id}` });

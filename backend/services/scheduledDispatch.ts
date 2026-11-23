@@ -47,7 +47,7 @@ export async function dispatchScheduled(table: ScheduleTable, id: string, userId
       await update("failed", { attempts, error: message });
       return { success: false, status: "failed", error: message };
     }
-  } else if (!statusPost) {
+  } else if (!statusPost && item.contact_id) {
     const { data: contact, error: contactError } = await supabaseAdmin.from("contacts").select("phone,lid")
       .eq("id", item.contact_id).eq("user_id", userId).maybeSingle();
     if (contactError) {
@@ -55,6 +55,9 @@ export async function dispatchScheduled(table: ScheduleTable, id: string, userId
       return { success: false, status: "pending", error: "Consulta do contacto indisponível. Nova tentativa agendada." };
     }
     jid = scheduledContactJid(contact);
+  } else if (!statusPost && typeof item.phone === "string" && /^\+?[\d\s()-]+$/.test(item.phone)) {
+    // Older jobs stored just a phone. Never fall back after a failed owner-scoped contact lookup.
+    jid = scheduledContactJid({ phone: item.phone });
   }
   if (!jid) {
     await update("failed", { error: "Contacto inválido para a conta." });

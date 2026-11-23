@@ -44,10 +44,12 @@ SQL
   cat <<'SQL'
 CREATE TABLE public.contacts (id uuid PRIMARY KEY, user_id uuid REFERENCES auth.users(id), name text);
 CREATE TABLE public.scheduled_messages (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, contact_id uuid, target_type text, message text, scheduled_at timestamptz, status text
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, contact_id uuid, target_type text, phone text NOT NULL,
+ message text, scheduled_at timestamptz, status text
 );
 CREATE TABLE public.scheduled_status (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, media_url text, media_type text, caption text, scheduled_at timestamptz, status text
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, media_url text NOT NULL, media_type text NOT NULL,
+ caption text, scheduled_at timestamptz, status text
 );
 CREATE TABLE public.leads (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, phone text NOT NULL, contact_id uuid REFERENCES public.contacts,
@@ -61,6 +63,10 @@ SQL
   cat supabase/migrations/14_whatsapp_sales_pipeline.sql
   cat supabase/migrations/15_whatsapp_group_moderation.sql
   cat supabase/migrations/16_whatsapp_recurring_posts.sql
+  cat tests/integration/schedule-legacy-fixture.sql
+  cat supabase/migrations/17_whatsapp_schedule_compatibility.sql
+  cat supabase/migrations/17_whatsapp_schedule_compatibility.sql
+  cat tests/integration/schedule-compatibility.sql
   cat tests/integration/whatsapp-sales-and-recurrence.sql
 } | psql_test >"$test_logs/setup" 2>&1 || { cat "$test_logs/setup"; exit 1; }
 

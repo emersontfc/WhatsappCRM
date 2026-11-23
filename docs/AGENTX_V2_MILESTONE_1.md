@@ -86,9 +86,12 @@ Se a confirmação do WhatsApp for ambígua, verifique a conversa ou o Status an
 
 ## Venda fechada, moderação e publicações recorrentes
 
-Aplique `14_whatsapp_sales_pipeline.sql`, `15_whatsapp_group_moderation.sql` e
-`16_whatsapp_recurring_posts.sql` em `supabase/migrations`, por ordem, depois das migrações
+Aplique as migrações 14 a 17 em `supabase/migrations`, por ordem, depois das migrações
 12 e 13 e da configuração do CRM existente. Atualize a aplicação depois da base.
+
+Em bases que já receberam 12 a 16, execute apenas `17_whatsapp_schedule_compatibility.sql`
+no SQL Editor. A migração permite que a agenda guarde mensagens sem preencher a coluna
+antiga `phone`, mantém o histórico e aplica o isolamento entre contas na agenda.
 
 - Uma consulta comercial pode criar ou atualizar o lead. Um pedido novo fica ligado ao lead
   e aparece em **Vendas & Pedidos** com pagamento pendente. Repetir a mesma mensagem
