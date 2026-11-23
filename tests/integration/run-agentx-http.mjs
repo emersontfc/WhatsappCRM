@@ -1,21 +1,27 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 
 const fakeUser = "00000000-0000-4000-8000-000000000001";
 const fakeToken = "agentx-integration-session";
-const fakeSecret = "agentx-smoke-test-service-key";
+const fakeSecret = "sb_secret_agentx-smoke-test-service-key";
 const fakeAiKey = "agentx-smoke-test-gemini-key";
 const publicKey = "sb_publishable_agentx_smoke-test";
 const revision = "a123bcd";
+const run = promisify(execFile);
 let workerCalls = 0;
 let brokenCrm = false;
 
 const supabase = createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
   res.setHeader("content-type", "application/json");
+  if (req.headers.apikey !== fakeSecret) {
+    res.statusCode = 401;
+    return res.end(JSON.stringify({ message: "Invalid fixture API key" }));
+  }
   if (url.pathname === "/rest/v1/rpc/agentx_process_digital_deliveries") {
     workerCalls++;
     return res.end("0");
@@ -38,13 +44,19 @@ const supabase = createServer((req, res) => {
 supabase.listen(0, "127.0.0.1");
 await once(supabase, "listening");
 const fixtureUrl = `http://127.0.0.1:${supabase.address().port}`;
+const appEnv = { ...process.env, PORT: "0", NODE_ENV: "production", SUPABASE_URL: fixtureUrl, VITE_SUPABASE_URL: fixtureUrl,
+  SUPABASE_SERVICE_ROLE_KEY: fakeSecret, VITE_SUPABASE_ANON_KEY: publicKey, GEMINI_API_KEY: fakeAiKey,
+  VITE_API_URL: "", AGENTX_RELEASE: revision, DISABLE_WHATSAPP_RECONNECT: "true", DISABLE_SCHEDULER: "true",
+  DISABLE_DIGITAL_DELIVERY_WORKER: "false" };
+const tsx = "node_modules/tsx/dist/cli.mjs";
+
+function preflight(env = appEnv) {
+  return run(process.execPath, [tsx, "scripts/check-agentx-release.ts"], { env, timeout: 12_000 });
+}
 
 async function startApp() {
-  const child = spawn(process.execPath, ["node_modules/tsx/dist/cli.mjs", "server.ts"], {
-    env: { ...process.env, PORT: "0", NODE_ENV: "production", SUPABASE_URL: fixtureUrl, VITE_SUPABASE_URL: fixtureUrl,
-      SUPABASE_SERVICE_ROLE_KEY: fakeSecret, VITE_SUPABASE_ANON_KEY: publicKey, GEMINI_API_KEY: fakeAiKey,
-      VITE_API_URL: "", AGENTX_RELEASE: revision, DISABLE_WHATSAPP_RECONNECT: "true", DISABLE_SCHEDULER: "true",
-      DISABLE_DIGITAL_DELIVERY_WORKER: "false" },
+  const child = spawn(process.execPath, [tsx, "server.ts"], {
+    env: appEnv,
     stdio: ["ignore", "pipe", "pipe"]
   });
   let logs = "";
@@ -55,7 +67,7 @@ async function startApp() {
     const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
     try { await exit; } finally { clearTimeout(timeout); }
   };
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 200; attempt++) {
     const matches = /Server listening on port (\d+)/.exec(logs);
     if (matches) return { base: `http://127.0.0.1:${matches[1]}`, stop };
     if (child.exitCode !== null) break;
@@ -66,6 +78,15 @@ async function startApp() {
 }
 
 try {
+  const misplacedKey = `fixture.${Buffer.from('{"role":"service_role"}').toString("base64url")}.fixture`;
+  await assert.rejects(preflight({ ...appEnv, VITE_SUPABASE_ANON_KEY: misplacedKey }), (error) => {
+    assert.match(error.stderr, /VITE_SUPABASE_ANON_KEY deve conter a chave pública/);
+    assert.ok(!error.stderr.includes(misplacedKey) && !error.stdout.includes(misplacedKey));
+    return error.code === 1;
+  });
+  const preflightResult = await preflight();
+  assert.match(preflightResult.stdout, /Pré-verificação concluída/);
+
   const healthy = await startApp();
   try {
     const request = (path, auth = false) => fetch(healthy.base + path, {
@@ -97,6 +118,7 @@ try {
   }
 
   brokenCrm = true;
+  await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
   const degraded = await startApp();
   try {
     const liveness = await fetch(degraded.base + "/api/health");

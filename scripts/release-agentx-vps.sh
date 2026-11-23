@@ -67,6 +67,14 @@ printf '\n.env\n.env.*\nuploads\nwhatsapp_sessions_data\n' >> "$stage/source/.do
 printf 'A preparar a imagem %s com o AgentX em execução.\n' "$revision"
 docker build --build-arg "AGENTX_RELEASE=$commit" --label "org.opencontainers.image.revision=$commit" -t "$release_image" "$stage/source"
 
+if [[ -f "$stage/source/scripts/check-agentx-release.ts" ]]; then
+  if ! "${compose[@]}" -f "$stage/release.yml" run --rm --no-deps -T --pull never \
+    --entrypoint node agentx ./node_modules/tsx/dist/cli.mjs scripts/check-agentx-release.ts; then
+    printf 'Publicação abortada antes de trocar a versão em execução.\n' >&2
+    exit 1
+  fi
+fi
+
 old_image=$(docker inspect --format '{{.Image}}' "$container")
 if ! docker image tag "$old_image" "$rollback_image" 2>/dev/null; then
   docker commit --pause=false "$container" "$rollback_image" >/dev/null
@@ -83,6 +91,7 @@ if start_agentx; then
 fi
 
 printf 'A nova versão falhou. A repor a imagem anterior.\n' >&2
+docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}{{println .ExitCode .Output}}{{end}}{{end}}' "$container" >&2 || true
 install -m 600 "$stage/rollback.yml" "$override"
 if start_agentx; then
   printf 'A versão anterior voltou a responder.\n' >&2

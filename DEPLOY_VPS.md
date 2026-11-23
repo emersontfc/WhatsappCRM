@@ -190,6 +190,8 @@ sudo certbot --nginx -d seudominio.com -d www.seudominio.com
 
 ## 📋 8. Comandos Úteis de Manutenção
 
+O comando `scripts/release-agentx-vps.sh` testa a chave pública do painel e a leitura do CRM num contentor temporário antes de trocar a versão em execução. No `.env`, use a chave publishable ou anon em `VITE_SUPABASE_ANON_KEY` e reserve a chave secret ou service_role para `SUPABASE_SERVICE_ROLE_KEY`.
+
 | Ação | Comando Docker | Comando PM2 |
 | :--- | :--- | :--- |
 | **Ver logs ao vivo** | `docker compose logs -f agentx` | `pm2 logs agentx-crm` |

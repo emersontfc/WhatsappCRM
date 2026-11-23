@@ -25,6 +25,7 @@ import fs from "fs";
 import { whatsappManager } from "./backend/whatsappManager.ts";
 import { supabaseAdmin, supabaseAdminConfigured } from "./backend/supabaseAdmin.ts";
 import { registerOperations } from "./backend/routes/operations.ts";
+import { frontendProblem } from "./backend/services/releaseReadiness.ts";
 import { startDigitalDeliveryWorker, type DeliveryWorkerState } from "./backend/services/digitalDeliveryWorker.ts";
 
 async function initDatabase() {
@@ -546,13 +547,8 @@ async function startServer() {
 
   registerOperations(app, {
     databaseConfigured: supabaseAdminConfigured,
-    frontendReady: () => {
-      if (process.env.NODE_ENV !== "production") return true;
-      const backendUrl = (process.env.SUPABASE_URL || runtimeEnv.VITE_SUPABASE_URL).trim().replace(/\/+$/, "");
-      return Boolean(runtimeEnv.VITE_SUPABASE_ANON_KEY && runtimeEnv.VITE_SUPABASE_URL &&
-        runtimeEnv.VITE_SUPABASE_URL.replace(/\/+$/, "") === backendUrl &&
-        fs.existsSync(path.join(process.cwd(), "dist", "index.html")));
-    },
+    frontendReady: () => process.env.NODE_ENV !== "production" ||
+      frontendProblem(process.env, path.join(process.cwd(), "dist", "index.html")) === null,
     release,
     schedulerEnabled,
     whatsappStatus: (userId) => whatsappManager.getSession(userId)?.status,
