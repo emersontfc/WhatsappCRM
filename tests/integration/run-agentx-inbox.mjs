@@ -388,13 +388,34 @@ try {
     const { chromium } = createRequire(import.meta.url)("playwright");
     browser = await chromium.launch({ executablePath: process.env.AGENTX_TEST_CHROMIUM || "/usr/bin/chromium",
       args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+
+    const stalledSession = await browser.newPage();
+    await stalledSession.addInitScript(({ user, accessToken }) => {
+      localStorage.setItem("sb-127-auth-token", JSON.stringify({
+        user, access_token: accessToken, refresh_token: "stalled-refresh", expires_at: 1
+      }));
+    }, { user: users[0], accessToken: userTokens[0] });
+    let refreshStarted = false;
+    await stalledSession.route("**/auth/v1/token?grant_type=refresh_token", () => { refreshStarted = true; });
+    await stalledSession.goto(app.base + "/login");
+    await stalledSession.getByRole("heading", { name: "Bem-vindo de volta" }).waitFor({ timeout: 7_000 });
+    assert.equal(refreshStarted, true);
+    await stalledSession.close();
+
     page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     page.on("pageerror", (error) => console.error("Inbox browser error:", error.message));
     await page.goto(app.base + "/login");
     await page.locator('input[type="email"]').fill(users[0].email);
     await page.locator('input[type="password"]').fill(password);
+    const signIn = "**/auth/v1/token?grant_type=password";
+    await page.route(signIn, () => {});
+    await page.locator('button[type="submit"]').click();
+    await page.getByRole("alert").getByText("Não foi possível contactar o serviço de autenticação.", { exact: false })
+      .waitFor({ timeout: 12_000 });
+    await page.unroute(signIn);
     await page.locator('button[type="submit"]').click();
     await page.waitForURL("**/dashboard", { timeout: 15000 });
+    console.log("Browser login passed with stalled session recovery, auth timeout and successful retry.");
     await page.goto(app.base + "/contacts");
     await page.getByRole("button", { name: "Novo Contacto" }).click();
     await page.getByPlaceholder("Nome do cliente").fill("Contacto do navegador");

@@ -56,6 +56,21 @@ describe("shared AgentX API transport", () => {
     await expect(apiFetch("/api/ready", { timeout: 15 })).rejects.toThrow("demorou");
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("allows public registration while the previous session is stalled", async () => {
+    session.mockReturnValue(new Promise(() => {}));
+    request.mockResolvedValue(Response.json({ success: true }));
+    await expect(apiFetch("/api/auth/register", { method: "POST", authenticate: false })).resolves.toEqual({ success: true });
+    expect(session).not.toHaveBeenCalled();
+    const [, options] = request.mock.calls[0];
+    expect(options.headers.has("Authorization")).toBe(false);
+  });
+
+  it("rejects a write when the current session belongs to a different account", async () => {
+    session.mockResolvedValue({ access_token: "test-user-session", user: { id: "new-account" } });
+    await expect(apiFetch("/api/whatsapp/reset", { method: "POST", accountId: "old-account" })).rejects.toMatchObject({ status: 401 });
+    expect(request).not.toHaveBeenCalled();
+  });
 });
 
 describe("public configuration boundary", () => {

@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type Session } from "@supabase/supabase-js";
 import { isPublicSupabaseKey } from "../shared/publicConfig";
 
 // Safely obtain runtime (window.__ENV__) or build-time (import.meta.env) credentials
@@ -24,10 +24,33 @@ if (supabaseUrl && !supabaseUrl.startsWith("http")) {
   supabaseUrl = `https://${supabaseUrl}.supabase.co`;
 }
 
-const isValidAnonKey = isPublicSupabaseKey(supabaseAnonKey);
+function getProjectUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password
+      && !url.search && !url.hash ? url.href.replace(/\/+$/, "") : null;
+  } catch {
+    return null;
+  }
+}
 
-export const supabase = (supabaseUrl && isValidAnonKey) 
-  ? createClient(supabaseUrl, supabaseAnonKey)
+const projectUrl = getProjectUrl(supabaseUrl);
+export const supabaseConfigured = projectUrl !== null && isPublicSupabaseKey(supabaseAnonKey);
+const SESSION_TIMEOUT_MS = 4_000;
+const AUTH_REQUEST_TIMEOUT_MS = 8_000;
+
+const fetchSupabase: typeof fetch = (input, init) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (!url.startsWith(`${projectUrl}/auth/v1/`)) return fetch(input, init);
+
+  const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  const deadline = AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
+  return fetch(input, { ...init, signal });
+};
+
+export const supabase = supabaseConfigured
+  ? createClient(projectUrl, supabaseAnonKey, { global: { fetch: fetchSupabase } })
   : new Proxy({}, {
       get: (target, prop) => {
         if (prop === 'auth') {
@@ -52,34 +75,26 @@ export const supabase = (supabaseUrl && isValidAnonKey)
       }
     }) as any;
 
-if (!supabaseUrl || !isValidAnonKey) {
+if (!supabaseConfigured) {
   console.warn("[Supabase] VITE_SUPABASE_URL or valid VITE_SUPABASE_ANON_KEY is missing in frontend configuration.");
 }
 
-// Helper to get current session with simple promise caching to avoid concurrent auth lock issues
-let sessionPromise: Promise<any> | null = null;
+// Reuse the in-flight lookup while bounding how long each caller waits for it.
+let sessionPromise: Promise<Session | null> | null = null;
 
-export const getSession = async () => {
-  if (sessionPromise) {
-    return sessionPromise;
+export const getSession = async (): Promise<Session | null> => {
+  if (!sessionPromise) {
+    sessionPromise = supabase.auth.getSession()
+      .then(({ data: { session } }) => session)
+      .catch(() => null)
+      .finally(() => { sessionPromise = null; });
   }
 
-  sessionPromise = (async () => {
-    try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      if (error) {
-        console.error("getSession: Error fetching session:", error);
-      }
-      return session;
-    } catch (err) {
-      console.error("Error in getSession:", err);
-      return null;
-    } finally {
-      sessionPromise = null;
-    }
-  })();
-
-  return sessionPromise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), SESSION_TIMEOUT_MS);
+  });
+  return Promise.race([sessionPromise, deadline]).finally(() => clearTimeout(timer));
 };
 
 export const getUser = async () => {

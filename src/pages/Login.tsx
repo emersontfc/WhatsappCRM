@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { Zap, LogIn, UserPlus, Mail, Lock, User, MessageCircle, Eye, EyeOff, Rocket, ArrowLeft, Sparkles, CheckCircle2 } from "lucide-react";
-import { supabase } from "../supabase";
+import { supabase, supabaseConfigured } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { apiFetch } from "../lib/api";
@@ -17,11 +17,15 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const navigate = useNavigate();
-
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
     setError(null);
+
+    if (!supabaseConfigured) {
+      setError("O AgentX ainda não tem uma ligação válida ao serviço de autenticação.");
+      return;
+    }
 
     // Basic Validation
     if (!email || !password) {
@@ -42,48 +46,30 @@ export default function Login() {
       if (isRegistering) {
         await apiFetch("/api/auth/register", {
           method: "POST",
+          authenticate: false,
+          timeout: 15_000,
           body: JSON.stringify({ email, password, name }),
         });
-
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (signInError) throw signInError;
-
-        toast.success("Conta criada com sucesso! Bem-vindo ao Agentex 🚀");
-      } else {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-        if (signInError) {
-          if (signInError.message === "Invalid login credentials") {
-            throw new Error("E-mail ou senha incorretos.");
-          }
-          throw signInError;
-        }
-
-        toast.success("Login realizado com sucesso!");
       }
 
-      // Redirect to dashboard - onboarding check happens in Dashboard or App router
-      navigate("/dashboard");
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (signInError?.code === "invalid_credentials" || signInError?.message === "Invalid login credentials") {
+        throw new Error("E-mail ou senha incorretos.");
+      }
+      if (signInError) throw signInError;
+
+      toast.success(isRegistering ? "Conta criada com sucesso!" : "Sessão iniciada.");
     } catch (err: any) {
-      console.error("Auth error:", err);
       const raw = String(err?.message || err || "");
       const lower = raw.toLowerCase();
       if (
+        err?.name === "AuthRetryableFetchError" ||
         lower.includes("failed to fetch") ||
         lower.includes("networkerror") ||
         lower.includes("network request failed") ||
         lower.includes("load failed")
       ) {
-        setError(
-          "Não foi possível ligar ao servidor (rede). Confirme a internet; no PC local use NODE_ENV=development, reinicie com npm run dev e verifique VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY"
-        );
+        setError("Não foi possível contactar o serviço de autenticação. Tenta novamente em instantes.");
       } else {
         setError(raw || "Falha na autenticação. Tente novamente.");
       }
@@ -190,7 +176,8 @@ export default function Login() {
                 className="space-y-5"
               >
                 {error && (
-                    <motion.div 
+                    <motion.div
+                      role="alert"
                       initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className="p-4 rounded-xl bg-red-50 text-red-600 text-sm font-bold border border-red-100"

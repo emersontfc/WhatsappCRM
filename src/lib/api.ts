@@ -1,6 +1,8 @@
 import { getSession } from "../supabase";
 
 interface FetchOptions extends RequestInit {
+  accountId?: string;
+  authenticate?: boolean;
   timeout?: number;
   responseType?: "blob";
 }
@@ -40,7 +42,7 @@ function getSessionBefore(signal: AbortSignal) {
 }
 
 export async function apiFetch(path: string, options: FetchOptions = {}) {
-  const { timeout = 30000, signal: callerSignal, responseType, ...fetchOptions } = options;
+  const { accountId, authenticate = true, timeout = 30000, signal: callerSignal, responseType, ...fetchOptions } = options;
   const url = resolveApiUrl(path);
   const controller = new AbortController();
   const { signal } = controller;
@@ -49,7 +51,10 @@ export async function apiFetch(path: string, options: FetchOptions = {}) {
   if (callerSignal?.aborted) cancel();
   else callerSignal?.addEventListener("abort", cancel, { once: true });
   try {
-    const session = await getSessionBefore(signal);
+    const session = authenticate ? await getSessionBefore(signal) : null;
+    if (accountId && session?.user?.id !== accountId) {
+      throw new ApiError("A sessão mudou. Inicia sessão novamente para continuar.", 401);
+    }
     const headers = new Headers(fetchOptions.headers);
     if (session?.access_token) headers.set("Authorization", `Bearer ${session.access_token}`);
     headers.set("Accept", responseType === "blob" ? "*/*" : "application/json");

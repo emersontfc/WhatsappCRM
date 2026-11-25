@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import type { User } from "@supabase/supabase-js";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { 
   LayoutDashboard, 
@@ -29,96 +30,72 @@ import {
   ShoppingCart
 } from "lucide-react";
 import AgentXLogo from "./AgentXLogo";
-import { supabase, getUser } from "../supabase";
+import { supabase } from "../supabase";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/Badge";
 import { apiFetch } from "../lib/api";
 import { Button } from "./ui/Button";
 import { AgentexCopilot } from "./AgentexCopilot";
-import { getStoredNiche, NICHE_CONFIGS, fetchBusinessProfile } from "../lib/niches";
+import { DEFAULT_NICHE, NICHE_CONFIGS, toCanonicalNiche, type CanonicalBusinessType } from "../lib/niches";
 
 interface LayoutProps {
   children: React.ReactNode;
+  user: Pick<User, "id" | "email" | "user_metadata">;
 }
 
-export default function Layout({ children }: LayoutProps) {
+export default function Layout({ children, user }: LayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isActivated, setIsActivated] = useState(true);
+  const { id: userId, email: userEmail = "" } = user;
+  const rawName = user.user_metadata?.full_name;
+  const userName = (typeof rawName === "string" && rawName.trim()) || userEmail.split("@")[0] || "Utilizador";
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [userName, setUserName] = useState("");
-  const [userEmail, setUserEmail] = useState("");
-  const [userPlan, setUserPlan] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [activeNiche, setActiveNiche] = useState(getStoredNiche);
+  const [subscription, setSubscription] = useState<{ userId: string; plan: string; isAdmin: boolean }>();
+  const [niche, setNiche] = useState<{ userId: string; type: CanonicalBusinessType }>();
+  const currentSubscription = subscription?.userId === userId ? subscription : undefined;
+  const isAdmin = currentSubscription?.isAdmin ?? false;
+  const userPlan = currentSubscription?.plan;
+  const activeNiche = niche?.userId === userId ? niche.type : DEFAULT_NICHE;
 
   useEffect(() => {
-    const handleNicheChange = () => setActiveNiche(getStoredNiche());
+    const controller = new AbortController();
+    const { signal } = controller;
+    const options = { accountId: userId, signal, timeout: 8000 };
+    let editedNiche = false;
+    const handleNicheChange = (event: Event) => {
+      const type = (event as CustomEvent<unknown>).detail;
+      if (typeof type !== "string") return;
+      editedNiche = true;
+      setNiche({ userId, type: toCanonicalNiche(type) });
+    };
     window.addEventListener("crm_niche_changed", handleNicheChange);
-    window.addEventListener("storage", handleNicheChange);
-    return () => {
-      window.removeEventListener("crm_niche_changed", handleNicheChange);
-      window.removeEventListener("storage", handleNicheChange);
-    };
-  }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const checkStatus = async () => {
-      try {
-        const user = await getUser();
-        if (!user) {
-          if (isMounted) setLoading(false);
-          return;
-        }
-
-        if (isMounted) {
-          const rawName = user.user_metadata?.full_name || user.email?.split("@")[0] || "Usuário";
-          setUserName(typeof rawName === "string" ? rawName : "Usuário");
-          setUserEmail(typeof user.email === "string" ? user.email : "");
-        }
-
-        // Fetch company business profile from backend
-        try {
-          const profile = await fetchBusinessProfile();
-          if (isMounted && profile?.type) {
-            setActiveNiche(profile.type);
-          }
-        } catch (pErr) {
-          console.warn("Could not fetch business profile in Layout:", pErr);
-        }
-
-        // Fetch profile/subscription from backend to ensure consistency and isolation
-        try {
-          const response = await apiFetch("/api/ai/subscription");
-          if (isMounted && response?.success && response?.data) {
-            const sub = response.data;
-            const adminStatus = sub?.role === "admin" || sub?.role === "superadmin";
-            setIsAdmin(adminStatus);
-            
-            const rawPlan = sub?.plan || sub?.subscription?.plan;
-            setUserPlan(typeof rawPlan === "string" ? rawPlan : "Free");
-            setIsActivated(true);
-          }
-        } catch (subErr) {
-          console.warn("Could not fetch subscription in Layout, defaulting to Free:", subErr);
-          if (isMounted) {
-            setUserPlan("Free");
-            setIsActivated(true);
-          }
-        }
-      } catch (err) {
-        console.error("Layout status check failed:", err);
-      } finally {
-        if (isMounted) setLoading(false);
+    void apiFetch("/api/company/profile", options).then((response) => {
+      if (!signal.aborted && !editedNiche && response?.success && response.data?.userId === userId && typeof response.data.type === "string") {
+        setNiche({ userId, type: toCanonicalNiche(response.data.type) });
       }
-    };
+    }).catch((error) => {
+      if (!signal.aborted) console.warn("Não foi possível consultar o perfil da empresa.", error);
+    });
 
-    checkStatus();
-    return () => { isMounted = false; };
-  }, []);
+    void apiFetch("/api/ai/subscription", options).then((response) => {
+      if (signal.aborted || !response?.success || response.data?.id !== userId) return;
+      const { plan, subscription: details, role } = response.data;
+      const rawPlan = plan || details?.plan;
+      setSubscription({
+        userId,
+        plan: typeof rawPlan === "string" ? rawPlan : "Free",
+        isAdmin: role === "admin" || role === "superadmin"
+      });
+    }).catch((error) => {
+      if (!signal.aborted) console.warn("Não foi possível consultar a subscrição.", error);
+    });
+
+    return () => {
+      controller.abort();
+      window.removeEventListener("crm_niche_changed", handleNicheChange);
+    };
+  }, [userId]);
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -185,7 +162,7 @@ export default function Layout({ children }: LayoutProps) {
   const visibleSections = sections.map(section => ({
     ...section,
     items: section.items.filter(item => {
-      if ((item as any).premiumOnly && userPlan === "Free") {
+      if ("premiumOnly" in item && item.premiumOnly && (!userPlan || userPlan === "Free")) {
         return false;
       }
       return true;
@@ -199,14 +176,6 @@ export default function Layout({ children }: LayoutProps) {
 
   if (userPlan === "Free") {
     visibleSections.find(s => s.title === "Sistema")?.items.push({ name: "Upgrade", path: "/activate", icon: CreditCard });
-  }
-
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-slate-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent"></div>
-      </div>
-    );
   }
 
   const allNavItems = visibleSections.flatMap(s => s.items);

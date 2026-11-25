@@ -1,6 +1,7 @@
 import { Workflows } from "../components/Workflows";
 import { OperationsStatus } from "../components/OperationsStatus";
 import { useState, useEffect, useRef } from "react";
+import type { User as AuthUser } from "@supabase/supabase-js";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -46,18 +47,18 @@ import {
   MessageCircle
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase, getUser } from "../supabase";
+import { supabase } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
-import { apiFetch } from "../lib/api";
+import { ApiError, apiFetch } from "../lib/api";
 import { startDashboardPolling } from "../lib/dashboardPolling";
 import { Badge } from "../components/ui/Badge";
 import { TemplateModal } from "../components/TemplateModal";
 import { QRCodeSVG } from "qrcode.react";
 
-import { BusinessNiche, NICHE_CONFIGS, getStoredNiche, fetchBusinessProfile } from "../lib/niches";
+import { BusinessNiche, NICHE_CONFIGS, getStoredNiche, toCanonicalNiche } from "../lib/niches";
 
 const WeeklyActivityChart = ({ 
   data, 
@@ -219,10 +220,15 @@ const ConnectionStatusBadge = ({ status }: { status: string | null }) => {
   );
 };
 
-export default function Dashboard() {
+type DashboardUser = Pick<AuthUser, "id" | "email" | "user_metadata"> & { template_applied?: boolean };
+
+export default function Dashboard({ user }: { user: DashboardUser }) {
   const navigate = useNavigate();
   const { hash } = useLocation();
-  const { isActivated, plan, planDetails, loading: activationLoading } = useActivation();
+  const userId = user.id;
+  const { isActivated, plan, error: activationError, loading: activationLoading, retry: retryActivation } = useActivation(userId);
+  const displayName = user.user_metadata?.full_name;
+  const userName = typeof displayName === "string" && displayName ? displayName : user.email?.split("@")[0] || "Usuário";
   const [status, setStatus] = useState<string | null>(null);
   const [qr, setQr] = useState<string | null>(null);
   const [me, setMe] = useState<any>(null);
@@ -244,10 +250,8 @@ export default function Dashboard() {
   const [systemLogs, setSystemLogs] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"messages" | "logs" | "leads">("messages");
   const [leads, setLeads] = useState<any[]>([]);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [userName, setUserName] = useState("Usuário");
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [niche, setNiche] = useState<BusinessNiche>(getStoredNiche);
+  const [showTemplateModal, setShowTemplateModal] = useState(user.template_applied === false);
+  const [niche, setNiche] = useState<BusinessNiche>("general");
   const [chartMetric, setChartMetric] = useState<"messages" | "leads">("messages");
   const [messagesUsed, setMessagesUsed] = useState(0);
   const [weeklyActivity, setWeeklyActivity] = useState<{ day: string; count: number; dateStr: string }[]>([]);
@@ -257,51 +261,22 @@ export default function Dashboard() {
       setNiche(getStoredNiche());
     };
     window.addEventListener("crm_niche_changed", handleNicheChange);
-    window.addEventListener("storage", handleNicheChange);
-    return () => {
-      window.removeEventListener("crm_niche_changed", handleNicheChange);
-      window.removeEventListener("storage", handleNicheChange);
-    };
+    return () => window.removeEventListener("crm_niche_changed", handleNicheChange);
   }, []);
 
-useEffect(() => {
-  const fetchUserData = async () => {
-    try {
-      const user = await getUser();
-
-      if (!user) return;
-
-      setUserId(user.id);
-      setUserName(
-        user.user_metadata?.full_name ||
-        user.email?.split("@")[0] ||
-        "Usuário"
-      );
-
-      // Fetch business profile from backend
-      fetchBusinessProfile().then(p => {
-        if (p?.type) setNiche(p.type);
-      }).catch(() => {});
-
-      if (user.template_applied === false) {
-        setShowTemplateModal(true);
+  useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    void apiFetch("/api/company/profile", { accountId: userId, signal, timeout: 8_000 }).then((response) => {
+      if (!signal.aborted && response?.success && response.data?.userId === userId && typeof response.data.type === "string") {
+        setNiche(toCanonicalNiche(response.data.type));
       }
-
-      // ✅ BUSCAR AGENT
-      try {
-        const agentRes = await apiFetch("/api/agent");
-        if (agentRes?.success) setAgent(agentRes.data?.id ? agentRes.data : null);
-      } catch (err) {
-        console.error("Erro ao buscar agent:", err);
-      }
-
-    } catch (err) {
-      console.error("Erro no fetchUserData:", err);
-    }
-  };
-
-  fetchUserData();
-}, []);
+    }).catch(() => {});
+    void apiFetch("/api/agent", { accountId: userId, signal, timeout: 8_000 }).then((response) => {
+      if (!signal.aborted && response?.success && response.data?.user_id === userId) setAgent(response.data);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -485,22 +460,20 @@ useEffect(() => {
     }));
   };
 
-  const isCheckingStatus = useRef(false);
+  const statusRequest = useRef<AbortController | null>(null);
   const connectingSince = useRef<number | null>(null);
   const qrSince = useRef<number | null>(null);
 
-  const checkStatus = async (uId: string, manual = false) => {
-    if (!uId || uId === "guest-user" || isCheckingStatus.current) return;
+  const checkStatus = async (manual = false) => {
+    if (statusRequest.current) return;
 
-    isCheckingStatus.current = true;
+    const request = new AbortController();
+    statusRequest.current = request;
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(8_000)]);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        if (manual) toast.error("Sessão expirada. Por favor, faça login novamente.");
-        return;
-      }
-      // Use the simplified status endpoint
-      const data = await apiFetch(`/api/whatsapp/status`);
+      const data = await apiFetch("/api/whatsapp/status", { accountId: userId, signal });
+      if (signal.aborted) return;
+      if (data?.success !== true || typeof data.status !== "string") throw new Error("O WhatsApp não confirmou o estado da ligação.");
       
       if (data.status === "connected") {
         connectingSince.current = null;
@@ -511,8 +484,8 @@ useEffect(() => {
         
         // Fetch 'me' info if connected
         try {
-          const meData = await apiFetch(`/api/whatsapp/me`);
-          if (meData.me) setMe(meData.me);
+          const meData = await apiFetch("/api/whatsapp/me", { accountId: userId, signal });
+          if (!signal.aborted && meData?.me) setMe(meData.me);
         } catch (e) {}
       } else if (data.status === "qr") {
         connectingSince.current = null;
@@ -523,15 +496,13 @@ useEffect(() => {
         } else if (Date.now() - qrSince.current > 120000) { // 120 seconds timeout for QR
           console.log("[WhatsApp] QR timeout reached, resetting...");
           qrSince.current = null;
-          await resetSession();
-          setStatus("disconnected");
-          setQr(null);
-          toast.error("O código expirou. Tente novamente.");
+          if (await resetSession(signal)) toast.error("O código expirou. Tente novamente.");
           return;
         }
 
         // Fetch QR code specifically FIRST to avoid UI flicker
-        const qrData = await apiFetch(`/api/whatsapp/qr`);
+        const qrData = await apiFetch("/api/whatsapp/qr", { accountId: userId, signal });
+        if (signal.aborted) return;
         
         if (qrData.qr) {
           setQr(qrData.qr);
@@ -549,10 +520,7 @@ useEffect(() => {
         } else if (Date.now() - connectingSince.current > 60000) { // 60 seconds timeout for connecting
           console.log("[WhatsApp] Connecting timeout reached, resetting...");
           connectingSince.current = null;
-          await resetSession();
-          setStatus("disconnected");
-          setQr(null);
-          toast.error("A conexão demorou muito. Tente novamente.");
+          if (await resetSession(signal)) toast.error("A conexão demorou muito. Tente novamente.");
           return;
         }
         // Just wait if it's still connecting
@@ -566,31 +534,14 @@ useEffect(() => {
         if (manual && data.status === "disconnected") toast.info("Desconectado.");
       }
       
-      setError(null);
-    } catch (err: any) {
-      const errMsg = (err?.message || String(err)).toLowerCase();
-      // Silently ignore expected/benign errors during polling
-      const isExpectedError = 
-        errMsg.includes("load failed") || 
-        errMsg.includes("failed to fetch") || 
-        errMsg.includes("demorou muito para responder") ||
-        errMsg.includes("erro de conexão") ||
-        errMsg.includes("status 404") ||
-        errMsg.includes("not found") ||
-        errMsg.includes("aborted") ||
-        errMsg.includes("status 401") ||
-        errMsg.includes("unauthorized") ||
-        errMsg.includes("html error") ||
-        errMsg.includes("404");
-
-      if (isExpectedError) {
-        if (manual) console.warn(`[WhatsApp] Expected error during manual check: ${errMsg}`);
-        return;
-      }
-      console.error(`[WhatsApp] Failed to check status for ${uId}:`, err);
-      if (manual) toast.error(`Erro ao verificar status: ${err.message}`);
+      if (!signal.aborted) setError(null);
+    } catch (failure) {
+      if (!manual || request.signal.aborted) return;
+      toast.error(failure instanceof ApiError && failure.status === 401
+        ? "A sessão terminou. Inicia sessão novamente."
+        : "Não foi possível verificar a ligação ao WhatsApp. Tenta novamente.");
     } finally {
-      isCheckingStatus.current = false;
+      if (statusRequest.current === request) statusRequest.current = null;
     }
   };
 
@@ -600,6 +551,7 @@ useEffect(() => {
     setError(null);
     try {
       const data = await apiFetch(`/api/whatsapp/connect`, {
+        accountId: userId,
         method: "POST",
       });
       
@@ -613,23 +565,31 @@ useEffect(() => {
     }
   };
 
-  const resetSession = async () => {
+  const resetSession = async (signal?: AbortSignal) => {
     if (!userId) return;
     setLoading(true);
     setError(null);
     try {
-      await apiFetch(`/api/whatsapp/reset`, {
+      const response = await apiFetch("/api/whatsapp/reset", {
+        accountId: userId,
         method: "POST",
+        signal,
+        timeout: 8_000
       });
+      if (signal?.aborted) return false;
+      if (response?.success !== true) throw new Error("Não foi possível confirmar a reposição da sessão.");
       setStatus("disconnected");
       setQr(null);
       setPairingCode(null);
       setMe(null);
-      toast.success("Sessão resetada com sucesso!");
+      if (!signal) toast.success("Sessão resetada com sucesso!");
+      return true;
     } catch (err: any) {
+      if (signal?.aborted) return false;
       console.error("Failed to reset:", err);
       setError(err.message);
       toast.error("Erro ao resetar sessão.");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -648,6 +608,7 @@ useEffect(() => {
     try {
       toast.info("A gerar código de pareamento no WhatsApp...");
       const data = await apiFetch("/api/whatsapp/pair-code", {
+        accountId: userId,
         method: "POST",
         body: JSON.stringify({ phoneNumber: fullPhone })
       });
@@ -679,6 +640,7 @@ useEffect(() => {
     setError(null);
     try {
       await apiFetch(`/api/whatsapp/pause`, {
+        accountId: userId,
         method: "POST",
       });
       setStatus("paused");
@@ -695,7 +657,12 @@ useEffect(() => {
 
   useEffect(() => {
     if (activationLoading || !isActivated || !userId) return;
-    return startDashboardPolling(() => checkStatus(userId), 5_000);
+    const stopPolling = startDashboardPolling(checkStatus, 5_000);
+    return () => {
+      stopPolling();
+      statusRequest.current?.abort();
+      statusRequest.current = null;
+    };
   }, [activationLoading, isActivated, userId]);
 
   const toggleAgent = async () => {
@@ -708,6 +675,7 @@ useEffect(() => {
 
     try {
       const response = await apiFetch("/api/agent/toggle", {
+        accountId: userId,
         method: "POST",
         body: JSON.stringify({ is_active: newState })
       });
@@ -723,7 +691,7 @@ useEffect(() => {
     }
   };
 
-  const isFree = plan === "Free";
+  const isFree = !plan || plan === "Free";
   const currentNicheConfig = NICHE_CONFIGS[niche];
 
   // Daily message limit based on subscription plan
@@ -744,14 +712,19 @@ useEffect(() => {
 
   if (activationLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent"></div>
+      <div role="status" className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-slate-600">
+        <div aria-hidden="true" className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent" />
+        A consultar a subscrição…
       </div>
     );
   }
 
   return (
     <div className="space-y-4 sm:space-y-6 w-full">
+      {activationError && <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+        <p role="alert">{activationError}</p>
+        <Button variant="outline" size="sm" onClick={retryActivation}>Tentar novamente</Button>
+      </div>}
       {/* Header Section */}
       <div className="flex flex-col gap-3.5 sm:gap-5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
@@ -815,7 +788,7 @@ useEffect(() => {
               <ConnectionStatusBadge status={status} />
               
               <Button 
-                onClick={() => checkStatus(userId!, true)} 
+                onClick={() => void checkStatus(true)}
                 variant="outline"
                 size="sm"
                 className="rounded-xl border-slate-200 font-medium text-xs h-8 sm:h-9 w-8 sm:w-auto px-0 sm:px-3 hover:border-emerald-300 hover:bg-emerald-50/50 flex items-center justify-center"
@@ -1129,7 +1102,7 @@ useEffect(() => {
                         variant="outline" 
                         size="sm"
                         className="rounded-xl border-rose-200 text-rose-600 hover:bg-rose-50 font-bold text-xs h-10 gap-1.5" 
-                        onClick={resetSession}
+                        onClick={() => void resetSession()}
                       >
                         <Trash2 size={14} />
                         Sair
@@ -1226,7 +1199,7 @@ useEffect(() => {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={resetSession}
+                                onClick={() => void resetSession()}
                                 className="text-xs font-bold text-red-500 hover:text-red-700"
                               >
                                 Cancelar
@@ -1323,7 +1296,7 @@ useEffect(() => {
                                 variant="ghost" 
                                 size="sm" 
                                 className="text-[10px] text-red-500 hover:text-red-600 font-bold uppercase tracking-widest mt-2 hover:bg-red-50 rounded-xl"
-                                onClick={resetSession}
+                                onClick={() => void resetSession()}
                               >
                                 Reiniciar Conexão
                               </Button>
