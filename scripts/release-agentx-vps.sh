@@ -132,7 +132,7 @@ docker build --build-arg "AGENTX_RELEASE=$commit" --label "org.opencontainers.im
 
 if [[ -f "$stage/source/scripts/check-agentx-release.ts" ]]; then
   if ! "${compose[@]}" -f "$preflight" run --rm --no-deps -T --pull never \
-    --entrypoint node agentx ./node_modules/tsx/dist/cli.mjs scripts/check-agentx-release.ts; then
+    --entrypoint node agentx ./node_modules/tsx/dist/cli.mjs scripts/check-agentx-release.ts </dev/null; then
     printf 'Publicação abortada antes de trocar a versão em execução.\n' >&2
     exit 1
   fi
