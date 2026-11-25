@@ -46,12 +46,13 @@ import {
   MessageCircle
 } from "lucide-react";
 import { toast } from "sonner";
-import { supabase, getUserId, getUser } from "../supabase";
+import { supabase, getUser } from "../supabase";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { cn } from "../lib/utils";
 import { useActivation } from "../lib/useActivation";
 import { apiFetch } from "../lib/api";
+import { startDashboardPolling } from "../lib/dashboardPolling";
 import { Badge } from "../components/ui/Badge";
 import { TemplateModal } from "../components/TemplateModal";
 import { QRCodeSVG } from "qrcode.react";
@@ -236,9 +237,6 @@ export default function Dashboard() {
   const [stats, setStats] = useState({
     contacts: 0,
     messages: 0,
-    scheduled: 0,
-    automations: 0,
-    leads: 0,
     actions: 0
   });
   const [agent, setAgent] = useState<any>(null);
@@ -321,14 +319,20 @@ useEffect(() => {
 
   useEffect(() => {
     if (!userId) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    let pendingMessages: Promise<void> | undefined;
+    let newMessagesDuringRefresh = false;
 
     const fetchLeads = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("leads")
         .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(20)
+        .abortSignal(signal);
+      if (signal.aborted || error) return;
       
       const cleanLeads = (data || []).filter((l: any) => {
         const p = (l.phone || "").replace(/\D/g, "");
@@ -337,8 +341,45 @@ useEffect(() => {
       setLeads(cleanLeads);
     };
 
-    const fetchWeeklyData = async (uId: string, metric: "messages" | "leads" = chartMetric) => {
-      if (!uId) return;
+    const refreshMessages = (newMessage = false) => {
+      if (signal.aborted || document.hidden) return;
+      if (pendingMessages && newMessage) newMessagesDuringRefresh = true;
+      pendingMessages ??= (async () => {
+        do {
+          newMessagesDuringRefresh = false;
+          await fetchRecentMessages(userId, signal);
+        } while (newMessagesDuringRefresh && !signal.aborted && !document.hidden);
+      })().finally(() => { pendingMessages = undefined; });
+      return pendingMessages;
+    };
+
+    const activity = supabase.channel(`dashboard-activity-${userId}-${Math.random().toString(36).slice(2)}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `user_id=eq.${userId}` }, () => {
+        void refreshMessages(true)?.catch((error) => console.error("Dashboard messages refresh failed:", error));
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "logs", filter: `user_id=eq.${userId}` }, (payload) => {
+        if (signal.aborted || document.hidden) return;
+        setSystemLogs((previous) => [payload.new, ...previous.filter((log) => log.id !== payload.new.id)].slice(0, 20));
+      })
+      .subscribe();
+
+    const stopPolling = startDashboardPolling(async () => {
+      await Promise.all([fetchStats(userId, signal), refreshMessages(), fetchSystemLogs(userId, signal), fetchLeads()]);
+    }, 30_000);
+
+    return () => {
+      stopPolling();
+      controller.abort();
+      void supabase.removeChannel(activity);
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    const fetchWeeklyData = async () => {
       try {
         const days = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
         const now = new Date();
@@ -356,12 +397,14 @@ useEffect(() => {
 
         const sevenDaysAgo = last7Days[0].start.toISOString();
 
-        if (metric === "messages") {
-          const { data } = await supabase
+        if (chartMetric === "messages") {
+          const { data, error } = await supabase
             .from("messages")
             .select("timestamp")
-            .eq("user_id", uId)
-            .gte("timestamp", sevenDaysAgo);
+            .eq("user_id", userId)
+            .gte("timestamp", sevenDaysAgo)
+            .abortSignal(signal);
+          if (signal.aborted || error) return;
 
           if (data) {
             data.forEach(m => {
@@ -371,11 +414,13 @@ useEffect(() => {
             });
           }
         } else {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from("leads")
             .select("created_at")
-            .eq("user_id", uId)
-            .gte("created_at", sevenDaysAgo);
+            .eq("user_id", userId)
+            .gte("created_at", sevenDaysAgo)
+            .abortSignal(signal);
+          if (signal.aborted || error) return;
 
           if (data) {
             data.forEach(l => {
@@ -392,141 +437,66 @@ useEffect(() => {
       }
     };
 
-    fetchStats(userId);
-    fetchRecentMessages(userId);
-    fetchSystemLogs(userId);
-    fetchLeads();
-    fetchWeeklyData(userId, chartMetric);
-
-    const interval = setInterval(() => {
-      fetchStats(userId);
-      fetchRecentMessages(userId);
-      fetchSystemLogs(userId);
-      fetchLeads();
-      fetchWeeklyData(userId, chartMetric);
-    }, 30000);
-
-    return () => clearInterval(interval);
+    const stopPolling = startDashboardPolling(fetchWeeklyData, 30_000);
+    return () => {
+      stopPolling();
+      controller.abort();
+    };
   }, [userId, chartMetric]);
 
-  const fetchRecentMessages = async (uId: string) => {
-    if (!uId) return;
-    const { data: initialMessages } = await supabase
+  const fetchRecentMessages = async (uId: string, signal: AbortSignal) => {
+    const { data: initialMessages, error } = await supabase
       .from("messages")
       .select("*")
       .eq("user_id", uId)
       .order("timestamp", { ascending: false })
-      .limit(20);
-    
-    if (initialMessages && initialMessages.length > 0) {
-      const contactIds = [...new Set(initialMessages.map(m => m.contact_id))];
-      const { data: contactsData } = await supabase
+      .limit(20)
+      .abortSignal(signal);
+    if (signal.aborted || error) return;
+
+    const messages = initialMessages ?? [];
+    const contactIds = [...new Set(messages.map((message) => message.contact_id).filter(Boolean))];
+    const { data: contactsData } = contactIds.length
+      ? await supabase
         .from("contacts")
         .select("id, name, phone")
-        .in("id", contactIds);
-        
-      const contactsMap = new Map(contactsData?.map(c => [c.id, c]) || []);
-      
-      const mappedMessages = initialMessages.map(msg => ({
-        ...msg,
-        contacts: contactsMap.get(msg.contact_id)
-      }));
-      
-      setRecentMessages(mappedMessages);
-    }
+        .eq("user_id", uId)
+        .in("id", contactIds)
+        .abortSignal(signal)
+      : { data: [] };
+    if (signal.aborted) return;
+
+    const contactsById = new Map((contactsData ?? []).map((contact) => [contact.id, contact]));
+    setRecentMessages(messages.map((message) => ({ ...message, contacts: contactsById.get(message.contact_id) })));
   };
 
-  const fetchSystemLogs = async (uId: string) => {
-    if (!uId) return;
-    const { data } = await supabase
+  const fetchSystemLogs = async (uId: string, signal: AbortSignal) => {
+    const { data, error } = await supabase
       .from("logs")
       .select("*")
       .eq("user_id", uId)
       .order("created_at", { ascending: false })
-      .limit(20);
-    setSystemLogs(data || []);
+      .limit(20)
+      .abortSignal(signal);
+    if (!signal.aborted && !error) setSystemLogs(data ?? []);
   };
 
-  const fetchStats = async (userId: string) => {
-    try {
-      if (!userId) return;
-      
-      console.log("Fetching stats for:", userId);
-      
-      // Contacts count
-      const { count: contactsCount, error: contactsError } = await supabase
-        .from("contacts")
-        .select("id", { count: 'exact' })
-        .eq("user_id", userId)
-        .limit(1);
-      
-      if (contactsError) console.error("Error fetching contacts:", contactsError);
-      else console.log("Fetched contacts count:", contactsCount);
-      
-      // Messages count (outbound)
-      const { count: messagesCount, error: messagesError } = await supabase
-        .from("messages")
-        .select("id", { count: 'exact' })
-        .eq("user_id", userId)
-        .eq("type", "outbound")
-        .limit(1);
-        
-      if (messagesError) console.error("Error fetching messages count:", messagesError);
-      else console.log("Fetched messages count:", messagesCount);
+  const fetchStats = async (userId: string, signal: AbortSignal) => {
+    const count = (table: "contacts" | "messages" | "agent_logs") => supabase.from(table)
+      .select("id", { count: "exact", head: true }).eq("user_id", userId).abortSignal(signal);
+    const { count: contactsCount } = await count("contacts");
+    const { count: messagesCount } = await count("messages").eq("type", "outbound");
+    const { count: actionsCount } = await count("agent_logs");
+    const { data: subscription } = await supabase.from("subscriptions")
+      .select("messages_used").eq("user_id", userId).abortSignal(signal).maybeSingle();
+    if (signal.aborted) return;
 
-      // Scheduled messages count
-      const { count: scheduledCount, error: scheduledError } = await supabase
-        .from("scheduled_messages")
-        .select("id", { count: 'exact' })
-        .eq("user_id", userId)
-        .limit(1);
-        
-      if (scheduledError) console.error("Error fetching scheduled messages count:", scheduledError);
-      else console.log("Fetched scheduled count:", scheduledCount);
-
-      // Automations count
-      const { count: automationsCount } = await supabase
-        .from("automations")
-        .select("id", { count: 'exact' })
-        .eq("user_id", userId)
-        .limit(1);
-
-      // Leads count
-      const { count: leadsCount } = await supabase
-        .from("leads")
-        .select("id", { count: 'exact' })
-        .eq("user_id", userId)
-        .limit(1);
-
-      // Actions count
-      const { count: actionsCount } = await supabase
-        .from("agent_logs")
-        .select("id", { count: 'exact' })
-        .eq("user_id", userId)
-        .limit(1);
-        
-      // Messages used today
-      const { data: subData } = await supabase
-        .from("subscriptions")
-        .select("messages_used")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (subData) {
-        setMessagesUsed(subData.messages_used || 0);
-      }
-
-      setStats({
-        contacts: contactsCount || 0,
-        messages: messagesCount || 0,
-        scheduled: scheduledCount || 0,
-        automations: automationsCount || 0,
-        leads: leadsCount || 0,
-        actions: actionsCount || 0
-      });
-    } catch (err) {
-      console.error("Error fetching stats:", err);
-    }
+    if (subscription) setMessagesUsed(subscription.messages_used ?? 0);
+    setStats((current) => ({
+      contacts: contactsCount ?? current.contacts,
+      messages: messagesCount ?? current.messages,
+      actions: actionsCount ?? current.actions
+    }));
   };
 
   const isCheckingStatus = useRef(false);
@@ -535,16 +505,14 @@ useEffect(() => {
 
   const checkStatus = async (uId: string, manual = false) => {
     if (!uId || uId === "guest-user" || isCheckingStatus.current) return;
-    
-    // Check if we have a valid session before calling the API to avoid 401s
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      if (manual) toast.error("Sessão expirada. Por favor, faça login novamente.");
-      return;
-    }
-    
+
     isCheckingStatus.current = true;
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        if (manual) toast.error("Sessão expirada. Por favor, faça login novamente.");
+        return;
+      }
       // Use the simplified status endpoint
       const data = await apiFetch(`/api/whatsapp/status`);
       
@@ -740,133 +708,9 @@ useEffect(() => {
   };
 
   useEffect(() => {
-    if (activationLoading || !isActivated) return;
-    const init = async () => {
-      const uId = await getUserId();
-      console.log("Dashboard init, userId:", uId, "isActivated:", isActivated);
-      console.log("Supabase client initialized:", !!supabase);
-      
-      if (uId && uId !== "guest-user") {
-        setUserId(uId);
-        await checkStatus(uId);
-        await fetchStats(uId);
-        
-        console.log("Fetching messages for:", uId);
-        // Initial fetch for recent messages
-        const { data: initialMessages, error: msgError } = await supabase
-          .from("messages")
-          .select("*")
-          .eq("user_id", uId)
-          .order("timestamp", { ascending: false })
-          .limit(20);
-        
-        if (msgError) console.error("Error fetching messages:", msgError);
-        
-        if (initialMessages && initialMessages.length > 0) {
-          const contactIds = [...new Set(initialMessages.map(m => m.contact_id))];
-          const { data: contactsData } = await supabase
-            .from("contacts")
-            .select("id, name, phone")
-            .in("id", contactIds);
-            
-          const contactsMap = new Map(contactsData?.map(c => [c.id, c]) || []);
-          
-          const mappedMessages = initialMessages.map(msg => ({
-            ...msg,
-            contacts: contactsMap.get(msg.contact_id)
-          }));
-          
-          setRecentMessages(mappedMessages);
-        }
-
-        // Initial fetch for logs
-        const { data: initialLogs } = await supabase
-          .from("logs")
-          .select("*")
-          .eq("user_id", uId)
-          .order("created_at", { ascending: false })
-          .limit(20);
-        
-        if (initialLogs) {
-          setSystemLogs(initialLogs);
-        }
-        
-        // Real-time subscription for messages
-        const messagesSubscription = supabase
-          .channel('dashboard-messages')
-          .on('postgres_changes', { 
-            event: '*', 
-            schema: 'public', 
-            table: 'messages',
-            filter: `user_id=eq.${uId}`
-          }, async () => {
-            const { data: updatedMessages } = await supabase
-              .from("messages")
-              .select("*")
-              .eq("user_id", uId)
-              .order("timestamp", { ascending: false })
-              .limit(20);
-            
-            if (updatedMessages && updatedMessages.length > 0) {
-              const contactIds = [...new Set(updatedMessages.map(m => m.contact_id))];
-              const { data: contactsData } = await supabase
-                .from("contacts")
-                .select("id, name, phone")
-                .in("id", contactIds);
-                
-              const contactsMap = new Map(contactsData?.map(c => [c.id, c]) || []);
-              
-              const mappedMessages = updatedMessages.map(msg => ({
-                ...msg,
-                contacts: contactsMap.get(msg.contact_id)
-              }));
-              setRecentMessages(mappedMessages);
-            }
-          })
-          .subscribe();
-
-        // Real-time subscription for logs
-        const logsSubscription = supabase
-          .channel('dashboard-logs')
-          .on('postgres_changes', { 
-            event: 'INSERT', 
-            schema: 'public', 
-            table: 'logs',
-            filter: `user_id=eq.${uId}`
-          }, (payload) => {
-            setSystemLogs(prev => [payload.new, ...prev].slice(0, 20));
-          })
-          .subscribe();
-        
-        return () => {
-          supabase.removeChannel(messagesSubscription);
-          supabase.removeChannel(logsSubscription);
-        };
-      }
-      return () => {};
-    };
-
-    const cleanupPromise = init();
-
-    let ticks = 0;
-    const interval = setInterval(async () => {
-      const uId = await getUserId();
-      if (uId && uId !== "guest-user") {
-        await checkStatus(uId);
-        
-        // Only fetch stats every 6th tick (30 seconds) to reduce database load
-        ticks++;
-        if (ticks % 6 === 0) {
-          await fetchStats(uId);
-        }
-      }
-    }, 5000);
-
-    return () => {
-      clearInterval(interval);
-      cleanupPromise.then(cleanup => cleanup && cleanup());
-    };
-  }, [activationLoading, isActivated]);
+    if (activationLoading || !isActivated || !userId) return;
+    return startDashboardPolling(() => checkStatus(userId), 5_000);
+  }, [activationLoading, isActivated, userId]);
 
   const toggleAgent = async () => {
     if (!userId) return;
