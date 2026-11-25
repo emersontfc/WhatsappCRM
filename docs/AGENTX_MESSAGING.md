@@ -99,6 +99,8 @@ Melhorias implementadas em `src/pages/Messages.tsx`:
 
 O primeiro percurso do piloto é receber uma mensagem direta, responder pelo painel e abrir a mesma conversa depois de reiniciar o AgentX. O painel consulta contactos e histórico pela API autenticada. Uma resposta aceite no WhatsApp tem um identificador de envio. A API também indica se a mensagem ficou guardada no histórico.
 
+O histórico abre com as mensagens mais recentes. **Carregar mensagens anteriores** traz outra página, mantendo a posição de leitura. Com Realtime ativo, os eventos atualizam a conversa e as consultas periódicas são espaçadas. Após uma falha de Realtime, o painel volta a consultar o servidor para recuperar mensagens recentes.
+
 Execute o teste isolado da API e da persistência com Docker e as dependências do projeto instaladas.
 
 ```bash

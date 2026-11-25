@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Send,
@@ -38,7 +38,7 @@ import { Card } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { cn } from "../lib/utils";
 import { ApiError, apiFetch } from "../lib/api";
-import { mergeMessage } from "../lib/chatMessages";
+import { makeChatRefresh, mergeMessage } from "../lib/chatMessages";
 import { useActivation } from "../lib/useActivation";
 import { VoiceRecorder, type VoiceSendOutcome } from "../components/VoiceRecorder";
 import { uploadVoiceAudio, useVoicePlayback } from "../lib/voiceAudio";
@@ -66,6 +66,24 @@ async function loadConversations(signal?: AbortSignal): Promise<Contact[]> {
   const result = await apiFetch("/api/whatsapp/chats", { signal, timeout: 12000 });
   if (result?.success !== true || !Array.isArray(result.chats)) throw new Error("Lista de conversas indisponível.");
   return result.chats;
+}
+
+type HistoryPage = { messages: Message[]; hasMore: boolean; beforeCursor: string | null; afterCursor: string | null };
+const historyPageSize = 50;
+
+async function loadHistory(
+  contactId: string,
+  signal: AbortSignal,
+  cursor?: { direction: "before" | "after"; value: string }
+): Promise<HistoryPage> {
+  const query = new URLSearchParams({ limit: String(historyPageSize) });
+  if (cursor) query.set(cursor.direction, cursor.value);
+  const result = await apiFetch(`/api/whatsapp/chats/${contactId}/messages?${query}`, { signal, timeout: 12000 });
+  if (result?.success !== true || !Array.isArray(result.messages) || typeof result.hasMore !== "boolean" ||
+      (result.messages.length > 0 && (!result.beforeCursor || !result.afterCursor))) {
+    throw new Error("Histórico indisponível.");
+  }
+  return result;
 }
 
 function isDirectConversation(contact: Contact) {
@@ -242,6 +260,10 @@ export default function Messages() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState(false);
   const [newMessage, setNewMessage] = useState("");
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<ConversationFilter>("all");
@@ -266,8 +288,9 @@ export default function Messages() {
   const [contactNameInput, setContactNameInput] = useState("");
   const [savingCrm, setSavingCrm] = useState(false);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const previousMessageAnchor = useRef<{ row: HTMLElement; offset: number } | null>(null);
+  const olderPageRequest = useRef<(() => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [previewMedia, setPreviewMedia] = useState<{ url: string; type: 'image' | 'video'; title?: string } | null>(null);
@@ -296,29 +319,6 @@ export default function Messages() {
             if (data.length) setSelectedAgentId(data[0].id);
           }).catch((error) => console.error("Agents unavailable:", error));
 
-        const initialContacts = await loadConversations();
-        if (isMounted) {
-          setContacts(initialContacts);
-          setContactsError(null);
-
-          // Deep link support: check for phone or contactId in query params
-          const phoneParam = searchParams.get("phone");
-          const contactIdParam = searchParams.get("contactId");
-
-          let targetContact: Contact | undefined;
-          if (contactIdParam) {
-            targetContact = initialContacts.find(c => c.id === contactIdParam);
-          } else if (phoneParam) {
-            targetContact = initialContacts.find(c => c.phone && (c.phone.includes(phoneParam) || phoneParam.includes(c.phone)));
-          }
-
-          if (targetContact) {
-            setSelectedContact(targetContact);
-            setShowChatOnMobile(true);
-            markConversationAsRead(targetContact.id);
-          }
-        }
-
       } catch {
         if (isMounted) setContactsError("Não foi possível carregar as conversas. A lista será consultada novamente.");
       }
@@ -331,33 +331,43 @@ export default function Messages() {
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
-    let refreshing = false;
-    const sync = async () => {
-      if (controller.signal.aborted || refreshing || document.hidden) return;
-      refreshing = true;
-      try {
-        const data = await loadConversations(controller.signal);
-        if (!controller.signal.aborted) {
-          setContacts((current) => JSON.stringify(current) === JSON.stringify(data) ? current : data);
-          setContactsError(null);
+    const phoneParam = searchParams.get("phone");
+    const contactIdParam = searchParams.get("contactId");
+    let openedInitialContact = false;
+    const sync = makeChatRefresh(async () => {
+      const data = await loadConversations(controller.signal);
+      if (controller.signal.aborted) return;
+      setContacts((current) => JSON.stringify(current) === JSON.stringify(data) ? current : data);
+      setContactsError(null);
+      if (!openedInitialContact) {
+        openedInitialContact = true;
+        const initial = contactIdParam ? data.find(contact => contact.id === contactIdParam)
+          : phoneParam ? data.find(contact => contact.phone === phoneParam) ?? data.find(contact =>
+            contact.phone && (contact.phone.includes(phoneParam) || phoneParam.includes(contact.phone))) : undefined;
+        if (initial) {
+          setSelectedContact(initial);
+          setShowChatOnMobile(true);
         }
-      } catch {
-        if (!controller.signal.aborted) setContactsError("Não foi possível carregar as conversas. A lista será consultada novamente.");
-      } finally {
-        refreshing = false;
       }
-    };
+    }, () => !document.hidden && navigator.onLine, () => {
+      setContactsError("Não foi possível carregar as conversas. A lista será consultada novamente.");
+    });
     const channel = supabase.channel(`messages-contacts-${userId}`)
       .on("postgres_changes", {
         event: "*", schema: "public", table: "contacts", filter: `user_id=eq.${userId}`
-      }, sync)
-      .subscribe((status) => { if (status === "SUBSCRIBED") sync(); });
-    const poll = window.setInterval(sync, 2000);
-    document.addEventListener("visibilitychange", sync);
+      }, sync.received)
+      .subscribe(status => sync.connection(status === "SUBSCRIBED"));
+    const visibility = () => { if (document.hidden) sync.suspend(); else sync.recover(); };
+    sync.recover();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("offline", sync.suspend);
+    window.addEventListener("online", sync.recover);
     return () => {
       controller.abort();
-      window.clearInterval(poll);
-      document.removeEventListener("visibilitychange", sync);
+      sync.stop();
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("offline", sync.suspend);
+      window.removeEventListener("online", sync.recover);
       void supabase.removeChannel(channel);
     };
   }, [userId]);
@@ -372,14 +382,8 @@ export default function Messages() {
   useEffect(() => {
     if (!selectedContact || !contactId || !userId) return;
     let active = true;
-    let refreshing = false;
-    let revision = 0;
-    const controller = new AbortController();
 
-    setMessages([]);
-    setHistoryError(null);
     setCurrentLead(null);
-    setIsNearBottom(true);
     setContactNotes(selectedContact.notes || "");
     setContactTags(Array.isArray(selectedContact.tags) ? selectedContact.tags : []);
     setContactNameInput(selectedContact.name || "");
@@ -409,50 +413,143 @@ export default function Messages() {
 
     void markConversationAsRead(contactId);
 
-    const refresh = async () => {
-      if (!active || refreshing || document.hidden) return;
-      refreshing = true;
-      const startedAt = revision;
-      try {
-        const result = await apiFetch(`/api/whatsapp/chats/${contactId}/messages`, { signal: controller.signal, timeout: 12000 });
-        if (!active) return;
-        if (result?.success !== true || !Array.isArray(result.messages)) throw new Error("Histórico indisponível.");
-        setHistoryError(null);
-        if (startedAt === revision) {
-          const ordered: Message[] = result.messages;
-          setMessages((current) => {
-            const savedIds = new Set(ordered.map((message) => message.msg_id).filter(Boolean));
-            const pending = current.filter((message) =>
-              message.id.startsWith("temp-") && !savedIds.has(message.msg_id));
-            const next = [...ordered, ...pending];
-            return JSON.stringify(current) === JSON.stringify(next) ? current : next;
-          });
-        }
-      } catch {
-        if (active) setHistoryError("Não foi possível consultar o histórico. A conversa será consultada novamente.");
-      } finally {
-        refreshing = false;
-      }
+    return () => { active = false; };
+  }, [contactId, userId]);
+
+  useEffect(() => {
+    if (!contactId || !userId) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const canRefresh = () => !document.hidden && navigator.onLine;
+    let initialized = false;
+    let afterCursor: string | null = null;
+    let beforeCursor: string | null = null;
+    let readingOlder = false;
+
+    previousMessageAnchor.current = null;
+    setMessages([]);
+    setHistoryError(null);
+    setHistoryLoading(true);
+    setHasOlderMessages(false);
+    setLoadingOlder(false);
+    setOlderError(false);
+    setIsNearBottom(true);
+
+    const mergePage = (page: HistoryPage) => {
+      if (page.messages.length) setMessages(current => page.messages.reduce(mergeMessage, current));
     };
-    const sync = () => { void refresh(); };
+
+    const sync = makeChatRefresh(async (reconcileHead) => {
+      try {
+        if (!afterCursor) {
+          const head = await loadHistory(contactId, signal);
+          if (signal.aborted) return;
+          mergePage(head);
+
+          if (!initialized) {
+            beforeCursor = head.hasMore ? head.beforeCursor : null;
+            setHasOlderMessages(Boolean(beforeCursor));
+          } else {
+            // After an empty initial conversation, everything in this first batch is new.
+            // Drain all pages even if more than one page arrived while it was offline.
+            let cursor = head.hasMore ? head.beforeCursor : null;
+            while (cursor && !signal.aborted && canRefresh()) {
+              const page = await loadHistory(contactId, signal, { direction: "before", value: cursor });
+              if (signal.aborted) return;
+              if (page.hasMore && (!page.beforeCursor || page.beforeCursor === cursor)) {
+                throw new Error("O cursor do histórico não avançou.");
+              }
+              mergePage(page);
+              cursor = page.hasMore ? page.beforeCursor : null;
+            }
+            if (cursor) return;
+          }
+          afterCursor = head.afterCursor;
+          initialized = true;
+        } else {
+          let hasMore = true;
+          while (hasMore && !signal.aborted && canRefresh()) {
+            const page = await loadHistory(contactId, signal, { direction: "after", value: afterCursor });
+            if (signal.aborted) return;
+            mergePage(page);
+            if (page.hasMore && (!page.afterCursor || page.afterCursor === afterCursor)) {
+              throw new Error("O cursor do histórico não avançou.");
+            }
+            afterCursor = page.afterCursor ?? afterCursor;
+            hasMore = page.hasMore;
+          }
+
+          // WhatsApp can assign an earlier timestamp to a message that arrived late.
+          // Check the recent window on recovery without advancing past an unread delta page.
+          if (reconcileHead && canRefresh()) {
+            const head = await loadHistory(contactId, signal);
+            if (signal.aborted) return;
+            mergePage(head);
+          }
+        }
+        if (!signal.aborted) setHistoryError(null);
+      } finally {
+        if (!signal.aborted) setHistoryLoading(false);
+      }
+    }, canRefresh, () => {
+      setHistoryError("Não foi possível consultar o histórico. A conversa será consultada novamente.");
+    });
+
+    olderPageRequest.current = () => {
+      if (!beforeCursor || readingOlder || signal.aborted) return;
+      const cursor = beforeCursor;
+      readingOlder = true;
+      setLoadingOlder(true);
+      setOlderError(false);
+      void (async () => {
+        try {
+          const page = await loadHistory(contactId, signal, { direction: "before", value: cursor });
+          if (signal.aborted) return;
+          if (page.hasMore && (!page.beforeCursor || page.beforeCursor === cursor)) {
+            throw new Error("O cursor do histórico não avançou.");
+          }
+
+          const container = messagesContainerRef.current;
+          if (container && page.messages.length) {
+            const top = container.getBoundingClientRect().top;
+            const row = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-message]"))
+              .find(element => element.getBoundingClientRect().bottom > top);
+            if (row) previousMessageAnchor.current = { row, offset: row.getBoundingClientRect().top - top };
+          }
+
+          mergePage(page);
+          beforeCursor = page.hasMore ? page.beforeCursor : null;
+          setHasOlderMessages(Boolean(beforeCursor));
+        } catch {
+          if (!signal.aborted) setOlderError(true);
+        } finally {
+          readingOlder = false;
+          if (!signal.aborted) setLoadingOlder(false);
+        }
+      })();
+    };
+
     const channel = supabase.channel(`messages-chat-${userId}-${contactId}`)
       .on("postgres_changes", {
-        event: "INSERT", schema: "public", table: "messages", filter: `user_id=eq.${userId}`
+        event: "INSERT", schema: "public", table: "messages", filter: `contact_id=eq.${contactId}`
       }, ({ new: row }) => {
         const incoming = row as Message;
-        if (!active || incoming.contact_id !== contactId) return;
-        revision++;
-        setMessages((current) => mergeMessage(current, incoming));
+        if (signal.aborted || incoming.user_id !== userId || incoming.contact_id !== contactId) return;
+        setMessages(current => mergeMessage(current, incoming));
       })
-      .subscribe((status) => { if (status === "SUBSCRIBED") sync(); });
-    sync();
-    const poll = window.setInterval(sync, 2500);
-    document.addEventListener("visibilitychange", sync);
+      .subscribe(status => sync.connection(status === "SUBSCRIBED"));
+    const visibility = () => { if (document.hidden) sync.suspend(); else sync.recover(); };
+    sync.recover();
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("offline", sync.suspend);
+    window.addEventListener("online", sync.recover);
     return () => {
-      active = false;
+      olderPageRequest.current = null;
       controller.abort();
-      window.clearInterval(poll);
-      document.removeEventListener("visibilitychange", sync);
+      sync.stop();
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("offline", sync.suspend);
+      window.removeEventListener("online", sync.recover);
       void supabase.removeChannel(channel);
     };
   }, [contactId, userId]);
@@ -465,16 +562,22 @@ export default function Messages() {
   };
 
   const scrollToBottom = (smooth = true) => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
-    }
+    const container = messagesContainerRef.current;
+    container?.scrollTo({ top: container.scrollHeight, behavior: smooth ? "smooth" : "auto" });
   };
 
-  useEffect(() => {
-    if (isNearBottom) {
-      scrollToBottom(true);
+  useLayoutEffect(() => {
+    const anchor = previousMessageAnchor.current;
+    const container = messagesContainerRef.current;
+    previousMessageAnchor.current = null;
+    if (anchor?.row.isConnected && container) {
+      const offset = anchor.row.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTop += offset - anchor.offset;
+      handleMessagesScroll();
+    } else if (isNearBottom) {
+      scrollToBottom(false);
     }
-  }, [messages]);
+  }, [messages, hasOlderMessages]);
 
   const markConversationAsRead = async (contactId: string) => {
     try {
@@ -1121,9 +1224,18 @@ export default function Messages() {
               role="log"
               aria-label="Histórico da conversa"
               onScroll={handleMessagesScroll}
-              className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-2 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
+              className="flex-1 min-h-0 overflow-y-auto overscroll-contain [overflow-anchor:none] p-2 sm:p-6 space-y-4 bg-slate-50/40 relative custom-scrollbar"
             >
               {historyError && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800" role="status">{historyError}</p>}
+              {hasOlderMessages && (
+                <div className="flex flex-col items-center gap-1">
+                  <Button type="button" variant="outline" size="sm" disabled={loadingOlder}
+                    onClick={() => olderPageRequest.current?.()}>
+                    {loadingOlder ? "A carregar mensagens…" : "Carregar mensagens anteriores"}
+                  </Button>
+                  {olderError && <p className="text-xs text-rose-700" role="status">Não foi possível carregar esta página. Tenta novamente.</p>}
+                </div>
+              )}
               {messages.length > 0 ? (
                 messages.map((msg) => {
                   const isOut = msg.type === "outbound";
@@ -1133,6 +1245,7 @@ export default function Messages() {
                     return (
                       <div
                         key={msg.id}
+                        data-chat-message={msg.id}
                         className={cn(
                           "flex flex-col max-w-[85%] sm:max-w-[70%]",
                           isOut ? "ml-auto items-end" : "mr-auto items-start"
@@ -1159,6 +1272,7 @@ export default function Messages() {
                   return (
                     <div
                       key={msg.id}
+                      data-chat-message={msg.id}
                       className={cn(
                         "flex flex-col max-w-[85%] sm:max-w-[70%]",
                         isOut ? "ml-auto items-end" : "mr-auto items-start"
@@ -1242,14 +1356,15 @@ export default function Messages() {
                     </div>
                   );
                 })
-              ) : (
+              ) : historyLoading ? (
+                <p className="p-3 text-center text-sm text-slate-500" role="status">A carregar conversa…</p>
+              ) : !historyError && (
                 <div className="flex flex-col items-center justify-center h-full text-center text-slate-400">
                   <MessageSquare size={32} className="mb-2 opacity-50 text-slate-300" />
                   <p className="text-xs font-semibold">Nenhuma mensagem registrada ainda.</p>
                   <p className="text-[11px] text-slate-400">Envie uma mensagem abaixo para iniciar.</p>
                 </div>
               )}
-              <div ref={scrollRef} />
 
               {/* Botão Flutuante de Scroll para o Fim */}
               {!isNearBottom && (

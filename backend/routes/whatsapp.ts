@@ -10,6 +10,32 @@ import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 const router = express.Router();
 const contactUuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const cursorTimestamp = /^(?!0000)\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:0\d|1[0-5]):[0-5]\d)$/;
+type MessageCursor = [timestamp: string | null, id: string];
+
+function readMessageCursor(value: unknown): MessageCursor | null {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,160}$/.test(value)) return null;
+  try {
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) return null;
+    const parts: unknown = JSON.parse(bytes.toString("utf8"));
+    if (!Array.isArray(parts) || parts.length !== 2) return null;
+    const [timestamp, id] = parts;
+    if (typeof id !== "string" || !contactUuid.test(id)) return null;
+    if (timestamp !== null) {
+      if (typeof timestamp !== "string" || !cursorTimestamp.test(timestamp)) return null;
+      const calendarDay = `${timestamp.slice(0, 10)}T00:00:00.000Z`;
+      if (new Date(calendarDay).toISOString() !== calendarDay) return null;
+    }
+    return [timestamp, id];
+  } catch {
+    return null;
+  }
+}
+
+function encodeMessageCursor(row: { timestamp: string | null; id: string } | undefined) {
+  return row ? Buffer.from(JSON.stringify([row.timestamp, row.id])).toString("base64url") : null;
+}
 
 // Debug middleware for this router
 router.use((req, res, next) => {
@@ -83,13 +109,47 @@ router.get("/chats/:contactId/messages", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Inicia sessão para ver a conversa." });
   if (!contactUuid.test(contactId)) return res.status(400).json({ error: "Conversa inválida." });
 
+  const { limit, before, after } = req.query;
+  const paginated = limit !== undefined || before !== undefined || after !== undefined;
+  const boundary = before ?? after;
+  const cursor = readMessageCursor(boundary);
+  if ((before !== undefined && after !== undefined) || (boundary !== undefined && !cursor)) {
+    return res.status(400).json({ error: "Cursor de mensagens inválido." });
+  }
+  if (limit !== undefined && (typeof limit !== "string" || !/^[1-9]\d{0,2}$/.test(limit) || Number(limit) > 100)) {
+    return res.status(400).json({ error: "O limite de mensagens deve estar entre 1 e 100." });
+  }
+  const pageSize = limit === undefined ? 50 : Number(limit);
+  const ascending = after !== undefined;
+
   try {
-    const { data, error } = await supabaseAdmin.from("messages").select("*")
-      .eq("user_id", userId).eq("contact_id", contactId)
-      .order("timestamp", { ascending: false }).order("id", { ascending: false })
-      .limit(1000).abortSignal(AbortSignal.timeout(8000));
+    const query = supabaseAdmin.from("messages").select("*").eq("user_id", userId).eq("contact_id", contactId);
+    if (cursor) {
+      const [timestamp, id] = cursor;
+      const comparison = ascending ? "gt" : "lt";
+      if (timestamp !== null) {
+        // Retain PostgreSQL's original fractional seconds and constrain both values before the raw filter.
+        const olderNulls = ascending ? "" : ",timestamp.is.null";
+        if (ascending) query.gte("timestamp", timestamp);
+        query.or(`timestamp.${comparison}."${timestamp}",and(timestamp.eq."${timestamp}",id.${comparison}.${id})${olderNulls}`);
+      } else if (ascending) {
+        query.or(`timestamp.not.is.null,and(timestamp.is.null,id.gt.${id})`);
+      } else {
+        query.is("timestamp", null).lt("id", id);
+      }
+    }
+    const nullsFirst = paginated && (!ascending || cursor?.[0] === null) ? ascending : undefined;
+    const { data, error } = await query
+      .order("timestamp", { ascending, nullsFirst }).order("id", { ascending })
+      .limit(paginated ? pageSize + 1 : 1000).abortSignal(AbortSignal.timeout(8000));
     if (error) throw error;
-    return res.set("Cache-Control", "no-store").json({ success: true, messages: (data ?? []).reverse() });
+    const rows = data ?? [];
+    res.set("Cache-Control", "no-store");
+    if (!paginated) return res.json({ success: true, messages: rows.reverse() });
+    const messages = rows.slice(0, pageSize);
+    if (!ascending) messages.reverse();
+    return res.json({ success: true, messages, hasMore: rows.length > pageSize,
+      beforeCursor: encodeMessageCursor(messages[0]), afterCursor: encodeMessageCursor(messages[messages.length - 1]) });
   } catch (error) {
     console.error("[WhatsApp] Failed to load conversation", (error as { code?: string })?.code);
     return res.status(503).json({ error: "Não foi possível consultar o histórico. Tenta novamente." });

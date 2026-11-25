@@ -220,6 +220,62 @@ try {
   const saveContact = (phone, index = 0, name = "Contacto guardado") => api("/contacts", index, { phone, name });
   assert.equal((await call("/chats", -1)).status, 401);
 
+  const historyContact = randomUUID();
+  const fixtureHeaders = { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" };
+  const insertHistoryFixture = (table, body) => fetch(new URL(`/${table}`, rest), {
+    method: "POST", headers: fixtureHeaders, body: JSON.stringify(body)
+  });
+  assert.equal((await insertHistoryFixture("contacts", { id: historyContact, user_id: owner, name: "Paginação", phone: "258881234000" })).status, 201);
+  const sample = [null, null, "2026-01-01T12:00:00.123Z", "2026-01-01T12:00:00.123Z",
+    "2026-01-01T12:00:00.123001Z", "2026-01-01T12:00:01Z"].map((timestamp, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 100).padStart(12, "0")}`,
+    user_id: owner, contact_id: historyContact, type: "inbound", text: `Página ${index}`, timestamp, is_read: false
+  }));
+  assert.equal((await insertHistoryFixture("messages", sample)).status, 201);
+  const historyPath = `/chats/${historyContact}/messages`;
+  async function readMessagePage(query, expectedRows, more, account = 0) {
+    const response = await call(`${historyPath}?${query}`, account);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const page = await response.json();
+    assert.equal(page.success, true);
+    assert.deepEqual(page.messages.map(({ id }) => id), expectedRows.map(({ id }) => id));
+    assert.equal(page.hasMore, more);
+    assert.deepEqual(page.messages.map(({ is_read }) => is_read), expectedRows.map(() => false));
+    if (!expectedRows.length) {
+      assert.equal(page.beforeCursor, null);
+      assert.equal(page.afterCursor, null);
+    }
+    return page;
+  }
+  const newestPage = await readMessagePage("limit=2", sample.slice(4), true);
+  const previousPage = await readMessagePage(`limit=2&before=${newestPage.beforeCursor}`, sample.slice(2, 4), true);
+  const oldestPage = await readMessagePage(`limit=2&before=${previousPage.beforeCursor}`, sample.slice(0, 2), false);
+  await readMessagePage(`before=${oldestPage.beforeCursor}`, [], false);
+  await readMessagePage(`before=${oldestPage.afterCursor}`, sample.slice(0, 1), false);
+  const firstCatchUp = await readMessagePage(`limit=2&after=${oldestPage.beforeCursor}`, sample.slice(1, 3), true);
+  const secondCatchUp = await readMessagePage(`limit=2&after=${firstCatchUp.afterCursor}`, sample.slice(3, 5), true);
+  await readMessagePage(`after=${secondCatchUp.afterCursor}`, sample.slice(5), false);
+  await readMessagePage(`limit=2&after=${newestPage.afterCursor}`, [], false);
+  await readMessagePage(`limit=2&before=${newestPage.beforeCursor}`, [], false, 1);
+  assert.equal((await call(`${historyPath}?limit=2`, -1)).status, 401);
+  await readMessagePage("limit=100", sample, false);
+  const unpaginatedHistory = await (await call(historyPath)).json();
+  assert.deepEqual(Object.keys(unpaginatedHistory), ["success", "messages"]);
+  assert.equal(unpaginatedHistory.messages.length, sample.length);
+
+  const encodeTestCursor = (payload) => Buffer.from(JSON.stringify(payload)).toString("base64url");
+  for (const invalidQuery of ["limit=0", "limit=101", "limit=2.5", "limit=2&limit=3", "before=%23", "after=",
+    `before=${newestPage.beforeCursor}&after=${newestPage.afterCursor}`, `before[]=${newestPage.beforeCursor}`,
+    `before=${encodeTestCursor(["2026-02-30T12:00:00Z", sample[0].id])}`,
+    `before=${encodeTestCursor(["2026-01-01T12:00:00Z", `${sample[0].id}),timestamp.not.is.null`])}`,
+    `before=${encodeTestCursor([`2026-01-01T12:00:00Z\",user_id.eq.${other}`, sample[0].id])}`]) {
+    const response = await call(`${historyPath}?${invalidQuery}`);
+    assert.equal(response.status, 400, `Invalid history query ${invalidQuery}: ${await response.text()}`);
+  }
+  assert.equal((await fetch(new URL(`/contacts?id=eq.${historyContact}`, rest), { method: "DELETE", headers: fixtureHeaders })).status, 204);
+  console.log("Inbox pagination passed across timestamp ties, fractional seconds, legacy rows and authenticated tenant boundaries.");
+
   const legacyId = "00000000-0000-4000-8000-000000000013";
   const primaryId = "00000000-0000-4000-8000-000000000015";
   const duplicateId = "00000000-0000-4000-8000-000000000016";
@@ -817,6 +873,97 @@ try {
     await page.getByText("Envio por confirmar. Verifica no WhatsApp antes de repetir.", { exact: true }).waitFor();
     assert.equal(await page.getByText("Anexo enviado.", { exact: true }).count(), 0);
     assert.equal(await input.inputValue(), "Rascunho mantido após gravar");
+
+    const seedChat = async (rows) => {
+      const response = await fetch(new URL("/messages", rest), {
+        method: "POST", headers: storageAuth,
+        body: JSON.stringify(rows.map(row => ({ user_id: owner, contact_id: contact.id, type: "inbound", is_read: true, ...row })))
+      });
+      assert.equal(response.status, 201);
+    };
+    const chatRows = (count, key, title, startedAt) => Array.from({ length: count }, (_, index) => ({
+      msg_id: `${key}-${index + 1}`, text: `${title} ${index + 1}`, timestamp: new Date(startedAt + index * 1000).toISOString()
+    }));
+    await seedChat(chatRows(61, "pagination-older", "Mensagem anterior", Date.now() - 3_600_000));
+    const messageRoute = `/api/whatsapp/chats/${contact.id}/messages`;
+    let realtimeSocket;
+    let realtimeAvailable = true;
+    const subscribedTopics = new Set();
+    await page.routeWebSocket(/\/realtime\/v1\/websocket/, socket => {
+      realtimeSocket = socket;
+      socket.onMessage(frame => {
+        if (!realtimeAvailable || typeof frame !== "string") return;
+        const [joinRef, ref, topic, event] = JSON.parse(frame);
+        if (event === "phx_join") subscribedTopics.add(topic);
+        if (["phx_join", "phx_leave", "heartbeat"].includes(event)) {
+          socket.send(JSON.stringify([joinRef, ref, topic, "phx_reply", { status: "ok", response: {} }]));
+        }
+      });
+    });
+    const recoveryRequests = [];
+    const conversationRequests = [];
+    page.on("request", request => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/whatsapp/chats" || url.pathname === messageRoute) {
+        conversationRequests.push(url.pathname + url.search);
+        if (url.searchParams.has("after")) recoveryRequests.push(url.searchParams.get("after"));
+      }
+    });
+    const initialPage = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === messageRoute && url.searchParams.get("limit") === "50" &&
+        !url.searchParams.has("before") && !url.searchParams.has("after");
+    });
+    await page.goto(app.base + `/messages?contactId=${contact.id}`);
+    assert.equal((await (await initialPage).json()).messages.length, 50);
+
+    const orderedHistory = page.getByRole("log", { name: "Histórico da conversa" });
+    const earlier = orderedHistory.getByRole("button", { name: "Carregar mensagens anteriores" });
+    await earlier.waitFor();
+    assert.equal(await orderedHistory.getByText("Mensagem anterior 1", { exact: true }).count(), 0);
+    await orderedHistory.evaluate(element => { element.scrollTop = 0; });
+    const formerlyFirst = await orderedHistory.locator("[data-chat-message]").first().elementHandle();
+    const rowOffset = () => formerlyFirst.evaluate(row =>
+      row.getBoundingClientRect().top - row.closest('[role="log"]').getBoundingClientRect().top);
+    const previousOffset = await rowOffset();
+    const earlierResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === messageRoute && url.searchParams.has("before");
+    });
+    await earlier.click();
+    assert.equal((await earlierResponse).status(), 200);
+    await orderedHistory.getByText("Mensagem anterior 1", { exact: true }).waitFor({ state: "attached" });
+    assert.ok(Math.abs(await rowOffset() - previousOffset) <= 2, "Older pagination should preserve the visible scroll anchor");
+    assert.ok(subscribedTopics.has(`realtime:messages-contacts-${owner}`));
+    assert.ok(subscribedTopics.has(`realtime:messages-chat-${owner}-${contact.id}`));
+    // Let the subscription reconciliation launched during first render settle.
+    await delay(750);
+    const requestsWhileSubscribed = conversationRequests.length;
+    await delay(4500);
+    assert.deepEqual(conversationRequests.slice(requestsWhileSubscribed), [],
+      "Realtime should suppress fallback polling for both contacts and history");
+
+    realtimeAvailable = false;
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+      window.dispatchEvent(new Event("offline"));
+    });
+    await realtimeSocket.close();
+    const newBatch = chatRows(106, "pagination-newer", "Mensagem acumulada", Date.now() + 60_000);
+    await seedChat(newBatch);
+    const beforeReconnect = recoveryRequests.length;
+    await page.evaluate(() => {
+      Reflect.deleteProperty(navigator, "onLine");
+      window.dispatchEvent(new Event("online"));
+    });
+    await orderedHistory.getByText("Mensagem acumulada 106", { exact: true }).waitFor({ state: "attached" });
+    assert.equal(await orderedHistory.getByText(/^Mensagem acumulada \d+$/).count(), 106);
+    assert.equal(await orderedHistory.getByText("Mensagem anterior 1", { exact: true }).count(), 1);
+    assert.ok(new Set(recoveryRequests.slice(beforeReconnect)).size >= 3, "Reconnect should drain multiple distinct delta cursors");
+    await seedChat([{ msg_id: "pagination-late", text: "Mensagem recente atrasada", timestamp: newBatch.at(-6).timestamp }]);
+    await page.evaluate(() => { window.dispatchEvent(new Event("online")); });
+    await orderedHistory.getByText("Mensagem recente atrasada", { exact: true }).waitFor({ state: "attached" });
+    console.log("Inbox pagination and browser reconnect passed (Realtime suppresses fast polls, older scroll anchor, 106 catch-up messages and a late arrival)");
   }
 
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
