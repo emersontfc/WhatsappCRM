@@ -22,6 +22,7 @@ const professional = fixtureId(31);
 const anotherProfessional = fixtureId(32);
 const otherProfessional = fixtureId(33);
 const legacyAppointment = fixtureId(41);
+const secondLegacyAppointment = fixtureId(42);
 
 function token(role, sub) {
   const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -148,8 +149,17 @@ try {
   assert.equal(savedLegacy.status, "completed");
   assert.equal(savedLegacy.reminder_24h_sent, true);
   assert.equal(savedLegacy.reminder_2h_sent, true);
+  assert.equal(savedLegacy.schedule_revision, "00000000-0000-0000-0000-000000000000");
 
   expectStatus(await call("/"), 401);
+  const readOwnAppointments = () => call("/", { auth: ownerToken });
+  const legacyAppointments = expectStatus(await readOwnAppointments(), 200).data;
+  const [firstLegacy, secondLegacy] = [legacyAppointment, secondLegacyAppointment]
+    .map((fixture) => legacyAppointments.find(({ id }) => id === fixture));
+  assert.equal(firstLegacy.schedule_revision, secondLegacy.schedule_revision);
+  assert.deepEqual(firstLegacy.notification_statuses, { manual: "sent" });
+  assert.deepEqual(secondLegacy.notification_statuses, { manual: "uncertain" });
+
   const listing = expectStatus(await call(`/public/info/${owner}`), 200).data;
   assert.equal(listing.business.name, "Loja Maputo");
   assert.equal(listing.timeZone, "Africa/Maputo");
@@ -218,7 +228,6 @@ try {
   const afterBooking = expectStatus(await slots(), 200).slots;
   assert.ok(!afterBooking.includes("09:00") && afterBooking.includes("09:30"));
 
-  const readOwnAppointments = () => call("/", { auth: ownerToken });
   const scoped = expectStatus(await call("/", { auth: otherToken }), 200).data;
   assert.deepEqual(scoped, []);
   assert.deepEqual(await select(`/appointments?id=eq.${bookingId}`, otherToken), []);

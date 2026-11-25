@@ -192,11 +192,20 @@ sudo certbot --nginx -d seudominio.com -d www.seudominio.com
 
 O comando `scripts/release-agentx-vps.sh` valida a configuração pública e o esquema de CRM, vendas, Agenda, Marcações e Grupos num contentor temporário antes da troca. No `.env`, use a chave publishable ou anon em `VITE_SUPABASE_ANON_KEY` e reserve a chave secret ou service_role para `SUPABASE_SERVICE_ROLE_KEY`.
 
-Para a atualização de Agenda, Marcações e Grupos, aplique estes ficheiros por ordem no SQL Editor do mesmo projeto Supabase usado pela VPS. As migrações preservam os registos existentes.
+Para a atualização de Agenda, Marcações e Grupos, confirme primeiro quais das três migrações estão aplicadas no projeto Supabase usado pela VPS. Execute apenas as que faltam, pela ordem abaixo. A migração 24 define a revisão das marcações antigas sem reescrever a tabela. A criação dos índices ainda lê as tabelas existentes. Aplique cada migração separadamente, num período de pouco tráfego.
 
 1. `supabase/migrations/23_agenda_dispatch.sql`
 2. `supabase/migrations/24_appointment_booking_delivery.sql`
 3. `supabase/migrations/25_group_payment_proofs.sql`
+
+Esta consulta curta verifica se as migrações chegaram ao fim. Também pode ser usada quando o SQL Editor perde a ligação durante a execução.
+
+```sql
+SELECT
+  to_regprocedure('public.agentx_schedule_dispatch_ready()') IS NOT NULL AS m23,
+  to_regprocedure('public.agentx_appointment_contract_ready()') IS NOT NULL AS m24,
+  to_regprocedure('public.agentx_group_proof_contract_ready()') IS NOT NULL AS m25;
+```
 
 Depois de aplicar as migrações, publique o commit da versão com `scripts/release-agentx-vps.sh`. Confirme em **Estado da operação** os três módulos, a ligação WhatsApp e o processamento de agendamentos. O processamento no servidor exige `DISABLE_SCHEDULER=false`.
 

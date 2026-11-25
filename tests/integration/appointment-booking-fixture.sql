@@ -78,3 +78,7 @@ INSERT INTO public.appointments (
   '90000000-0000-4000-8000-000000000021', '90000000-0000-4000-8000-000000000031', 'Cliente anterior', '258849998888',
   '2025-03-04', '09:00:00', '09:30:00', 'completed', 'Nota que existia antes da migração.', true, true
 );
+
+INSERT INTO public.appointments (id, user_id, customer_name, appointment_date, start_time, end_time, status)
+VALUES ('90000000-0000-4000-8000-000000000042', '90000000-0000-4000-8000-000000000001',
+  'Segunda marcação antiga', '2025-03-05', '10:00', '10:30', 'completed');

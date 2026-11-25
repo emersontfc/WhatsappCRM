@@ -22,9 +22,33 @@ done
 psql_fixture() { docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1 "$@"; }
 psql_fixture < tests/integration/appointment-booking-fixture.sql >/dev/null
 psql_fixture < supabase/migrations/19_contact_phone_identity.sql >/dev/null
-for _ in 1 2; do
-  psql_fixture < supabase/migrations/24_appointment_booking_delivery.sql >/dev/null
-done
+
+appointments_filenode() { psql_fixture -qAtc "SELECT pg_relation_filenode('public.appointments');"; }
+before_filenode="$(appointments_filenode)"
+psql_fixture < supabase/migrations/24_appointment_booking_delivery.sql >/dev/null
+if [[ $(appointments_filenode) != "$before_filenode" ]]; then
+  printf 'Migration 24 rewrote the appointments table.\n' >&2
+  exit 1
+fi
+
+saved_revision="$(psql_fixture -qAt <<'SQL'
+INSERT INTO public.appointments (id, user_id, customer_name, appointment_date, start_time, end_time, status)
+VALUES ('90000000-0000-4000-8000-000000000043', '90000000-0000-4000-8000-000000000001',
+  'Marcação criada após a migração', '2025-03-06', '10:00', '10:30', 'completed')
+RETURNING schedule_revision;
+SQL
+)"
+if [[ -z "$saved_revision" || "$saved_revision" = '00000000-0000-0000-0000-000000000000' ]]; then
+  printf 'New appointments must have a generated revision.\n' >&2
+  exit 1
+fi
+psql_fixture < supabase/migrations/24_appointment_booking_delivery.sql >/dev/null
+stored_revision="$(psql_fixture -qAtc "SELECT schedule_revision FROM public.appointments WHERE id='90000000-0000-4000-8000-000000000043';")"
+if [[ "$stored_revision" != "$saved_revision" || $(appointments_filenode) != "$before_filenode" ]]; then
+  printf 'Reapplying migration 24 changed existing revisions or rewrote the appointments table.\n' >&2
+  exit 1
+fi
+
 psql_fixture < tests/integration/appointment-booking-contract.sql >/dev/null
 printf 'Appointment SQL contract passed.\n'
 

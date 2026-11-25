@@ -204,9 +204,10 @@ router.get("/", async (req: AuthRequest, res) => {
     if (error) throw error;
     const appointments = (data ?? []) as Appointment[];
     if (!appointments.length) return res.json({ success: true, data: [] });
-    const ids = appointments.map((item) => item.id);
+    const revisions = new Map(appointments.map(({ id, schedule_revision }) => [id, schedule_revision]));
+    const ids = [...revisions.keys()];
     const notificationRows = [];
-    // Bound PostgREST URLs and avoid reading obsolete revisions into the response.
+    // Bound PostgREST URLs.
     for (let index = 0; index < ids.length; index += 100) {
       const result = await supabaseAdmin.from("agentx_appointment_notifications")
         .select("appointment_id,revision,kind,status,updated_at,expires_at").eq("user_id", userId)
@@ -214,17 +215,18 @@ router.get("/", async (req: AuthRequest, res) => {
       if (result.error) throw result.error;
       notificationRows.push(...(result.data ?? []));
     }
-    const byRevision = new Map<string, Record<string, string>>();
+    const byAppointment = new Map<string, Record<string, string>>();
     const now = Date.now();
     for (const row of notificationRows) {
-      const statuses = byRevision.get(row.revision) ?? {};
+      if (row.revision !== revisions.get(row.appointment_id)) continue;
       if (row.status === "retry" && Date.parse(row.expires_at) <= now) continue;
+      const statuses = byAppointment.get(row.appointment_id) ?? {};
       statuses[row.kind] = row.status === "sending" && Date.parse(row.updated_at) + 120_000 <= now ? "uncertain" : row.status;
-      byRevision.set(row.revision, statuses);
+      byAppointment.set(row.appointment_id, statuses);
     }
     const labelled = await appointmentLabels(userId, appointments);
     return res.json({ success: true, data: labelled.map((row) => ({
-      ...row, notification_statuses: byRevision.get(row.schedule_revision) ?? {}
+      ...row, notification_statuses: byAppointment.get(row.id) ?? {}
     })) });
   } catch (error) {
     return appointmentError(res, error);

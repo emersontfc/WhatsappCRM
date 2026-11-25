@@ -1,3 +1,14 @@
+-- These same-revision bookings are read by the HTTP regression after the SQL checks.
+INSERT INTO public.agentx_appointment_notifications (user_id, appointment_id, revision, kind, status, expires_at)
+SELECT user_id, id, schedule_revision, 'manual',
+  CASE WHEN id = '90000000-0000-4000-8000-000000000041' THEN 'sent' ELSE 'uncertain' END, now()
+FROM public.appointments
+WHERE id IN ('90000000-0000-4000-8000-000000000041', '90000000-0000-4000-8000-000000000042');
+
+INSERT INTO public.agentx_appointment_notifications (user_id, appointment_id, revision, kind, status, expires_at)
+SELECT user_id, id, gen_random_uuid(), 'confirmation', 'sent', now()
+FROM public.appointments WHERE id = '90000000-0000-4000-8000-000000000041';
+
 BEGIN;
 
 DO $$
@@ -23,6 +34,8 @@ BEGIN
   VALUES (owner, 'Lembrete', '258840001122', local_start::date, to_char(local_start, 'HH24:MI'),
     to_char(local_start + interval '30 minutes', 'HH24:MI'), scheduled, 'Africa/Maputo')
   RETURNING id, schedule_revision INTO booking_id, revision;
+
+  ASSERT revision <> '00000000-0000-0000-0000-000000000000', 'brand-new bookings get a fresh revision';
 
   ASSERT public.agentx_claim_appointment_notification(outsider, booking_id, revision, 'reminder_24h')->>'status' = 'ineligible';
   ASSERT public.agentx_claim_appointment_notification(owner, booking_id, gen_random_uuid(), 'reminder_24h')->>'status' = 'ineligible';

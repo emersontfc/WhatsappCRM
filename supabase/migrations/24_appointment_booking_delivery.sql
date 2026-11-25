@@ -1,10 +1,13 @@
 BEGIN;
 
+-- Existing rows get a metadata-only revision. Notifications also key on the appointment ID.
 ALTER TABLE public.appointments
-  ADD COLUMN IF NOT EXISTS schedule_revision uuid NOT NULL DEFAULT gen_random_uuid(),
+  ADD COLUMN IF NOT EXISTS schedule_revision uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000'::uuid,
   ADD COLUMN IF NOT EXISTS request_id uuid,
   ADD COLUMN IF NOT EXISTS time_zone text,
   ADD COLUMN IF NOT EXISTS start_at timestamptz;
+
+ALTER TABLE public.appointments ALTER COLUMN schedule_revision SET DEFAULT gen_random_uuid();
 
 CREATE UNIQUE INDEX IF NOT EXISTS agentx_appointment_request_unique
   ON public.appointments (user_id, request_id) WHERE request_id IS NOT NULL;
