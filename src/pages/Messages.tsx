@@ -53,13 +53,6 @@ interface QuickReply {
   shortcut?: string;
 }
 
-interface Agent {
-  id: string;
-  provider: string;
-  model: string;
-  instructions: string;
-}
-
 type ConversationFilter = "all" | "unread" | "ai" | "human" | "leads";
 
 async function loadConversations(signal?: AbortSignal): Promise<Contact[]> {
@@ -272,7 +265,6 @@ export default function Messages() {
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const [showCrmPanel, setShowCrmPanel] = useState(false);
 
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [isRecording, setIsRecording] = useState(false);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
@@ -312,11 +304,9 @@ export default function Messages() {
           if (isMounted && response.success) setQuickReplies(response.data);
         }).catch((error) => console.error("Quick replies unavailable:", error));
 
-        void Promise.resolve(supabase.from("agents").select("*").eq("user_id", uId).eq("is_active", true))
-          .then(({ data }) => {
-            if (!isMounted || !data) return;
-            setAgents(data);
-            if (data.length) setSelectedAgentId(data[0].id);
+        void apiFetch("/api/agent?active=true")
+          .then((response) => {
+            if (isMounted && response.success) setSelectedAgentId(response.data?.id ?? "");
           }).catch((error) => console.error("Agents unavailable:", error));
 
       } catch {

@@ -95,7 +95,7 @@ export default function Layout({ children }: LayoutProps) {
           const response = await apiFetch("/api/ai/subscription");
           if (isMounted && response?.success && response?.data) {
             const sub = response.data;
-            const adminStatus = sub?.role === "admin";
+            const adminStatus = sub?.role === "admin" || sub?.role === "superadmin";
             setIsAdmin(adminStatus);
             
             const rawPlan = sub?.plan || sub?.subscription?.plan;

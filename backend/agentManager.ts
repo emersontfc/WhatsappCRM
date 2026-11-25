@@ -608,7 +608,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       return;
     }
 
-    const isAdmin = isOwner || userData?.role === 'admin';
+    const isAdmin = isOwner || userData?.role === "admin" || userData?.role === "superadmin";
 
     // Check subscription if not admin
     let currentUsed = 0;

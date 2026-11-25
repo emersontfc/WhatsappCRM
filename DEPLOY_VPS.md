@@ -67,7 +67,6 @@ ENCRYPTION_KEY=coloque_aqui_uma_chave_com_exatos_32_caracteres!
 
 # URLs do Sistema
 VITE_API_URL=https://seudominio.com
-ADMIN_EMAIL=admin@seudominio.com
 ```
 
 Pressione `Ctrl + O` e `Enter` para salvar, e `Ctrl + X` para sair do editor.
@@ -77,6 +76,12 @@ Pressione `Ctrl + O` e `Enter` para salvar, e `Ctrl + X` para sair do editor.
 ## 🐳 4. Método 1: Deploy com Docker & Docker Compose *(Recomendado)*
 
 O Docker isola a aplicação com todas as bibliotecas de áudio FFmpeg e dependências compiladas sem conflitos de sistema.
+
+### Instalar num projeto Supabase vazio
+
+Com a ligação PostgreSQL do novo projeto definida em `PGDATABASE`, execute `psql -X -f migrations/install_agentx_fresh.sql` a partir do repositório. Para usar o SQL Editor, gere o SQL com `node scripts/render-agentx-fresh-sql.mjs > AgentX-instalacao-limpa.sql`. Esse ficheiro instala o esquema numa única transação. As duas opções verificam se o projeto já tem tabelas, contas ou buckets do utilizador antes de instalar.
+
+Crie a conta inicial no painel. Depois de verificar que o endereço pertence ao administrador pretendido, atribua `admin` ou `superadmin` ao perfil correspondente por uma operação administrativa na base. O cadastro cria contas comuns e a aplicação respeita o papel guardado no perfil.
 
 ### 1. Iniciar o container em segundo plano:
 ```bash
@@ -192,11 +197,12 @@ sudo certbot --nginx -d seudominio.com -d www.seudominio.com
 
 O comando `scripts/release-agentx-vps.sh` valida a configuração pública e o esquema de CRM, vendas, Agenda, Marcações e Grupos num contentor temporário antes da troca. No `.env`, use a chave publishable ou anon em `VITE_SUPABASE_ANON_KEY` e reserve a chave secret ou service_role para `SUPABASE_SERVICE_ROLE_KEY`.
 
-Para a atualização de Agenda, Marcações e Grupos, confirme primeiro quais das três migrações estão aplicadas no projeto Supabase usado pela VPS. Execute apenas as que faltam, pela ordem abaixo. A migração 24 define a revisão das marcações antigas sem reescrever a tabela. A criação dos índices ainda lê as tabelas existentes. Aplique cada migração separadamente, num período de pouco tráfego.
+Antes de atualizar uma instalação existente, confirme quais das migrações estão aplicadas no projeto Supabase usado pela VPS. Execute apenas as que faltam, pela ordem abaixo. A migração 24 define a revisão das marcações antigas sem reescrever a tabela. A criação dos índices ainda lê as tabelas existentes. Aplique cada migração separadamente, num período de pouco tráfego.
 
 1. `supabase/migrations/23_agenda_dispatch.sql`
 2. `supabase/migrations/24_appointment_booking_delivery.sql`
 3. `supabase/migrations/25_group_payment_proofs.sql`
+4. `supabase/migrations/26_seller_delivery_recovery.sql`
 
 Esta consulta curta verifica se as migrações chegaram ao fim. Também pode ser usada quando o SQL Editor perde a ligação durante a execução.
 
@@ -204,7 +210,8 @@ Esta consulta curta verifica se as migrações chegaram ao fim. Também pode ser
 SELECT
   to_regprocedure('public.agentx_schedule_dispatch_ready()') IS NOT NULL AS m23,
   to_regprocedure('public.agentx_appointment_contract_ready()') IS NOT NULL AS m24,
-  to_regprocedure('public.agentx_group_proof_contract_ready()') IS NOT NULL AS m25;
+  to_regprocedure('public.agentx_group_proof_contract_ready()') IS NOT NULL AS m25,
+  to_regprocedure('public.agentx_seller_delivery_recovery_ready()') IS NOT NULL AS m26;
 ```
 
 Depois de aplicar as migrações, publique o commit da versão com `scripts/release-agentx-vps.sh`. Confirme em **Estado da operação** os três módulos, a ligação WhatsApp e o processamento de agendamentos. O processamento no servidor exige `DISABLE_SCHEDULER=false`.

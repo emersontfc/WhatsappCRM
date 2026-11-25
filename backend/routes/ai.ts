@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import { decrypt, runAI } from "../agentManager.ts";
 import { AuthRequest } from "../middleware/auth.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
+import { createStandardProfile } from "../services/publicProfile.ts";
 
 const router = express.Router();
 
@@ -121,130 +122,59 @@ router.post("/suggest", async (req: AuthRequest, res) => {
   }
 });
 
+async function readSubscription(userId: string) {
+  const { data, error } = await supabaseAdmin.from("subscriptions").select("*, plans(*)")
+    .eq("user_id", userId).order("created_at", { ascending: false }).limit(1);
+  if (error) throw error;
+  return data?.[0] ?? null;
+}
+
+async function initializeFreeSubscription(userId: string) {
+  const { data: plans, error: planError } = await supabaseAdmin.from("plans").select("id")
+    .eq("name", "Free").limit(1);
+  if (planError) throw planError;
+  const planId = plans?.[0]?.id;
+  if (!planId) return null;
+
+  const expiry = new Date();
+  expiry.setFullYear(expiry.getFullYear() + 10);
+  const { data, error } = await supabaseAdmin.from("subscriptions").upsert({
+    user_id: userId,
+    plan: "Free",
+    plan_id: planId,
+    status: "active",
+    end_date: expiry.toISOString()
+  }, { onConflict: "user_id", ignoreDuplicates: true }).select("*, plans(*)").maybeSingle();
+  if (error) throw error;
+  if (data?.user_id === userId) return data;
+  const existing = await readSubscription(userId);
+  if (existing) return existing;
+  throw new Error("Subscription write not confirmed");
+}
+
 router.get("/subscription", async (req: AuthRequest, res) => {
-  const userId = req.user?.id;
-  if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
+  const identity = req.user;
+  if (!identity?.id) return res.status(401).json({ success: false, error: "Unauthorized" });
 
   try {
-    console.log(`[AI API] Fetching/Initializing subscription for user ${userId}`);
-    
-    // 1. Ensure profile and subscription exist
-    console.log(`[AI API] Calling supabaseAdmin for user ${userId}`);
-    const [profileResult, subResult] = await Promise.all([
-      supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle(),
-      supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).order("created_at", { ascending: false }).limit(1)
+    const [profileResult, currentSubscription] = await Promise.all([
+      supabaseAdmin.from("users").select("*").eq("id", identity.id).maybeSingle(),
+      readSubscription(identity.id)
     ]);
-    console.log(`[AI API] supabaseAdmin calls completed for user ${userId}`);
+    if (profileResult.error) throw profileResult.error;
 
     let profile = profileResult.data;
-    let subscription = subResult.data?.[0] || null;
-
-    const adminEmails = (process.env.ADMIN_EMAIL || process.env.INITIAL_SUPERADMIN_EMAIL || "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
-    const userEmail = (req.user?.email || "").toLowerCase();
-    const isInitialAdmin = Boolean(userEmail && adminEmails.includes(userEmail));
-
-    console.log(`[AI API] User email: ${userEmail}, Is configured admin: ${isInitialAdmin}`);
-
-    if (profile && isInitialAdmin && profile.role !== "admin" && profile.role !== "superadmin") {
-      console.log(`[AI API] Setting user ${userId} (${userEmail}) to admin role per environment config`);
-      const { data: updatedProfile, error: updateError } = await supabaseAdmin
-        .from("users")
-        .update({ role: "admin", plan: "Admin" })
-        .eq("id", userId)
-        .select()
-        .single();
-      if (updateError) console.error(`[AI API] Error upgrading profile:`, updateError);
-      else {
-        profile = updatedProfile;
-      }
-    }
-
     if (!profile) {
-      console.log(`[AI API] Initializing profile for user ${userId} (${userEmail})`);
-      
-      const { data: newProfile, error: profileError } = await supabaseAdmin
-        .from("users")
-        .insert({
-          id: userId,
-          email: userEmail,
-          name: userEmail?.split("@")[0] || "User",
-          role: isInitialAdmin ? "admin" : "user",
-          plan: isInitialAdmin ? "Admin" : "Free"
-        })
-        .select()
-        .single();
-      
-      if (profileError) {
-        console.error(`[AI API] Error creating profile for ${userId}:`, profileError);
-        if (profileError.code === '23505') {
-           const { data: retryProfile } = await supabaseAdmin.from("users").select("*").eq("id", userId).maybeSingle();
-           profile = retryProfile;
-        }
-      } else {
-        console.log(`[AI API] Successfully created profile for user ${userId} with role: ${isInitialAdmin ? "admin" : "user"}`);
-        profile = newProfile;
-      }
+      const email = identity.email?.trim().toLowerCase();
+      if (!email) throw new Error("Missing verified profile email");
+      profile = await createStandardProfile(identity.id, email);
     }
 
-    if (!subscription) {
-      console.log(`[AI API] Initializing subscription for user ${userId}`);
-      
-      // Fetch plan_id for "Free" plan
-      let { data: planData } = await supabaseAdmin
-        .from("plans")
-        .select("id")
-        .eq("name", "Free")
-        .limit(1);
-
-      let planId = planData?.[0]?.id;
-
-      if (!planId) {
-        console.log(`[AI API] "Free" plan not found, creating it.`);
-        const { data: newPlan } = await supabaseAdmin
-          .from("plans")
-          .insert({
-            name: "Free",
-            max_connections: 1,
-            max_contacts: 50,
-            max_messages_per_day: 10,
-            ai_enabled: true,
-            automation_level: "basic",
-            price: 0
-          })
-          .select("id")
-          .single();
-        
-        planId = newPlan?.id;
-      }
-
-      if (planId) {
-        const { data: newSub, error: subError } = await supabaseAdmin
-          .from("subscriptions")
-          .insert({
-            user_id: userId,
-            plan: isInitialAdmin ? "Premium" : "Free",
-            plan_id: planId,
-            status: "active",
-            end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 10)).toISOString()
-          })
-          .select("*, plans(*)")
-          .single();
-        
-        if (!subError) {
-          subscription = newSub;
-        } else {
-          // If already exists, fetch the existing one
-          const { data: existingSubs } = await supabaseAdmin.from("subscriptions").select("*, plans(*)").eq("user_id", userId).order("created_at", { ascending: false }).limit(1);
-          subscription = existingSubs?.[0] || null;
-        }
-      }
-    }
-
-    // 2. Check plan status
-    const isAdmin = profile?.role === "admin" || isInitialAdmin;
-    const plan = isAdmin ? "Admin" : (subscription?.plan || profile?.plan || "Free");
-    const isActive = true;
-
+    const role = profile.role || "user";
+    const isAdmin = role === "admin" || role === "superadmin";
+    const subscription = currentSubscription ?? (!isAdmin && (!profile.plan || profile.plan === "Free")
+      ? await initializeFreeSubscription(identity.id) : null);
+    const plan = isAdmin ? "Admin" : (subscription?.plan || profile.plan || "Free");
     const adminPlanDetails = {
       name: "Admin",
       max_connections: 999,
@@ -254,34 +184,31 @@ router.get("/subscription", async (req: AuthRequest, res) => {
       automation_level: "advanced",
       price: 0
     };
+    const planDetails = isAdmin ? adminPlanDetails : (subscription?.plans || {
+      name: plan,
+      max_connections: 1,
+      max_contacts: 50,
+      max_messages_per_day: 20,
+      ai_enabled: true,
+      automation_level: "basic",
+      price: 0
+    });
 
-    const resolvedPlanDetails = isAdmin 
-      ? adminPlanDetails 
-      : (subscription?.plans || {
-          name: plan,
-          max_connections: 1,
-          max_contacts: 50,
-          max_messages_per_day: 20,
-          ai_enabled: true,
-          automation_level: "basic",
-          price: 0
-        });
-
-    res.json({ 
-      success: true, 
+    res.set("Cache-Control", "no-store").json({
+      success: true,
       data: {
         ...profile,
         plan,
-        role: isAdmin ? "admin" : (profile?.role || "user"),
-        active: isActive,
-        expires_at: isAdmin ? null : (subscription?.end_date || null),
-        subscription: subscription,
-        planDetails: resolvedPlanDetails
+        role,
+        active: true,
+        expires_at: isAdmin ? null : (subscription?.end_date || profile.expires_at || null),
+        subscription,
+        planDetails
       }
     });
-  } catch (err: any) {
-    console.error("[AI API] Failed to fetch subscription:", err);
-    res.status(500).json({ success: false, error: "Erro ao buscar assinatura" });
+  } catch (error) {
+    console.warn("[AI API] Subscription unavailable", (error as { code?: string })?.code);
+    res.status(503).json({ success: false, error: "Não foi possível consultar a subscrição. Tenta novamente." });
   }
 });
 

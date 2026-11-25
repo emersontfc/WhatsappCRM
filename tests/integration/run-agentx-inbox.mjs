@@ -15,6 +15,7 @@ const otherContact = "00000000-0000-4000-8000-000000000022";
 const previousLeadId = "00000000-0000-4000-8000-000000000031";
 const duplicateLeadId = "00000000-0000-4000-8000-000000000032";
 const foreignLeadId = "00000000-0000-4000-8000-000000000033";
+const fresh = process.env.AGENTX_INBOX_FRESH === "1";
 const password = "agentx-inbox-test-password";
 const rest = new URL(process.argv[2]);
 assert.equal(rest.hostname, "127.0.0.1");
@@ -155,7 +156,7 @@ async function start(port = 0) {
     cwd: sandbox,
     env: { ...process.env, NODE_ENV: "production", PORT: String(port), SUPABASE_URL: supabaseUrl,
       VITE_SUPABASE_URL: supabaseUrl, SUPABASE_SERVICE_ROLE_KEY: serviceKey, VITE_SUPABASE_ANON_KEY: publicKey,
-      GEMINI_API_KEY: "",
+      GEMINI_API_KEY: "", ADMIN_EMAIL: "", INITIAL_SUPERADMIN_EMAIL: "",
       VITE_API_URL: "", DISABLE_WHATSAPP_RECONNECT: "true", DISABLE_SCHEDULER: "true", DISABLE_DIGITAL_DELIVERY_WORKER: "true" },
     stdio: ["ignore", "pipe", "pipe", "ipc"]
   });
@@ -219,6 +220,32 @@ try {
   const call = (route, index, body) => api("/whatsapp" + route, index, body);
   const saveContact = (phone, index = 0, name = "Contacto guardado") => api("/contacts", index, { phone, name });
   assert.equal((await call("/chats", -1)).status, 401);
+  if (fresh) {
+    const operations = await api("/operations");
+    assert.equal(operations.status, 200);
+    const { modules } = await operations.json();
+    for (const module of ["crm", "sales", "agenda", "bookings", "groups", "agent", "delivery"]) {
+      assert.equal(modules[module], "ready", `Fresh installation must provision ${module}`);
+    }
+    const subscription = await api("/ai/subscription");
+    assert.equal(subscription.status, 200);
+    const { data } = await subscription.json();
+    assert.equal(data.role, "user");
+    assert.equal(data.plan, "Pro");
+    assert.equal(data.subscription.plans.name, "Pro");
+    assert.equal(data.planDetails.ai_enabled, true);
+
+    const organization = await api("/v2/commerce/organizations", 0, { name: "Loja A", slug: "loja-a" });
+    assert.equal(organization.status, 201, await organization.clone().text());
+    const { id: organizationId } = (await organization.json()).data;
+    assert.ok(organizationId);
+    const ownOrganizations = await api("/v2/commerce/organizations");
+    assert.equal(ownOrganizations.status, 200);
+    assert.deepEqual((await ownOrganizations.json()).data.map(row => row.organization_id), [organizationId]);
+    const otherOrganizations = await api("/v2/commerce/organizations", 1);
+    assert.equal(otherOrganizations.status, 200);
+    assert.deepEqual((await otherOrganizations.json()).data, []);
+  }
 
   const historyContact = randomUUID();
   const fixtureHeaders = { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" };
@@ -263,6 +290,14 @@ try {
   const unpaginatedHistory = await (await call(historyPath)).json();
   assert.deepEqual(Object.keys(unpaginatedHistory), ["success", "messages"]);
   assert.equal(unpaginatedHistory.messages.length, sample.length);
+  if (fresh) {
+    const directHistory = new URL(`/messages?contact_id=eq.${historyContact}&select=id`, rest);
+    for (const [index, expectedRows] of [[0, sample.length], [1, 0]]) {
+      const asBrowser = await fetch(directHistory, { headers: { authorization: `Bearer ${userTokens[index]}` } });
+      assert.equal(asBrowser.status, 200);
+      assert.equal((await asBrowser.json()).length, expectedRows);
+    }
+  }
 
   const encodeTestCursor = (payload) => Buffer.from(JSON.stringify(payload)).toString("base64url");
   for (const invalidQuery of ["limit=0", "limit=101", "limit=2.5", "limit=2&limit=3", "before=%23", "after=",
@@ -273,6 +308,8 @@ try {
     const response = await call(`${historyPath}?${invalidQuery}`);
     assert.equal(response.status, 400, `Invalid history query ${invalidQuery}: ${await response.text()}`);
   }
+  assert.equal((await fetch(new URL(`/messages?contact_id=eq.${historyContact}`, rest),
+    { method: "DELETE", headers: fixtureHeaders })).status, 204);
   assert.equal((await fetch(new URL(`/contacts?id=eq.${historyContact}`, rest), { method: "DELETE", headers: fixtureHeaders })).status, 204);
   console.log("Inbox pagination passed across timestamp ties, fractional seconds, legacy rows and authenticated tenant boundaries.");
 
@@ -285,22 +322,27 @@ try {
   assert.equal(exactMatch.status, 200);
   assert.deepEqual((await exactMatch.json()).data,
     { id: primaryId, phone: "258857777777", name: "Contacto guardado", created: false });
-  const history = await call(`/chats/${duplicateId}/messages`);
-  assert.equal((await history.json()).messages[0].msg_id, "legacy-duplicate-message");
   const exactRows = await fetch(new URL(`/contacts?user_id=eq.${owner}&phone=eq.258857777777&select=id,agentx_legacy_phone_duplicate&order=id`, rest),
     { headers: { authorization: `Bearer ${serviceKey}` } });
   assert.deepEqual(await exactRows.json(), [
-    { id: primaryId, agentx_legacy_phone_duplicate: false }, { id: duplicateId, agentx_legacy_phone_duplicate: true }
+    { id: primaryId, agentx_legacy_phone_duplicate: false },
+    ...(!fresh ? [{ id: duplicateId, agentx_legacy_phone_duplicate: true }] : [])
   ]);
   const legacy = await saveContact("258849998888");
   assert.equal(legacy.status, 200);
   assert.deepEqual((await legacy.json()).data,
     { id: legacyId, phone: "258849998888", name: "Contacto guardado", created: false });
-  const { messages: legacyHistory } = await (await call("/chats/00000000-0000-4000-8000-000000000014/messages")).json();
-  assert.equal(legacyHistory[0].msg_id, "legacy-contact-message");
+  if (!fresh) {
+    const history = await call(`/chats/${duplicateId}/messages`);
+    assert.equal((await history.json()).messages[0].msg_id, "legacy-duplicate-message");
+    const { messages: legacyHistory } = await (await call("/chats/00000000-0000-4000-8000-000000000014/messages")).json();
+    assert.equal(legacyHistory[0].msg_id, "legacy-contact-message");
+  }
   const synced = await call("/sync-contacts", 0, {});
   assert.equal(synced.status, 200);
-  assert.deepEqual(await synced.json(), { success: true, total: 6, savedCount: 2, activeChatsCount: 0, cleanedCount: 0, withoutPhone: 1, failed: 0 });
+  assert.deepEqual(await synced.json(), {
+    success: true, total: fresh ? 4 : 6, savedCount: 2, activeChatsCount: 0, cleanedCount: 0, withoutPhone: 1, failed: 0
+  });
   const resolvedContact = await saveContact("83 123 4567");
   assert.equal(resolvedContact.status, 200);
   assert.equal((await resolvedContact.json()).data.phone, "258831234567");
@@ -335,7 +377,7 @@ try {
     body: JSON.stringify({ user_id: owner, name: "Duplicado", phone: "0861234567", agentx_legacy_phone_duplicate: true })
   });
   assert.equal(directDuplicate.status, 409);
-  const changeDuplicate = await fetch(new URL(`/contacts?id=eq.${duplicateId}`, rest), {
+  const changeDuplicate = await fetch(new URL(`/contacts?id=eq.${fresh ? primaryId : duplicateId}`, rest), {
     method: "PATCH", headers: { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" },
     body: JSON.stringify({ phone: "0861234567" })
   });
@@ -495,7 +537,7 @@ try {
   assert.equal(overview.agentActive, true);
   assert.equal(overview.whatsappConnected, true);
   await app.simulate("inbound", { text: "Bom dia", messageId: "inbound-before-ai", ...identity });
-  const [passiveLead] = await read("leads", `?id=eq.${previousLeadId}`);
+  const [passiveLead] = await read("leads", fresh ? `?user_id=eq.${owner}&phone=eq.258840000002` : `?id=eq.${previousLeadId}`);
   assert.ok(passiveLead.contact_id);
   assert.equal(passiveLead.last_message, "Bom dia");
   assert.equal(passiveLead.stage, "novo");
@@ -508,26 +550,27 @@ try {
   assert.match(app.outbound.at(-1).content.text, /Livro do piloto.*250 MT/);
   assert.doesNotMatch(app.outbound.at(-1).content.text, /fixture-file-access|agentx-product-files/);
   await sell("Tenho interesse no livro.", "qualify-one");
-  const [lead] = await read("leads", `?id=eq.${previousLeadId}`);
+  const [lead] = await read("leads", `?id=eq.${passiveLead.id}`);
   assert.equal(lead.contact_id, passiveLead.contact_id);
   assert.equal(lead.interest_level, "alto");
-  assert.match(lead.notes, /Nota histórica da loja A/);
+  if (!fresh) assert.match(lead.notes, /Nota histórica da loja A/);
   assert.match(lead.notes, /Prefere o PDF/);
   assert.match(lead.last_action, /interesse|qualifica/i);
   assert.match(app.outbound.at(-1).content.text, /Registei o teu interesse/);
   assert.doesNotMatch(app.outbound.at(-1).content.text, /falha|last_action|qualifyLead/i);
   const [qualifiedContact] = await read("contacts", `?id=eq.${lead.contact_id}`);
   assert.ok(qualifiedContact.tags.includes("Interessado no livro"));
-  assert.equal((await read("leads", `?id=eq.${duplicateLeadId}`))[0].notes, "Nota do duplicado");
+  if (!fresh) assert.equal((await read("leads", `?id=eq.${duplicateLeadId}`))[0].notes, "Nota do duplicado");
   assert.equal((await read("leads", `?id=eq.${foreignLeadId}`))[0].notes, "Nota privada da loja B");
-  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, 2);
+  const ownerLeadCount = fresh ? 1 : 2;
+  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, ownerLeadCount);
   const readAsOther = await fetch(new URL("/leads?select=id", rest),
     { headers: { authorization: `Bearer ${userTokens[1]}` } });
   assert.equal(readAsOther.status, 200);
   assert.deepEqual(await readAsOther.json(), [{ id: foreignLeadId }]);
 
   await sell("Tenho interesse e indico uma nota no limite.", "qualify-note-limit");
-  const [updatedNotes] = await read("leads", `?id=eq.${previousLeadId}&select=notes`);
+  const [updatedNotes] = await read("leads", `?id=eq.${lead.id}&select=notes`);
   assert.match(updatedNotes.notes, /Prefere o PDF/);
   assert.equal(updatedNotes.notes.split("\n").at(-1).length, 500);
   await sell("Quero comprar quatro livros.", "insufficient-stock");
@@ -657,7 +700,7 @@ try {
   assert.equal(manualLead.name, manual.name);
   assert.equal(manualLead.value, manual.value);
   assert.match(manualLead.notes, /Prefere o PDF/);
-  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, 2);
+  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, ownerLeadCount);
   if (page) {
     await page.goto(app.base + `/leads?id=${lead.id}`);
     await page.getByRole("heading", { name: "Cliente atualizado", exact: true }).waitFor();
@@ -966,9 +1009,60 @@ try {
     console.log("Inbox pagination and browser reconnect passed (Realtime suppresses fast polls, older scroll anchor, 106 catch-up messages and a late arrival)");
   }
 
+  // Simulate an ambiguous gateway response after the sale was approved. A reviewer can only
+  // close the delivery after checking receipt, and closing it never sends a second document.
+  const restock = await fetch(new URL(`/products?id=eq.${product.id}`, rest), {
+    method: "PATCH", headers: storageAuth, body: JSON.stringify({ stock: 1 })
+  });
+  assert.ok(restock.ok);
+  aiEndpointAvailable = true;
+  await app.simulate("sales", { ...smsIdentity, text: "Quero comprar um livro por e-Mola.", messageId: "purchase-delivery-review" });
+  const [reviewOrder] = await read("orders", "?source_message_id=eq.purchase-delivery-review");
+  assert.equal(reviewOrder.status, "awaiting_payment");
+  await app.simulate("sales", { ...smsIdentity, text: sms.replace("i00000", "i00001"), messageId: "proof-delivery-review" });
+  const [reviewProof] = await read("payment_verifications", "?source_message_id=eq.proof-delivery-review");
+  await app.simulate("unconfirmed");
+  const documentsBeforeReview = sentDocuments(app.outbound).length;
+  const approvedForReview = await approve(reviewOrder.id, { ...approval, proofId: reviewProof.id });
+  assert.equal(approvedForReview.status, 200);
+  assert.equal((await approvedForReview.json()).fulfillment.delivered, false);
+  const [unconfirmedOrder] = await read("orders", `?id=eq.${reviewOrder.id}`);
+  assert.equal(unconfirmedOrder.status, "paid");
+  assert.ok(unconfirmedOrder.delivery_started_at);
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeReview + 1);
+
+  const reviewPath = `/commerce/orders/${reviewOrder.id}/delivery/confirm`;
+  const review = (account, verified) => api(reviewPath, account, { deliveryVerified: verified });
+  const repeatDelivery = await api(`/commerce/orders/${reviewOrder.id}/delivery`, 0, {});
+  assert.equal((await repeatDelivery.json()).delivered, false);
+  assert.equal((await review(-1, true)).status, 401);
+  assert.equal((await review(1, true)).status, 404);
+  assert.equal((await review(0, false)).status, 400);
+  if (page) {
+    await page.goto(app.base + `/orders?q=${reviewOrder.order_number}`);
+    await page.getByRole("button", { name: "Rever entrega", exact: true }).click();
+    const reviewDialog = page.getByRole("dialog");
+    await reviewDialog.getByRole("checkbox", { name: /Confirmei que o cliente recebeu/ }).check();
+    const [result] = await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith(`/api${reviewPath}`)),
+      reviewDialog.getByRole("button", { name: "Confirmar entrega", exact: true }).click()
+    ]);
+    assert.equal(result.status(), 200);
+  } else {
+    assert.equal((await review(0, true)).status, 200);
+  }
+  assert.equal((await review(0, true)).status, 200);
+  assert.equal((await read("orders", `?id=eq.${reviewOrder.id}`))[0].status, "fulfilled");
+  const audited = await read("agent_operations", `?order_id=eq.${reviewOrder.id}&step=eq.fulfilled`);
+  assert.equal(audited.length, 1);
+  assert.equal(audited[0].metadata.source, "operator_review");
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeReview + 1);
+  console.log("Delivery review passed after a missing gateway acknowledgement: owner confirmed, one audit event, no second send.");
+
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
-  console.log("Seller flow passed on the repaired legacy schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document");
+  console.log(`Seller flow passed on the ${fresh ? "freshly installed" : "repaired legacy"} schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document`);
+  if (fresh) console.log("Fresh installation: deployment schema and subscription verified with stubbed Auth, Storage, AI and WhatsApp.");
   console.log("AI outage fallback passed: catalogue from live data and human handoff before a purchase");
   console.log("Outgoing M-Pesa and e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {

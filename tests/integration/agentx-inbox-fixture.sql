@@ -28,7 +28,7 @@ CREATE TABLE public.messages (
 );
 CREATE TABLE public.agents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
-  provider text, api_url text, model text, is_active boolean, created_at timestamptz DEFAULT now()
+  provider text, api_url text, api_key text, model text, is_active boolean, created_at timestamptz DEFAULT now()
 );
 CREATE TABLE public.leads (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),

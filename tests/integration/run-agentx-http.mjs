@@ -16,7 +16,9 @@ const publicKey = "sb_publishable_agentx_smoke-test";
 const revision = "a123bcd";
 const run = promisify(execFile);
 let workerCalls = 0;
+let sqlBootstrapCalls = 0;
 let brokenCrm = false;
+let unavailableCrm = false;
 let missingContactMigration = false;
 let missingSellerMigration = false;
 let missingLeadColumn = false;
@@ -25,6 +27,8 @@ let sellerContractReady = true;
 let missingPaymentContract = false;
 let paymentContractReady = true;
 let missingModuleContract = "";
+let sellerDeliveryState = "ready";
+let sellerDeliveryChecks = 0;
 const sellerMigrations = /migraç(?:ão|ões).*22/;
 
 const supabase = createServer((req, res) => {
@@ -33,6 +37,11 @@ const supabase = createServer((req, res) => {
   if (req.headers.apikey !== fakeSecret) {
     res.statusCode = 401;
     return res.end(JSON.stringify({ message: "Invalid fixture API key" }));
+  }
+  if (url.pathname === "/rest/v1/rpc/exec_sql") {
+    sqlBootstrapCalls++;
+    res.statusCode = 403;
+    return res.end(JSON.stringify({ code: "42501", message: "Runtime SQL is forbidden" }));
   }
   if (url.pathname === "/rest/v1/rpc/agentx_process_digital_deliveries") {
     workerCalls++;
@@ -63,6 +72,15 @@ const supabase = createServer((req, res) => {
     }
     return res.end(JSON.stringify(paymentContractReady && sellerContractReady && !missingSellerContract));
   }
+  if (url.pathname === "/rest/v1/rpc/agentx_seller_delivery_recovery_ready") {
+    assert.equal(req.method, "GET");
+    sellerDeliveryChecks++;
+    if (sellerDeliveryState === "missing" || sellerDeliveryState === "denied") {
+      res.statusCode = sellerDeliveryState === "missing" ? 404 : 403;
+      return res.end(JSON.stringify({ code: sellerDeliveryState === "missing" ? "PGRST202" : "42501" }));
+    }
+    return res.end(JSON.stringify(sellerDeliveryState === "ready"));
+  }
   if (url.pathname === "/auth/v1/user" && req.headers.authorization === `Bearer ${fakeToken}`) {
     return res.end(JSON.stringify({ id: fakeUser, aud: "authenticated", app_metadata: {}, user_metadata: {} }));
   }
@@ -82,6 +100,10 @@ const supabase = createServer((req, res) => {
   if (url.pathname === "/rest/v1/contacts" && brokenCrm) {
     res.statusCode = 400;
     return res.end(JSON.stringify({ code: "42703", message: "Schema fixture missing lid" }));
+  }
+  if (url.pathname === "/rest/v1/contacts" && unavailableCrm) {
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ code: "08006", message: "Fixture connection failure" }));
   }
   if (url.pathname === "/rest/v1/agentx_seller_settings" && missingSellerMigration) {
     res.statusCode = 404;
@@ -108,14 +130,14 @@ function preflight(env = appEnv) {
   return run(process.execPath, [tsx, "scripts/check-agentx-release.ts"], { env, timeout: 12_000 });
 }
 
-async function startApp() {
+async function startApp(env = appEnv) {
   const child = spawn(process.execPath, [tsx, "server.ts"], {
-    env: appEnv,
+    env,
     stdio: ["ignore", "pipe", "pipe"]
   });
   let logs = "";
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (data) => { logs = (logs + data).slice(-12000); });
-  const exit = once(child, "exit");
+  const exit = once(child, "close");
   const stop = async () => {
     if (child.exitCode === null) child.kill("SIGTERM");
     const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
@@ -123,7 +145,7 @@ async function startApp() {
   };
   for (let attempt = 0; attempt < 450; attempt++) {
     const matches = /Server listening on port (\d+)/.exec(logs);
-    if (matches) return { base: `http://127.0.0.1:${matches[1]}`, stop };
+    if (matches) return { base: `http://127.0.0.1:${matches[1]}`, stop, logs: () => logs };
     if (child.exitCode !== null) break;
     await delay(100);
   }
@@ -131,17 +153,29 @@ async function startApp() {
   throw new Error(`Server failed to start\n${logs}`);
 }
 
-async function assertDegradedReadiness() {
-  const degraded = await startApp();
+async function assertDegradedReadiness({ env = appEnv, module = "sales", state = "migration_required" } = {}) {
+  const degraded = await startApp(env);
   try {
-    const liveness = await fetch(degraded.base + "/api/health");
-    const readiness = await fetch(degraded.base + "/api/ready");
+    const [liveness, readiness, login, operations] = await Promise.all([
+      fetch(degraded.base + "/api/health"), fetch(degraded.base + "/api/ready"), fetch(degraded.base + "/login"),
+      fetch(degraded.base + "/api/operations", { headers: { authorization: `Bearer ${fakeToken}` } })
+    ]);
     assert.equal(liveness.status, 200);
     assert.equal(readiness.status, 503);
     assert.deepEqual(await readiness.json(), { ready: false, release: revision });
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.match(html, /<div id="root">/);
+    assert.ok(!html.includes(fakeSecret) && !html.includes(fakeAiKey));
+    assert.equal(operations.status, 200);
+    assert.equal((await operations.json()).modules[module], state);
   } finally {
     await degraded.stop();
   }
+  assert.equal(sqlBootstrapCalls, 0, "Application startup must not call exec_sql on an incomplete schema");
+  const diagnostic = state === "migration_required" ? /Esquema Supabase por atualizar[\s\S]*DEPLOY_VPS\.md/ : /Supabase está indisponível/;
+  assert.match(degraded.logs(), diagnostic);
+  assert.ok(!degraded.logs().includes(fakeSecret) && !degraded.logs().includes(fakeAiKey));
 }
 
 try {
@@ -219,13 +253,34 @@ try {
   missingContactMigration = false;
   brokenCrm = true;
   await assert.rejects(preflight(), { code: 1, stderr: /esquema principal do CRM/ });
-  await assertDegradedReadiness();
+  await assertDegradedReadiness({ module: "crm" });
   brokenCrm = false;
+  missingLeadColumn = true;
+  await assertDegradedReadiness({ env: { ...appEnv, NODE_ENV: "development" } });
+  missingLeadColumn = false;
+  unavailableCrm = true;
+  await assertDegradedReadiness({ module: "crm", state: "unavailable" });
+  unavailableCrm = false;
   for (const [contract, migration] of [["agentx_schedule_dispatch_ready", 23], ["agentx_appointment_contract_ready", 24], ["agentx_group_proof_contract_ready", 25]]) {
     missingModuleContract = contract;
     await assert.rejects(preflight(), { code: 1, stderr: new RegExp(String(migration)) });
   }
-  console.log("AgentX production HTTP smoke passed (readiness, migrations, private proofs, auth and delivery worker)");
+  missingModuleContract = "";
+  for (const state of ["missing", "denied", "incomplete"]) {
+    sellerDeliveryState = state;
+    await assert.rejects(preflight(), { code: 1, stderr: /migração 26.*26_seller_delivery_recovery\.sql/ });
+  }
+  const checksBeforeRuntime = sellerDeliveryChecks;
+  const compatible = await startApp();
+  try {
+    const readiness = await fetch(compatible.base + "/api/ready");
+    assert.equal(readiness.status, 200);
+    assert.deepEqual(await readiness.json(), { ready: true, release: revision });
+  } finally {
+    await compatible.stop();
+  }
+  assert.equal(sellerDeliveryChecks, checksBeforeRuntime, "Migration 26 is checked only during release preflight");
+  console.log("AgentX HTTP smoke passed (read-only startup in development and production, readiness, migrations, private proofs, auth and delivery worker)");
 } finally {
   supabase.closeAllConnections();
   supabase.close();

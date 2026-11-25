@@ -188,7 +188,7 @@ export default function Settings() {
           const response = await apiFetch("/api/ai/subscription");
           if (response.success && response.data) {
             setProfile(response.data);
-            if (response.data.role === "admin") {
+            if (response.data.role === "admin" || response.data.role === "superadmin") {
               setIsAdmin(true);
               await Promise.all([
                 fetchKeys(),
@@ -572,7 +572,7 @@ export default function Settings() {
                       )}
                     </div>
 
-                    {profile.plan !== "Premium" && profile.role !== "admin" && (
+                    {profile.plan !== "Premium" && profile.role !== "admin" && profile.role !== "superadmin" && (
                       <Button 
                         variant="outline" 
                         className="w-full border-amber-200 text-amber-700 hover:bg-amber-50"

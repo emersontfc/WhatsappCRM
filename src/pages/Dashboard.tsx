@@ -290,21 +290,7 @@ useEffect(() => {
       // ✅ BUSCAR AGENT
       try {
         const agentRes = await apiFetch("/api/agent");
-        if (agentRes?.success && agentRes.data && agentRes.data.id) {
-          setAgent(agentRes.data);
-        } else {
-          const { data: agentData } = await supabase
-            .from("agents")
-            .select("*")
-            .eq("user_id", user.id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (agentData) {
-            setAgent(agentData);
-          }
-        }
+        if (agentRes?.success) setAgent(agentRes.data?.id ? agentRes.data : null);
       } catch (err) {
         console.error("Erro ao buscar agent:", err);
       }

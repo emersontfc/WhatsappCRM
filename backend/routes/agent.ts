@@ -31,10 +31,9 @@ router.get("/", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ success: false, error: "Unauthorized" });
 
   try {
-    const { data: agents, error } = await supabaseAdmin
-      .from("agents")
-      .select("*")
-      .eq("user_id", userId)
+    const query = supabaseAdmin.from("agents").select("*").eq("user_id", userId);
+    if (req.query.active === "true") query.eq("is_active", true);
+    const { data: agents, error } = await query
       .order("created_at", { ascending: false })
       .limit(1);
       
@@ -206,8 +205,6 @@ router.post("/create-or-update", async (req: AuthRequest, res) => {
 
     if (error) {
       console.error(`[Agent API] Database error during save:`, error.message);
-      console.error(`[Agent API] Error details:`, JSON.stringify(error, null, 2));
-      console.error(`[Agent API] Attempted data:`, JSON.stringify(agentData, null, 2));
       throw error;
     }
     

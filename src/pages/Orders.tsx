@@ -144,12 +144,19 @@ export default function Orders() {
   const [rejecting, setRejecting] = useState(false);
   const [rejectionError, setRejectionError] = useState("");
   const rejectionDialog = useRef<HTMLDialogElement>(null);
+  const [deliveryReview, setDeliveryReview] = useState<Order | null>(null);
+  const [confirmingDelivery, setConfirmingDelivery] = useState(false);
+  const [deliveryReviewError, setDeliveryReviewError] = useState("");
+  const deliveryDialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (approval && approvalDialog.current && !approvalDialog.current.open) approvalDialog.current.showModal();
   }, [approval]);
   useEffect(() => {
     if (rejection && rejectionDialog.current && !rejectionDialog.current.open) rejectionDialog.current.showModal();
   }, [rejection]);
+  useEffect(() => {
+    if (deliveryReview && deliveryDialog.current && !deliveryDialog.current.open) deliveryDialog.current.showModal();
+  }, [deliveryReview]);
 
   const [proofsUnavailable, setProofsUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -311,6 +318,26 @@ export default function Orders() {
       toast.error(error instanceof Error ? error.message : "Falha ao tentar a entrega");
     }
   };
+
+  async function confirmDelivery(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!deliveryReview || confirmingDelivery || new FormData(event.currentTarget).get("received") !== "on") return;
+    setConfirmingDelivery(true);
+    setDeliveryReviewError("");
+    try {
+      const result = await apiFetch(`/api/commerce/orders/${deliveryReview.id}/delivery/confirm`, {
+        method: "POST", body: JSON.stringify({ deliveryVerified: true })
+      });
+      if (result.delivered !== true) throw new Error("A revisão da entrega ficou por confirmar.");
+      setDeliveryReview(null);
+      toast.success("Entrega confirmada e registada.");
+      void fetchData();
+    } catch (error) {
+      setDeliveryReviewError(error instanceof Error ? error.message : "Não foi possível registar a revisão.");
+    } finally {
+      setConfirmingDelivery(false);
+    }
+  }
 
   async function rejectProof(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -599,7 +626,10 @@ export default function Orders() {
                             </Button>
 
                             {order.status === "paid" && (order.delivery_started_at
-                              ? <span className="text-xs text-amber-700">{order.delivery_error || "Envio por confirmar"}</span>
+                              ? <Button size="sm" variant="outline" className="text-amber-800" onClick={() => {
+                                setDeliveryReviewError("");
+                                setDeliveryReview(order);
+                              }}>Rever entrega</Button>
                               : <Button size="sm" variant="outline" onClick={() => retryDelivery(order.id)}>Tentar entrega</Button>)}
 
                             {order.status === "verification_pending" && <Link
@@ -851,6 +881,27 @@ export default function Orders() {
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" disabled={rejecting} onClick={() => setRejection(null)}>Cancelar</Button>
             <Button type="submit" disabled={rejecting} className="bg-red-700 hover:bg-red-800">{rejecting ? "A rejeitar…" : "Rejeitar comprovativo"}</Button>
+          </div>
+        </form>
+      </dialog>}
+
+      {deliveryReview && <dialog ref={deliveryDialog} aria-labelledby="delivery-review-title"
+        onCancel={(event) => { event.preventDefault(); if (!confirmingDelivery) setDeliveryReview(null); }}
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
+        <form onSubmit={confirmDelivery} className="grid gap-4">
+          <h2 id="delivery-review-title" className="text-lg font-bold">Rever entrega do pedido {deliveryReview.order_number}</h2>
+          <p className="text-sm text-amber-800">{deliveryReview.delivery_error || "Envio por confirmar"}</p>
+          <p className="text-sm text-slate-700">Confere a conversa do cliente e regista a entrega depois de confirmares a receção de todos os itens.</p>
+          {deliveryReview.customer_phone && <Link to={`/messages?phone=${encodeURIComponent(deliveryReview.customer_phone)}`}
+            target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-800 underline">Abrir conversa</Link>}
+          <label className="flex items-start gap-2 text-sm font-medium">
+            <input className="mt-1" type="checkbox" name="received" required disabled={confirmingDelivery} />
+            Confirmei que o cliente recebeu todos os ficheiros ou conteúdos do pedido.
+          </label>
+          {deliveryReviewError && <p role="alert" className="text-sm text-red-700">{deliveryReviewError}</p>}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" disabled={confirmingDelivery} onClick={() => setDeliveryReview(null)}>Cancelar</Button>
+            <Button type="submit" disabled={confirmingDelivery}>{confirmingDelivery ? "A registar…" : "Confirmar entrega"}</Button>
           </div>
         </form>
       </dialog>}

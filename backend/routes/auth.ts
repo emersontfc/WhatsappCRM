@@ -1,6 +1,7 @@
 import express from "express";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { authenticate } from "../middleware/auth.ts";
+import { createStandardProfile } from "../services/publicProfile.ts";
 
 const router = express.Router();
 
@@ -26,51 +27,39 @@ router.get("/plans", async (req, res) => {
 });
 
 router.post("/register", async (req, res) => {
-  const { email, password, name } = req.body;
-
-  if (!email || !password || !name) {
-    return res.status(400).json({ error: "Email, password, and name are required" });
+  const { email, password, name } = req.body ?? {};
+  if (typeof email !== "string" || !email.trim() || typeof password !== "string" || !password ||
+      typeof name !== "string" || !name.trim()) {
+    return res.status(400).json({ error: "Preenche o e-mail, a senha e o nome." });
   }
+  const address = email.trim().toLowerCase();
+  const displayName = name.trim();
 
   try {
-    // Create user with email_confirm: true to skip verification emails in development
-    const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
-      email,
+    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+      email: address,
       password,
       email_confirm: true,
-      user_metadata: { full_name: name }
+      user_metadata: { full_name: displayName }
     });
-
-    if (authError) throw authError;
-
-    if (authUser.user) {
-      // Create standard user profile in public.users (role defaults safely to 'user')
-      const initialAdminEmail = (process.env.INITIAL_SUPERADMIN_EMAIL || "").trim().toLowerCase();
-      const isInitialSuperadmin = Boolean(initialAdminEmail && email.toLowerCase() === initialAdminEmail);
-
-      const { error: profileError } = await supabaseAdmin
-        .from("users")
-        .insert({
-          id: authUser.user.id,
-          email: email,
-          name: name,
-          role: isInitialSuperadmin ? "superadmin" : "user",
-          created_at: new Date().toISOString(),
-          expires_at: isInitialSuperadmin ? "2099-12-31T23:59:59Z" : null,
-          plan: isInitialSuperadmin ? "Premium" : "Free"
-        });
-
-      if (profileError) {
-        console.error("Profile creation error:", profileError);
-      }
-
-      res.json({ success: true, user: authUser.user });
-    } else {
-      throw new Error("Failed to create user");
+    if (error?.code === "email_exists" || error?.code === "user_already_exists") {
+      return res.status(409).json({ error: "Já existe uma conta com este e-mail. Inicia sessão para continuar." });
     }
-  } catch (err: any) {
-    console.error("Registration error:", err);
-    res.status(500).json({ error: err.message });
+    if (error?.code === "weak_password" || error?.code === "email_address_invalid" || error?.code === "validation_failed") {
+      return res.status(400).json({ error: "Verifica o formato do e-mail e escolhe uma senha válida." });
+    }
+    if (error || !data.user?.id) throw error ?? new Error("Authentication write not confirmed");
+
+    try {
+      await createStandardProfile(data.user.id, data.user.email ?? address, displayName);
+    } catch (profileError) {
+      console.warn("[Auth] Account profile could not be saved", (profileError as { code?: string })?.code);
+      return res.status(503).json({ error: "A conta foi criada, mas o perfil ficou por guardar. Inicia sessão para concluir a configuração." });
+    }
+    return res.json({ success: true, user: data.user });
+  } catch (error) {
+    console.warn("[Auth] Registration unavailable", (error as { code?: string })?.code);
+    return res.status(503).json({ error: "Não foi possível concluir o cadastro. Tenta novamente." });
   }
 });
 

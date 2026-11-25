@@ -122,7 +122,7 @@ export const isAdmin = async () => {
       return false;
     }
     
-    return userData?.role === "admin";
+    return userData?.role === "admin" || userData?.role === "superadmin";
   } catch (err) {
     return false;
   }

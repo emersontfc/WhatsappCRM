@@ -220,6 +220,25 @@ router.post("/orders/:id/delivery", async (req: AuthRequest, res) => {
   }
 });
 
+router.post("/orders/:id/delivery/confirm", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Inicia sessão para rever a entrega." });
+  if (req.body?.deliveryVerified !== true) return res.status(400).json({ error: "Confirma com o cliente que recebeu a entrega completa." });
+  const orderId = req.params.id.toLowerCase();
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(orderId)) {
+    return res.status(400).json({ error: "Pedido inválido." });
+  }
+  try {
+    const { data, error } = await supabaseAdmin.rpc("agentx_seller_confirm_delivery", { p_user: userId, p_order: orderId });
+    if (error?.code === "P0002") return res.status(404).json({ error: "Pedido não encontrado." });
+    if (error?.code === "22023") return res.status(409).json({ error: "O pedido já mudou de estado. Atualiza a lista antes de rever a entrega." });
+    if (error || data?.id !== orderId) throw new Error("Delivery reconciliation could not be recorded");
+    return res.json({ success: true, delivered: true });
+  } catch {
+    return res.status(503).json({ error: "Não foi possível registar a revisão. Atualiza o pedido antes de tentar novamente." });
+  }
+});
+
 router.post("/orders/:id/reject", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });

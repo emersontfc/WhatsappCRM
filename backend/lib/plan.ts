@@ -20,7 +20,7 @@ export const getPlan = async (userId: string): Promise<PlanConfig | null> => {
       .eq("id", userId)
       .maybeSingle();
 
-    if (profile?.role === "admin") {
+    if (profile?.role === "admin" || profile?.role === "superadmin") {
       return {
         id: "admin-plan",
         name: "Admin",

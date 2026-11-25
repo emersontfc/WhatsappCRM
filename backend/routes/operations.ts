@@ -14,8 +14,12 @@ type Dependencies = {
 
 export function registerOperations(app: Express, deps: Dependencies) {
   const checks = makePlatformChecks(deps.databaseConfigured);
-  app.get("/api/ready", async (_req, res) => {
+  const checkCore = async () => {
     const [crm, sales] = await Promise.all([checks.check("crm"), checks.check("sales")]);
+    return { crm, sales };
+  };
+  app.get("/api/ready", async (_req, res) => {
+    const { crm, sales } = await checkCore();
     const frontend = deps.frontendReady();
     const ready = crm === "ready" && sales === "ready" && frontend;
     res.set("Cache-Control", "no-store").status(ready ? 200 : 503).json({ ready, release: deps.release });
@@ -30,4 +34,5 @@ export function registerOperations(app: Express, deps: Dependencies) {
       schedulerEnabled: deps.schedulerEnabled, deliveryWorker: deps.deliveryStatus()
     });
   });
+  return { checkCore };
 }
