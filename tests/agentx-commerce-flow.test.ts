@@ -3,6 +3,7 @@ import { extractProofWithAI, parseMozambicanReceiptSMS } from "../backend/servic
 import { compareProofRecipient, reviewProofRecipient } from "../backend/services/paymentProofSms.ts";
 
 const outgoingEMola = "D da transacao PP261125.2001.i00000. Transferiste 30.00MT para conta 870000000, nome: MARIA EXEMPLO CLIENTE as 20:01:33 de 25/11/2026. Taxa: 0.00MT. O saldo da tua conta e xxxxMT. Conteudo: megas. Em caso de duvida, liga 100. Obrigado!";
+const outgoingMPesa = "Confirmado ABZA12CD34. Transferiste 5.00MT e a taxa foi de 0.00MT para 258850000000 - António Exemplo aos 25/11/26 as 8:47 PM. O teu novo saldo M-Pesa e de 0.00MT. Continua a transferir SEM TAXAS de M-Pesa para M-Pesa. Em caso de duvida, liga 100.";
 
 describe("AgentX 2.0 — End-to-End Autonomous Commerce & Scenarios", () => {
   // Scenario A: Atendimento & Histórico
@@ -52,6 +53,37 @@ describe("AgentX 2.0 — End-to-End Autonomous Commerce & Scenarios", () => {
       expect(extracted?.transactionReference).toBe("2K3J4H5G");
       expect(extracted?.senderPhone).toContain("841234567");
       expect(extracted?.confidenceScore).toBeGreaterThanOrEqual(0.9);
+    });
+
+    it("extrai o SMS de saída M-Pesa e associa o número e o nome ao destinatário", async () => {
+      const proof = await extractProofWithAI("receipt-test", `comprovativo mpesa ${outgoingMPesa}`);
+      expect(proof).toMatchObject({
+        provider: "mpesa", transactionReference: "ABZA12CD34", amount: 5, currency: "MT",
+        recipientAccount: "258850000000", recipientName: "António Exemplo", date: "25/11/2026", time: "20:47"
+      });
+      expect(proof.senderPhone).toBeUndefined();
+      expect(proof.senderName).toBeUndefined();
+      expect(proof.confidenceScore).toBeGreaterThanOrEqual(0.9);
+      const destination = { method: "mpesa", recipient: "850000000", name: "Antonio Exemplo" } as const;
+      expect(compareProofRecipient(proof, destination).recipientMatch).toBe("match");
+      expect(compareProofRecipient(proof, { ...destination, recipient: "850000001" }).recipientMatch).toBe("mismatch");
+      expect(reviewProofRecipient({ proof_raw_text: outgoingMPesa, extracted_data: { recipientMatch: "unknown" } }, destination))
+        .toMatchObject({ recipientName: "António Exemplo", recipientMatch: "match" });
+    });
+
+    it("lê o valor da transferência quando a taxa e os saldos têm outros valores", () => {
+      const variant = outgoingMPesa.replace("5.00MT", "5,00 MZN").replace("0.00MT para", "1.25MT para")
+        .replace("258850000000 -", "+258 85 000-0000 —").replace(" as ", " às ")
+        .replace(/ O teu novo saldo.*/, " Saldo disponível 900,00MT.");
+      expect(parseMozambicanReceiptSMS(`Saldo anterior 905,00MT. ${variant}`)).toMatchObject({
+        amount: 5, provider: "mpesa", recipientAccount: "+258 85 000-0000", time: "20:47"
+      });
+      expect(parseMozambicanReceiptSMS("Confirmado ABZA12CD34. A taxa foi de 1.25MT. O teu novo saldo M-Pesa e de 900.00MT.")).toBeNull();
+      expect(parseMozambicanReceiptSMS(outgoingMPesa.replace("5.00MT", "[valor]"))).toBeNull();
+    });
+
+    it.each([["12:00 AM", "00:00"], ["12:00 pm", "12:00"], ["09:07 am", "09:07"]])("normaliza a hora M-Pesa %s", (local, normalized) => {
+      expect(parseMozambicanReceiptSMS(outgoingMPesa.replace("8:47 PM", local))?.time).toBe(normalized);
     });
 
     it("extrai corretamente dados de comprovativo e-Mola", () => {

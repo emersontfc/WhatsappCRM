@@ -17,7 +17,33 @@ export interface ExtractedPaymentData extends RecipientEvidence {
 const namePattern = /^[\p{L}][\p{L}\p{M}\d '&’.-]{1,99}$/u;
 const recipientLabel = /(?:nome d[oa]\s+)?(?:benefici[aá]ri[oa]|destinat[aá]ri[oa]|recebedor[a]?|titular d(?:a conta (?:de destino|creditada)|o destino)|titular destinat[aá]ri[oa])/iu;
 
-function readOutgoingTransfer(text: string) {
+function readMpesaTimestamp(text: string) {
+  const stamp = /^\s+aos\s+(0[1-9]|[12]\d|3[01])\/(0[1-9]|1[0-2])\/(\d{4}|\d{2})\s+[aà]s\s+(\d{1,2}):([0-5]\d)(?:\s*([AP]M))?(?=\s|[.,;]|$)/iu.exec(text);
+  if (!stamp) return {};
+  const [, day, month, year, hours, minutes, meridiem] = stamp;
+  const hour = Number(hours);
+  if (meridiem ? hour < 1 || hour > 12 : hour > 23) return {};
+  const hour24 = meridiem ? hour % 12 + (meridiem.toUpperCase() === "PM" ? 12 : 0) : hour;
+  return { date: `${day}/${month}/${year.length === 2 ? `20${year}` : year}`,
+    time: `${String(hour24).padStart(2, "0")}:${minutes}` };
+}
+
+function readOutgoingMpesa(text: string) {
+  const confirmation = /(?:^|[\r\n.!?])\s*(?:(?:comprovativo(?:\s+(?:do\s+)?m[ -]?pesa)?|(?:pedido\s+)?AGX-[A-Z0-9-]+)\s*[:–-]?\s+)?confirmado\s+([a-z0-9]{6,20})\.\s*/iu.exec(text);
+  if (!confirmation) return null;
+  const body = text.slice(confirmation.index + confirmation[0].length);
+  // Incoming receipts and other formats have their own amount and reference labels.
+  if (!/^(?:transferiste\b|(?:a\s+)?taxa\b|o\s+teu\s+novo\s+saldo\b)/iu.test(body)) return null;
+  const reference = confirmation[1].toUpperCase();
+  const transfer = /^transferiste\s+(\d[\d., ]{0,23})\s*(?:MT|MZN)\s+(?:e\s+a\s+taxa\s+foi\s+de\s+\d[\d., ]{0,23}\s*(?:MT|MZN)\s+)?para\s+(\+?\d[\d -]{7,24}?)\s*[-–—]\s*([\p{L}][^\r\n;,]{0,99}?)(?=\s+aos\b|\.(?=\s|$)|[\r\n;]|$)/iu.exec(body);
+  if (!transfer || !normalizeContactPhone(transfer[2])) return { reference, transfer: null };
+  const [, amount, recipientAccount, rawName] = transfer;
+  const name = rawName.trim();
+  return { reference, transfer: { amount, recipientAccount: recipientAccount.trim(),
+    recipientName: namePattern.test(name) ? name : undefined, ...readMpesaTimestamp(body.slice(transfer[0].length)) } };
+}
+
+function readOutgoingToAccount(text: string) {
   const transfer = /\btransferiste\s+(\d[\d., ]{0,23})\s*(?:MT|MZN)\s+para\s+(?:a\s+)?conta\s*[:=]?\s*([+\d][\d -]{7,24})(?=[\t ]*(?:[,.;\r\n]|[aà]s\s+\d|$))/iu.exec(text);
   if (!transfer) return null;
   const details = text.slice(transfer.index + transfer[0].length);
@@ -29,7 +55,7 @@ function readOutgoingTransfer(text: string) {
     time: timestamp?.[1], date: timestamp?.[2] };
 }
 
-function readRecipient(text: string, outgoing: ReturnType<typeof readOutgoingTransfer>): RecipientEvidence {
+function readRecipient(text: string, outgoing: RecipientEvidence | null): RecipientEvidence {
   const name = text.match(new RegExp(
     `(?:^|[.;,\\n]|\\b)${recipientLabel.source}\\s*[:=–-]\\s*([^\\n;.]{2,100})`, "iu"
   ))?.[1]?.split(/,|\s+(?:(?:conta|nib|iban|telefone|refer[eê]ncia|transa[cç]+[aã]o)\s*[:=])/iu)[0]?.trim();
@@ -41,7 +67,7 @@ function readRecipient(text: string, outgoing: ReturnType<typeof readOutgoingTra
 }
 
 export function proofRecipient(text: string): RecipientEvidence {
-  return readRecipient(text, readOutgoingTransfer(text));
+  return readRecipient(text, readOutgoingMpesa(text)?.transfer ?? readOutgoingToAccount(text));
 }
 
 function parseLocalAmount(value: string) {
@@ -55,9 +81,12 @@ function parseLocalAmount(value: string) {
 export function parseMozambicanReceiptSMS(text: string): ExtractedPaymentData | null {
   if (typeof text !== "string" || text.trim().length < 10) return null;
   const clean = text.trim();
-  const reference = clean.match(/\b(?:transa[cç]+[aã]o|txnid|id da transa[cç]+[aã]o|refer[eê]ncia|ref\.?)\s*[:#=-]?\s*([A-Z0-9][A-Z0-9./_-]{3,79})/iu)?.[1]
+  const mpesa = readOutgoingMpesa(clean);
+  const outgoing = mpesa?.transfer ?? readOutgoingToAccount(clean);
+  // An outgoing confirmation without a readable transfer must not borrow the fee or balance.
+  if (mpesa && !outgoing) return null;
+  const reference = mpesa?.transfer ? mpesa.reference : clean.match(/\b(?:transa[cç]+[aã]o|txnid|id da transa[cç]+[aã]o|refer[eê]ncia|ref\.?)\s*[:#=-]?\s*([A-Z0-9][A-Z0-9./_-]{3,79})/iu)?.[1]
     ?.replace(/[./_-]+$/, "").toUpperCase() ?? "";
-  const outgoing = readOutgoingTransfer(clean);
   const markedTransaction = Boolean(outgoing) || /\b(?:recebeu|transferiu|enviou|pagou|confirmad[oa]|liquidad[oa]|creditad[oa]|conclu[ií]d[oa]|efetuad[oa])\b/iu.test(clean);
   const currencyAmount = clean.match(/(?<![\d.,])([0-9][0-9., ]{0,23})\s*(?:MT|MZN)\b/iu)?.[1];
   const amountText = outgoing?.amount ?? currencyAmount
@@ -68,7 +97,8 @@ export function parseMozambicanReceiptSMS(text: string): ExtractedPaymentData | 
   const sender = clean.match(/\b(?:de|from)\s+((?:\+?258\s*)?8[2-7]\d{7})\b(?:[ \t]+([\p{L}'’-]+(?:[ \t]+[\p{L}'’-]+){0,5}?))?(?=[.;,\n]|\s+(?:em|no|transa[cç]+[aã]o|ref\.?|para)\s|$)/iu);
   const eMolaTransfer = /^PP\d{6}\.\d{4}\.I\d{5}$/.test(reference) &&
     /^2588[67]\d{7}$/.test(normalizeContactPhone(outgoing?.recipientAccount) ?? "");
-  const provider = eMolaTransfer || /\b(?:e[ -]?mola|movitel)\b/iu.test(clean) ? "emola"
+  const provider = mpesa?.transfer ? "mpesa"
+    : eMolaTransfer || /\b(?:e[ -]?mola|movitel)\b/iu.test(clean) ? "emola"
     : /\b(?:m[ -]?pesa|vodacom)\b/iu.test(clean) ? "mpesa"
     : /\b(?:banco|bim|bci|standard bank|moza|nib|iban)\b/iu.test(clean) ? "bank_transfer"
     : /^EM[A-Z0-9]{6,12}$/.test(reference) || /^8[67]/.test(sender?.[1]?.replace(/^\+?258\s*/, "") ?? "") ? "emola"

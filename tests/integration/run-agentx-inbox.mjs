@@ -515,15 +515,32 @@ try {
   assert.equal(downloadedObjects.length, 0);
 
   const priorNotifications = notifications();
-  const receipt = "Comprovativo M-Pesa. Recebeu 250.00 MT de 841234567. Transaccao: AGVALID01. Beneficiário: Loja de teste.";
-  await sell(`${receipt} Pedido ${order.order_number}`, "proof-one");
-  await sell(`${receipt} Pedido ${order.order_number}`, "proof-one");
+  const receipt = "Confirmado ABZA12CD34. Transferiste 250.00MT e a taxa foi de 0.00MT para 258840000003 - Loja de teste aos 25/11/26 as 8:47 PM. O teu novo saldo M-Pesa e de 0.00MT. Continua a transferir SEM TAXAS de M-Pesa para M-Pesa. Em caso de duvida, liga 100.";
+  const aiBeforeMpesa = aiRequests;
+  await sell(receipt, "proof-one");
+  await sell(receipt, "proof-one");
   const [correctProof] = await read("payment_verifications", "?source_message_id=eq.proof-one");
+  assert.equal(correctProof.status, "pending");
+  assert.equal(correctProof.proof_type, "sms");
+  assert.equal(correctProof.provider, "mpesa");
+  assert.equal(correctProof.transaction_reference, "ABZA12CD34");
+  assert.equal(correctProof.amount, 250);
+  assert.equal(correctProof.extracted_data.currency, "MT");
+  assert.equal(correctProof.extracted_data.recipientAccount, "258840000003");
+  assert.equal(correctProof.extracted_data.recipientName, "Loja de teste");
   assert.equal(correctProof.extracted_data.recipientMatch, "match");
+  assert.equal(correctProof.extracted_data.date, "25/11/2026");
+  assert.equal(correctProof.extracted_data.time, "20:47");
+  assert.equal(correctProof.sender_phone, "");
+  assert.equal(correctProof.sender_name, "");
+  assert.equal(aiRequests, aiBeforeMpesa);
+  assert.equal((await read("orders", `?id=eq.${order.id}`))[0].status, "verification_pending");
   assert.equal((await read("payment_verifications", `?order_id=eq.${order.id}`)).length, 2);
   assert.equal((await (await api(seller)).json()).data.pendingReviews, 1);
   assert.equal(notifications(), priorNotifications + 1);
   assert.equal(sentDocuments(app.outbound).length, 0);
+  assert.equal(downloadedObjects.length, 0);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
   assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação|validação humana/i);
 
   const confirmCorrectProof = { ...approval, proofId: correctProof.id };
@@ -535,7 +552,7 @@ try {
     await page.getByText("Destinatário divergente", { exact: true }).waitFor();
     const wrongCard = page.getByRole("heading", { name: /AGWRONG01/ }).locator("xpath=../..");
     assert.equal(await wrongCard.getByRole("button", { name: /Aprovar/i }).count(), 0);
-    const correctCard = page.getByRole("heading", { name: /AGVALID01/ }).locator("xpath=../..");
+    const correctCard = page.getByRole("heading", { name: /ABZA12CD34/ }).locator("xpath=../..");
     await correctCard.getByRole("button", { name: /Aprovar/i }).click();
     const dialog = page.getByRole("dialog");
     assert.equal(await dialog.getByRole("textbox", { name: /Referência oficial da transação|Valor recebido/i }).count(), 0);
@@ -554,7 +571,7 @@ try {
   assert.equal((await approve(order.id, confirmCorrectProof)).status, 200);
   assert.equal((await read("payment_verifications", `?id=eq.${correctProof.id}`))[0].status, "approved");
   assert.equal((await read("payment_verifications", `?id=eq.${mismatchedProof.id}`))[0].status, "rejected");
-  assert.equal((await read("orders", `?id=eq.${order.id}`))[0].payment_reference, "AGVALID01");
+  assert.equal((await read("orders", `?id=eq.${order.id}`))[0].payment_reference, "ABZA12CD34");
   const documents = sentDocuments(app.outbound);
   assert.equal(documents.length, 1);
   assert.equal(documents[0].jid, "258840000002@s.whatsapp.net");
@@ -595,10 +612,12 @@ try {
   await sell("Quero comprar mais um livro.", "purchase-two");
   const secondOrder = (await (await api(seller)).json()).data.orders.find(({ id }) => id !== order.id);
   assert.match(app.outbound.at(-1).content.text, /258840000005/);
-  await sell(`${receipt} Pedido ${secondOrder.order_number}`, "proof-two");
+  const secondReceipt = receipt.replace("258840000003", "258840000005");
+  await sell(`${secondReceipt} Pedido ${secondOrder.order_number}`, "proof-two");
   const [duplicateProof] = await read("payment_verifications", "?source_message_id=eq.proof-two");
+  assert.equal(duplicateProof.extracted_data.recipientMatch, "match");
   assert.equal((await approve(secondOrder.id, { ...approval, proofId: duplicateProof.id })).status, 409);
-  await sell(`${receipt.replace("AGVALID01", "AGVALID02")} Pedido ${secondOrder.order_number}`, "proof-two-alternative");
+  await sell(`${secondReceipt.replace("ABZA12CD34", "ABZA12CD35")} Pedido ${secondOrder.order_number}`, "proof-two-alternative");
   const [alternativeProof] = await read("payment_verifications", "?source_message_id=eq.proof-two-alternative");
   const repliesBeforeRejectingOne = app.outbound.length;
   const rejectedProof = await api(`/commerce/orders/${secondOrder.id}/reject`, 0,
@@ -804,7 +823,7 @@ try {
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log("Seller flow passed on the repaired legacy schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document");
   console.log("AI outage fallback passed: catalogue from live data and human handoff before a purchase");
-  console.log("Outgoing e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
+  console.log("Outgoing M-Pesa and e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {
   await browser?.close();
   await app?.stop();
