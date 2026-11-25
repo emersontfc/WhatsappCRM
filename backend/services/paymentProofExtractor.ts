@@ -7,10 +7,8 @@ export { parseMozambicanReceiptSMS, type ExtractedPaymentData } from "./paymentP
 
 export async function extractProofWithAI(userId: string, rawText: string): Promise<ExtractedPaymentData> {
   const text = rawText.trim();
-  const existing = proofRecipient(text);
-  const detected = parseMozambicanReceiptSMS(text);
-  const proof: ExtractedPaymentData = detected ?? {
-    provider: "other", transactionReference: "", amount: 0, currency: "", confidenceScore: 0, rawText: text, ...existing
+  const proof: ExtractedPaymentData = parseMozambicanReceiptSMS(text) ?? {
+    provider: "other", transactionReference: "", amount: 0, currency: "", confidenceScore: 0, rawText: text, ...proofRecipient(text)
   };
   // Clear labels are reliable enough for review and do not require the provider.
   if (proof.recipientName || text.length > 4000) return proof;

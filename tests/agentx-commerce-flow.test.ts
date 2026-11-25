@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseMozambicanReceiptSMS } from "../backend/services/paymentProofExtractor.ts";
-import { compareProofRecipient } from "../backend/services/paymentProofSms.ts";
+import { extractProofWithAI, parseMozambicanReceiptSMS } from "../backend/services/paymentProofExtractor.ts";
+import { compareProofRecipient, reviewProofRecipient } from "../backend/services/paymentProofSms.ts";
+
+const outgoingEMola = "D da transacao PP261125.2001.i00000. Transferiste 30.00MT para conta 870000000, nome: MARIA EXEMPLO CLIENTE as 20:01:33 de 25/11/2026. Taxa: 0.00MT. O saldo da tua conta e xxxxMT. Conteudo: megas. Em caso de duvida, liga 100. Obrigado!";
 
 describe("AgentX 2.0 — End-to-End Autonomous Commerce & Scenarios", () => {
   // Scenario A: Atendimento & Histórico
@@ -61,6 +63,35 @@ describe("AgentX 2.0 — End-to-End Autonomous Commerce & Scenarios", () => {
       expect(extracted?.amount).toBe(1200);
       expect(extracted?.transactionReference).toBe("EM99887766");
       expect(extracted?.confidenceScore).toBeGreaterThanOrEqual(0.9);
+    });
+
+    it("extrai um SMS de saída do e-Mola com referência PP e o titular da conta de destino", async () => {
+      const proof = await extractProofWithAI("receipt-test", outgoingEMola);
+      expect(proof).toMatchObject({
+        provider: "emola", amount: 30, currency: "MT", transactionReference: "PP261125.2001.I00000",
+        recipientAccount: "870000000", recipientName: "MARIA EXEMPLO CLIENTE", time: "20:01:33", date: "25/11/2026"
+      });
+      expect(proof.senderPhone).toBeUndefined();
+      expect(proof.senderName).toBeUndefined();
+      const destination = { method: "emola", recipient: "+258870000000", name: "Maria Exemplo Cliente" } as const;
+      expect(compareProofRecipient(proof, destination).recipientMatch).toBe("match");
+      expect(compareProofRecipient(proof, { ...destination, recipient: "+258870000001" }).recipientMatch).toBe("mismatch");
+      expect(compareProofRecipient(proof, { ...destination, name: "Ana Outra Pessoa" }).recipientMatch).toBe("mismatch");
+    });
+
+    it("lê o valor junto de Transferiste e limita a inferência do e-Mola ao formato do SMS", () => {
+      const variant = `Saldo anterior 900.00MT. ${outgoingEMola.replace("30.00MT", "30,00 MZN").replace("870000000", "+258 87 000 0000").replace(" as ", " às ")}`;
+      expect(parseMozambicanReceiptSMS(variant)).toMatchObject({ provider: "emola", amount: 30, currency: "MT", time: "20:01:33" });
+      expect(parseMozambicanReceiptSMS("Quando posso transferir 30MT para conta 870000000?")).toBeNull();
+      expect(parseMozambicanReceiptSMS("Transação: PP261125.2001.i00000. Valor: 30,00 MT.")?.provider).toBe("other");
+      expect(parseMozambicanReceiptSMS(outgoingEMola.replace("870000000", "840000000"))?.provider).toBe("other");
+    });
+
+    it("lê o titular de comprovativos pendentes que só tinham uma correspondência pelo número", () => {
+      const prior = { proof_raw_text: outgoingEMola,
+        extracted_data: { recipientAccount: "870000000", recipientMatch: "match" as const } };
+      const expected = { method: "emola", recipient: "258870000000", name: "Ana Outra Pessoa" } as const;
+      expect(reviewProofRecipient(prior, expected)).toMatchObject({ recipientName: "MARIA EXEMPLO CLIENTE", recipientMatch: "mismatch" });
     });
 
     it("rejeita textos aleatórios sem dados de transação", () => {

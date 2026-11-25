@@ -11,6 +11,7 @@ describe("Group payment proof eligibility", () => {
   it("requires one explicit order reference in the attachment caption or receipt text", () => {
     expect(groupProofOrderNumber(`Comprovativo de ${order.toLowerCase()}`, true)).toBe(order);
     expect(groupProofOrderNumber(`Confirmado 6ABC1234. Pagaste 250,00 MT via M-Pesa. Pedido ${order}`, false)).toBe(order);
+    expect(groupProofOrderNumber(`D da transacao PP261125.2001.i00000. Transferiste 30.00MT para conta 870000000, nome: MARIA EXEMPLO CLIENTE as 20:01:33 de 25/11/2026. Pedido ${order}`, false)).toBe(order);
     expect(groupProofOrderNumber(`Como vai o pedido ${order}?`, false)).toBeNull();
     expect(groupProofOrderNumber(`Comprovativo de ${order} e AGX-ABCD12345678`, true)).toBeNull();
     expect(groupProofOrderNumber("Anexo do pagamento", true)).toBeNull();

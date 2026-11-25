@@ -61,6 +61,7 @@ function testAudio() {
 }
 
 let aiEndpointAvailable = true;
+let aiRequests = 0;
 
 const supabase = createServer(async (req, res) => {
   if (req.headers.origin) res.setHeader("access-control-allow-origin", req.headers.origin);
@@ -81,6 +82,7 @@ const supabase = createServer(async (req, res) => {
 
   res.setHeader("content-type", "application/json");
   if (req.url === "/fixture-ai" && req.method === "POST") {
+    aiRequests++;
     let input = "";
     for await (const chunk of req) input += chunk;
     if (!aiEndpointAvailable) return res.writeHead(503).end(JSON.stringify({ error: "Simulated AI outage" }));
@@ -657,6 +659,52 @@ try {
   assert.ok(escalatedContact.ai_paused_at);
   assert.deepEqual(await read("orders", "?source_message_id=eq.outage-purchase"), []);
 
+  const smsIdentity = { jid: "258840000008@s.whatsapp.net" };
+  aiEndpointAvailable = true;
+  await app.simulate("sales", { ...smsIdentity, text: "Quero comprar um livro por e-Mola.", messageId: "purchase-emola-sms" });
+  const [smsOrder] = await read("orders", "?source_message_id=eq.purchase-emola-sms");
+  assert.equal(smsOrder.status, "awaiting_payment");
+  assert.equal(smsOrder.payment_method, "emola");
+
+  const sms = "D da transacao PP261125.2001.i00000. Transferiste 250.00MT para conta 870000006, nome: LOJA DE TESTE as 20:01:33 de 25/11/2026. Taxa: 0.00MT. O saldo da tua conta e xxxxMT. Conteudo: megas.";
+  const documentsBeforeSms = sentDocuments(app.outbound).length;
+  const downloadsBeforeSms = downloadedObjects.length;
+  const notificationsBeforeSms = notifications();
+  const aiBeforeSms = aiRequests;
+  aiEndpointAvailable = false;
+  await app.simulate("sales", { ...smsIdentity, text: sms, messageId: "proof-emola-outgoing-sms" });
+  assert.equal(aiRequests, aiBeforeSms);
+  const [smsProof] = await read("payment_verifications", "?source_message_id=eq.proof-emola-outgoing-sms");
+  assert.equal(smsProof.order_id, smsOrder.id);
+  assert.equal(smsProof.proof_type, "sms");
+  assert.equal(smsProof.status, "pending");
+  assert.equal(smsProof.provider, "emola");
+  assert.equal(smsProof.transaction_reference, "PP261125.2001.I00000");
+  assert.equal(smsProof.amount, 250);
+  assert.equal(smsProof.extracted_data.recipientAccount, "870000006");
+  assert.equal(smsProof.extracted_data.recipientName, "LOJA DE TESTE");
+  assert.equal(smsProof.extracted_data.recipientMatch, "match");
+  assert.equal(smsProof.extracted_data.time, "20:01:33");
+  assert.equal(smsProof.extracted_data.date, "25/11/2026");
+  assert.equal((await read("orders", `?id=eq.${smsOrder.id}`))[0].status, "verification_pending");
+  assert.equal((await approve(smsOrder.id, { proofId: smsProof.id })).status, 400);
+  assert.equal(notifications(), notificationsBeforeSms + 1);
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeSms);
+  assert.equal(downloadedObjects.length, downloadsBeforeSms);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 1);
+  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação/i);
+
+  const smsApproval = await approve(smsOrder.id, { ...approval, proofId: smsProof.id });
+  assert.equal(smsApproval.status, 200);
+  assert.equal((await smsApproval.json()).fulfillment.delivered, true);
+  assert.equal((await read("payment_verifications", `?id=eq.${smsProof.id}`))[0].status, "approved");
+  const [fulfilledSmsOrder] = await read("orders", `?id=eq.${smsOrder.id}`);
+  assert.equal(fulfilledSmsOrder.status, "fulfilled");
+  assert.equal(fulfilledSmsOrder.payment_reference, "PP261125.2001.I00000");
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeSms + 1);
+  assert.equal(sentDocuments(app.outbound).at(-1).jid, smsIdentity.jid);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 0);
+
   const uploadAudio = (buffer, index = 0) => {
     const body = new FormData();
     body.set("audio", new Blob([buffer], { type: "audio/wav" }), "nota-teste.wav");
@@ -756,6 +804,7 @@ try {
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log("Seller flow passed on the repaired legacy schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document");
   console.log("AI outage fallback passed: catalogue from live data and human handoff before a purchase");
+  console.log("Outgoing e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {
   await browser?.close();
   await app?.stop();
