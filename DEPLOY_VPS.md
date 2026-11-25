@@ -55,11 +55,10 @@ PORT=3000
 NODE_ENV=production
 
 # Supabase
-VITE_SUPABASE_URL=https://xhnxhfhmplstqiavswgo.supabase.co
-SUPABASE_URL=https://xhnxhfhmplstqiavswgo.supabase.co
-VITE_SUPABASE_ANON_KEY=sua_chave_anon_aqui
-SUPABASE_SERVICE_ROLE_KEY=sua_chave_service_role_aqui
-SUPABASE_SERVICE_KEY=sua_chave_service_role_aqui
+VITE_SUPABASE_URL=https://seu-projeto.supabase.co
+SUPABASE_URL=https://seu-projeto.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_sua_chave_publica
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_sua_chave_privada
 
 # Inteligência Artificial
 GEMINI_API_KEY=sua_chave_gemini_aqui
@@ -80,6 +79,8 @@ O Docker isola a aplicação com todas as bibliotecas de áudio FFmpeg e depend�
 ### Instalar num projeto Supabase vazio
 
 Com a ligação PostgreSQL do novo projeto definida em `PGDATABASE`, execute `psql -X -f migrations/install_agentx_fresh.sql` a partir do repositório. Para usar o SQL Editor, gere o SQL com `node scripts/render-agentx-fresh-sql.mjs > AgentX-instalacao-limpa.sql`. Esse ficheiro instala o esquema numa única transação. As duas opções verificam se o projeto já tem tabelas, contas ou buckets do utilizador antes de instalar.
+
+Para ligar uma instalação Docker em execução à base preparada, use `bash scripts/release-agentx-vps.sh <commit> <url-supabase> <chave-publicavel>`. O script pede a chave `sb_secret_` no terminal, verifica o novo projeto num contentor temporário e guarda a configuração anterior com permissões `600`. Se o contentor publicado falhar, a reversão repõe a imagem e a configuração anteriores.
 
 Crie a conta inicial no painel. Depois de verificar que o endereço pertence ao administrador pretendido, atribua `admin` ou `superadmin` ao perfil correspondente por uma operação administrativa na base. O cadastro cria contas comuns e a aplicação respeita o papel guardado no perfil.
 
