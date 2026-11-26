@@ -63,6 +63,18 @@ export function startScheduler() {
   const handoffTimer = setInterval(processHandoffs, 60_000);
   void processHandoffs();
 
+  const expireReservations = async () => {
+    try {
+      const { error } = await supabaseAdmin.rpc("agentx_expire_seller_reservations", { p_limit: 50 })
+        .abortSignal(AbortSignal.timeout(8_000));
+      if (error) throw error;
+    } catch (error) {
+      if (!isSchemaError(error)) console.warn("[Scheduler] Stock reservation expiry unavailable:", (error as { code?: string })?.code);
+    }
+  };
+  const reservationTimer = setInterval(expireReservations, 60_000);
+  void expireReservations();
+
   async function dispatchDue(table: "scheduled_messages" | "scheduled_status", now: string) {
     const { data, error } = await supabaseAdmin.from(table).select("id,user_id")
       .eq("status", "pending").lte("scheduled_at", now).or(`retry_at.is.null,retry_at.lte.${now}`)
@@ -149,5 +161,6 @@ export function startScheduler() {
     clearInterval(appointmentTimer);
     clearInterval(groupAccessTimer);
     clearInterval(handoffTimer);
+    clearInterval(reservationTimer);
   } };
 }

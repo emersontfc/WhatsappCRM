@@ -18,6 +18,8 @@ $$;
 \ir ../supabase/migrations/32_human_handoff_alerts.sql
 \ir ../supabase/migrations/33_appointment_self_service.sql
 \ir ../supabase/migrations/34_group_content_moderation.sql
+\ir ../supabase/migrations/35_seller_stock_reservations.sql
+\ir ../supabase/migrations/36_seller_conversation_quotes.sql
 
 SELECT pg_advisory_unlock(879621, 3);
-\echo 'Migrações WhatsApp 27–34 concluídas.'
+\echo 'Migrações WhatsApp 27–36 concluídas.'

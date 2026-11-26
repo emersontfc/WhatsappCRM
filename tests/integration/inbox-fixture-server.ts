@@ -45,6 +45,7 @@ process.on("message", async (message: {
   event: string; requestId: string; text?: string; messageId?: string; jid?: string; altJid?: string;
   upsertType?: "notify" | "append" | "history"; account?: "owner" | "other";
   participant?: string; participantAlt?: string; fromMe?: boolean; timestamp?: number;
+  replyToWhatsAppId?: string;
   media?: "image" | "video" | "document" | "audio" | "sticker";
 }) => {
   if (message.event === "unconfirmed") confirmSend = false;
@@ -56,7 +57,9 @@ process.on("message", async (message: {
     const session = message.account === "other" ? otherSession : ownerSession;
     const caption = message.text ?? undefined;
     const content = message.media === "audio" ? { audioMessage: { ptt: true } }
-      : message.media ? { [`${message.media}Message`]: { caption } } : { conversation: message.text };
+      : message.media ? { [`${message.media}Message`]: { caption } }
+        : message.replyToWhatsAppId ? { extendedTextMessage: { text: message.text, contextInfo: { stanzaId: message.replyToWhatsAppId } } }
+          : { conversation: message.text };
     const incoming = {
       key: { id: message.messageId, remoteJid: message.jid, remoteJidAlt: message.altJid,
         participant: message.participant, participantAlt: message.participantAlt, fromMe: message.fromMe ?? false },

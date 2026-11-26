@@ -66,6 +66,8 @@ COMMIT;
 \ir ../supabase/migrations/32_human_handoff_alerts.sql
 \ir ../supabase/migrations/33_appointment_self_service.sql
 \ir ../supabase/migrations/34_group_content_moderation.sql
+\ir ../supabase/migrations/35_seller_stock_reservations.sql
+\ir ../supabase/migrations/36_seller_conversation_quotes.sql
 \ir apply_agentx_v2.sql
 
 BEGIN;
@@ -109,6 +111,8 @@ BEGIN
      OR public.agentx_human_handoff_ready() IS DISTINCT FROM true
      OR public.agentx_appointment_self_service_ready() IS DISTINCT FROM true
      OR public.agentx_group_moderation_ready() IS DISTINCT FROM true
+     OR public.agentx_seller_reservations_ready() IS DISTINCT FROM true
+     OR public.agentx_seller_quotes_ready() IS DISTINCT FROM true
      OR NOT has_function_privilege('service_role', 'public.agentx_seller_confirm_delivery(uuid,uuid)', 'EXECUTE')
      OR public.agentx_contact_phone('841234567') IS DISTINCT FROM '258841234567' THEN
     RAISE EXCEPTION 'AgentX fresh install: schema contract is incomplete';
@@ -116,7 +120,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-34+20261123');
+INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-36+20261123');
 COMMIT;
 NOTIFY pgrst, 'reload schema';
 SELECT pg_advisory_unlock(879621, 3);

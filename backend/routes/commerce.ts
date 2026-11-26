@@ -176,6 +176,31 @@ router.get("/orders", async (req: AuthRequest, res) => {
   }
 });
 
+router.post("/orders/:id/cancel", async (req: AuthRequest, res) => {
+  const userId = req.user?.id;
+  if (!userId) return res.status(401).json({ error: "Inicia sessão para cancelar o pedido." });
+  const orderId = req.params.id.toLowerCase();
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(orderId)) {
+    return res.status(400).json({ error: "Pedido inválido." });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin.rpc("agentx_seller_cancel_order", {
+      p_user: userId, p_order: orderId
+    }).abortSignal(AbortSignal.timeout(8_000));
+    if (error?.code === "P0002") return res.status(404).json({ error: "Pedido não encontrado." });
+    if (error?.code === "P0001" || error?.code === "22023") {
+      return res.status(409).json({ error: "O estado do pedido mudou. Atualiza a lista e confirma se existe um pagamento ou comprovativo pendente." });
+    }
+    if (error || data?.id !== orderId || !["cancelled", "expired"].includes(data.status)) {
+      throw new Error("Cancellation was not acknowledged");
+    }
+    return res.json({ success: true, data });
+  } catch {
+    return res.status(503).json({ error: "A base não confirmou o cancelamento. Atualiza a lista antes de repetir." });
+  }
+});
+
 router.post("/orders/:id/approve", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });

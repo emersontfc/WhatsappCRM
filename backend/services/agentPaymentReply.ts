@@ -11,14 +11,18 @@ type PaymentOrder = {
   currency?: string | null;
   payment_method?: string | null;
   seller_payment?: unknown;
+  reservation_expires_at?: string | null;
 };
 
-const orderFields = "order_number,status,total_amount,currency,payment_method,seller_payment";
+const orderFields = "order_number,status,total_amount,currency,payment_method,seller_payment,reservation_expires_at";
 const orderReference = /^AGX-[A-Z0-9]+(?:-[A-Z0-9]+)*$/;
 const pendingStatuses = ["created", "awaiting_payment", "verification_pending", "rejected"];
 const payable = (status: string) => status === "created" || status === "awaiting_payment";
 const money = new Intl.NumberFormat("pt-MZ", { maximumFractionDigits: 2 });
 const list = new Intl.ListFormat("pt-MZ");
+const reserveDeadline = new Intl.DateTimeFormat("pt-MZ", {
+  timeZone: "Africa/Maputo", dateStyle: "short", timeStyle: "short"
+});
 
 const cannotRead = "Não foi possível consultar o pedido agora. Confirma com a equipa antes de fazer qualquer pagamento.";
 const noOrder = "Diz-me o produto que queres comprar para podermos confirmar o pedido antes de pagares.";
@@ -53,6 +57,12 @@ export function formatAgentOrderPaymentReply(order: PaymentOrder, desiredMethod?
     const status = Object.hasOwn(inactiveStatus, order.status) ? inactiveStatus[order.status] : cannotRead;
     return `${prefix}. ${status}`;
   }
+  const expiresAt = Date.parse(order.reservation_expires_at ?? "");
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return Number.isFinite(expiresAt)
+      ? `${prefix}. A reserva expirou. Se já pagaste, fala com a equipa antes de fazer outro pagamento.`
+      : `${prefix}. A equipa precisa de confirmar uma reserva antes de receberes os dados de pagamento.`;
+  }
 
   const destination = readOrderPayment(order.seller_payment);
   if (!destination || order.payment_method !== destination.method) {
@@ -67,7 +77,7 @@ export function formatAgentOrderPaymentReply(order: PaymentOrder, desiredMethod?
   if (!/^\d{1,10}(?:\.\d{1,2})?$/.test(total) || Number(total) <= 0 || typeof order.currency !== "string" || !/^[A-Z]{2,3}$/.test(order.currency)) {
     return `${prefix}. O valor precisa de ser confirmado com a equipa antes de pagares.`;
   }
-  return `${prefix} · ${money.format(Number(total))} ${order.currency}. Paga por ${label} para ${destination.recipient} (titular: ${destination.name}). Envia o texto do comprovativo nesta conversa com a referência ${order.order_number}.`;
+  return `${prefix} · ${money.format(Number(total))} ${order.currency}. Reserva até ${reserveDeadline.format(expiresAt)} (hora de Maputo). Paga por ${label} para ${destination.recipient} (titular: ${destination.name}). Envia o comprovativo com a referência ${order.order_number} antes do fim da reserva.`;
 }
 
 export async function readAgentPaymentMethods(userId: string): Promise<string> {

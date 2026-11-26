@@ -3,6 +3,7 @@ import type { GroupMetadata, GroupParticipant } from "@whiskeysockets/baileys";
 import type { AuthRequest } from "../middleware/auth.ts";
 import { groupParticipant, invalidateGroupRules, isGroupAdmin, isGroupJid, normalizedGroupIdentity } from "../services/groupModeration.ts";
 import { defaultGroupPolicy, defaultModerationPolicy, readGroupPolicy, readModerationPolicy } from "../services/groupPolicy.ts";
+import { readSellerAvailableStock } from "../services/sellerStock.ts";
 import { readContactPhone } from "../../shared/contactPhone.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
@@ -265,9 +266,16 @@ function promotionProducts(userId: string) {
 }
 
 groups.get("/:jid/promotion-products", forGroupPost(async (_req, res, { userId }) => {
-  const { data, error } = await promotionProducts(userId).order("name").limit(100);
-  if (error) return res.status(503).json({ error: "Não foi possível consultar o catálogo." });
-  return res.json({ success: true, products: data ?? [] });
+  try {
+    const [{ data, error }, available] = await Promise.all([
+      promotionProducts(userId).order("name").limit(100),
+      readSellerAvailableStock(userId)
+    ]);
+    if (error) throw error;
+    return res.json({ success: true, products: (data ?? []).filter((product) => (available.get(product.id) ?? 0) > 0) });
+  } catch {
+    return res.status(503).json({ error: "Não foi possível consultar o catálogo." });
+  }
 }));
 
 groups.post("/:jid/promotions", forGroupPost(async (req, res, { userId, jid }) => {
@@ -285,6 +293,14 @@ groups.post("/:jid/promotions", forGroupPost(async (req, res, { userId, jid }) =
     const price = Number(product?.price);
     if (!product || typeof product.name !== "string" || !product.name.trim() || !Number.isFinite(price) || price <= 0) {
       return res.status(409).json({ error: "Este produto já não está disponível no catálogo." });
+    }
+    try {
+      const available = await readSellerAvailableStock(userId);
+      if ((available.get(product.id) ?? 0) <= 0) {
+        return res.status(409).json({ error: "Este produto ficou sem stock disponível para promover." });
+      }
+    } catch {
+      return res.status(503).json({ error: "Não foi possível confirmar o stock do produto." });
     }
     const name = product.name.trim().replace(/\s+/g, " ").slice(0, 180);
     const currency = product.currency?.trim().slice(0, 12) || "MT";

@@ -119,7 +119,7 @@ export const guides: Guide[] = [
     steps: [
       { title: "Cadastra o produto", detail: "Em Catálogo e pedidos, escolhe Novo Produto. Preenche o nome, o preço em MT, a categoria e a descrição que o agente pode usar na conversa." },
       { title: "Prepara a entrega digital", detail: "Para um produto digital, anexa o ficheiro a entregar, como um PDF, e acrescenta instruções de entrega quando necessário. Guarda o produto e verifica que aparece no catálogo." },
-      { title: "Acompanha o pedido", detail: "Vendedor mostra pedidos recentes e o que está por tratar. Abre o pedido para conferir o produto, o cliente e o estado do pagamento." },
+      { title: "Acompanha a reserva", detail: "O cliente tem 10 minutos para aceitar a proposta no WhatsApp. Ao aceitar, o pedido reserva o stock por 30 minutos. Em Catálogo e pedidos, abre Pedidos para ver o prazo ou cancela um pedido que ainda aguarda pagamento." },
       { title: "Verifica a entrega", detail: "Após a aprovação do pagamento, o AgentX pode enviar o ficheiro digital pelo WhatsApp. Acompanha o estado em Entregas por concluir. Se aparecer Rever entrega, abre a conversa e confirma a receção de todos os itens antes de registar a entrega." }
     ],
     note: { title: "Fotografia e ficheiro de entrega", detail: "A fotografia da campanha é selecionada em Campanhas do catálogo. O ficheiro de entrega é o anexo privado guardado no produto." },
@@ -135,7 +135,7 @@ export const guides: Guide[] = [
     steps: [
       { title: "Configura os meios de pagamento", detail: "Em Vendedor → Pagamento e avisos, guarda o destinatário e o nome do titular para cada meio que aceitas. Podes indicar um número de WhatsApp para receber avisos." },
       { title: "Testa os dados enviados ao cliente", detail: "Pergunta «Como posso pagar?» no WhatsApp para ver os meios configurados. Num pedido pronto para pagar, verifica se o agente indica o destinatário, o titular, a referência e o total do pedido." },
-      { title: "Recebe o comprovativo", detail: "Pede ao cliente para enviar o comprovativo e indicar o código do pedido, sobretudo se tiver mais de um pedido aberto. O AgentX tenta extrair o valor, a referência e o titular quando estão presentes." },
+      { title: "Recebe o comprovativo", detail: "Pede ao cliente para enviar o comprovativo antes do fim do prazo e indicar o código do pedido. Se chegar a tempo, o stock fica reservado até à decisão da equipa. O AgentX tenta extrair o valor, a referência e o titular quando estão presentes." },
       { title: "Confirma no prestador", detail: "Abre Comprovativos pendentes e seleciona Rever e aprovar. Confere no prestador a entrada do dinheiro, o valor e o destinatário antes de marcar a confirmação e aprovar no AgentX." },
       { title: "Trata as divergências", detail: "Se o valor, o titular ou o destinatário divergirem, revê o pedido e usa Rejeitar com o motivo correspondente." }
     ],

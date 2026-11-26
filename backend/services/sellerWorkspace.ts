@@ -72,7 +72,7 @@ export async function sellerOverview(userId: string, whatsappConnected: boolean)
       .eq("user_id", userId).eq("status", "verification_pending"),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true })
       .eq("user_id", userId).eq("status", "paid"),
-    supabaseAdmin.from("orders").select("id,order_number,customer_name,status,total_amount,currency,created_at")
+    supabaseAdmin.from("orders").select("id,order_number,customer_name,status,total_amount,currency,created_at,reservation_expires_at")
       .eq("user_id", userId).order("created_at", { ascending: false }).limit(10)
   ]);
   const failure = [agent, products, reviews, deliveries, orders].find((result) => result.error);

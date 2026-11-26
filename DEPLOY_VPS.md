@@ -219,13 +219,21 @@ Depois de aplicar as migrações, publique o commit da versão com `scripts/rele
 
 ### Atualizar os fluxos de WhatsApp, Grupos e Campanhas
 
-Numa base que já recebeu a migração 26, aplique `psql -X -f migrations/apply_agentx_whatsapp_workflows.sql` usando a ligação de migração. Para o SQL Editor do Supabase, gere o ficheiro com `node scripts/render-agentx-fresh-sql.mjs --whatsapp-upgrade > AgentX-migracoes-27-a-34.sql` e execute o conteúdo inteiro. Esta variante aplica as oito migrações numa única transação. Depois, publique o commit e confirme `/api/ready`.
+Numa base que já recebeu a migração 26, aplique `psql -X -f migrations/apply_agentx_whatsapp_workflows.sql` usando a ligação de migração. Para o SQL Editor do Supabase, gere o ficheiro com `node scripts/render-agentx-fresh-sql.mjs --whatsapp-upgrade > AgentX-migracoes-27-a-36.sql` e execute o conteúdo inteiro. Esta variante aplica as dez migrações numa única transação. Depois, publique o commit e confirme `/api/ready`.
 
 Se a base já tiver a migração 31, pode executar apenas `supabase/migrations/32_human_handoff_alerts.sql`. Confirme que `SELECT public.agentx_human_handoff_ready();` devolve `true` antes de publicar. Com o WhatsApp ligado, teste a partir de um número de cliente e confirme que o aviso chega ao número principal em **Configurações** quando o cliente pede atendimento humano.
 
 ### Ativar a gestão de marcações e a moderação por conteúdo
 
 Numa instalação com a migração 32, aplique `supabase/migrations/33_appointment_self_service.sql` e `supabase/migrations/34_group_content_moderation.sql` pela ordem indicada. Confirme `SELECT public.agentx_appointment_self_service_ready(), public.agentx_group_moderation_ready();` antes de publicar. Ambas as verificações devem devolver `true`.
+
+### Reservas de stock e propostas
+
+Se a base já recebeu a migração 34, aplique `supabase/migrations/35_seller_stock_reservations.sql` e `supabase/migrations/36_seller_conversation_quotes.sql` por esta ordem. Antes de publicar, confirme que `SELECT public.agentx_seller_reservations_ready(), public.agentx_seller_quotes_ready();` devolve `true` em ambas as colunas.
+
+O cliente pode confirmar a proposta durante 10 minutos. Um pedido confirmado reserva stock durante 30 minutos. Se o comprovativo entrar em revisão antes do prazo, o stock fica reservado até à decisão da equipa. O stock volta a ficar disponível assim que uma reserva sem comprovativo vencer, mesmo entre execuções do agendador.
+
+Se for preciso voltar a uma imagem anterior à implementação das reservas, pause temporariamente os agentes de vendas. Reative-os quando a versão que verifica os prazos das reservas estiver em execução.
 
 As novas reservas públicas oferecem **Gerir marcação**. Para enviar o link também por WhatsApp, configure `PUBLIC_APP_URL` com a origem HTTPS pública do painel. O servidor também aceita `VITE_API_URL` quando contém uma origem pública válida. Se usar `APPOINTMENT_MANAGEMENT_SECRET`, guarde um valor forte e estável para o servidor poder voltar a incluir links já emitidos nos lembretes após rodar as credenciais da base.
 

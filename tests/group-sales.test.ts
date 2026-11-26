@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GroupMetadata, WAMessageKey } from "@whiskeysockets/baileys";
 
-const { claimWhatsAppAction, from } = vi.hoisted(() => ({ claimWhatsAppAction: vi.fn(), from: vi.fn() }));
-vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: { from } }));
+const { claimWhatsAppAction, from, rpc } = vi.hoisted(() => ({ claimWhatsAppAction: vi.fn(), from: vi.fn(), rpc: vi.fn() }));
+vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: { from, rpc } }));
 vi.mock("../backend/services/whatsappActionClaims.ts", () => ({ claimWhatsAppAction }));
 
 import { groupSalesPhone, groupSalesReply, parseGroupSalesCommand, processGroupSales } from "../backend/services/groupSales.ts";
@@ -43,6 +43,7 @@ function query(data: unknown) {
 describe("WhatsApp group shop", () => {
   beforeEach(() => {
     from.mockReset();
+    rpc.mockReset();
     claimWhatsAppAction.mockReset();
   });
 
@@ -84,6 +85,7 @@ describe("WhatsApp group shop", () => {
     const settingQuery = query({ catalog_sales_enabled: true });
     const productQuery = query(products);
     from.mockImplementation((table: string) => table === "group_rules" ? settingQuery : productQuery);
+    rpc.mockReturnValue(query([{ product_id: "first", available_stock: 2 }, { product_id: "second", available_stock: 0 }]));
     claimWhatsAppAction.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const event = input();
 
@@ -93,8 +95,11 @@ describe("WhatsApp group shop", () => {
     expect(settingQuery.eq).toHaveBeenCalledWith("group_jid", jid);
     expect(productQuery.eq).toHaveBeenCalledWith("user_id", userId);
     expect(productQuery.eq).toHaveBeenCalledWith("is_active", true);
+    expect(rpc).toHaveBeenCalledWith("agentx_seller_catalog_availability", { p_user: userId });
     expect(claimWhatsAppAction).toHaveBeenCalledWith(userId, event.key.id);
     expect(event.send).toHaveBeenCalledTimes(1);
+    expect(event.send).toHaveBeenCalledWith(expect.stringContaining("Café Torrado · 95 MT · 2 em stock"));
+    expect(event.send).not.toHaveBeenCalledWith(expect.stringContaining("Chá Verde"));
     expect(from.mock.calls.map(([table]) => table)).toEqual(["group_rules", "products", "group_rules", "products"]);
   });
 

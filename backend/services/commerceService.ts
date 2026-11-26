@@ -5,6 +5,7 @@ import { whatsappManager } from "../whatsappManager.ts";
 import { normalizeContactPhone } from "../../shared/contactPhone.ts";
 import { reviewProofRecipient, type ExtractedPaymentData } from "./paymentProofSms.ts";
 import { sellerSettings } from "./sellerWorkspace.ts";
+import { readSellerAvailableStock } from "./sellerStock.ts";
 
 export interface CreateOrderParams {
   userId: string;
@@ -15,6 +16,8 @@ export interface CreateOrderParams {
   productId: string;
   sourceMessageId?: string;
   quantity: number;
+  expectedUnitPrice?: number | string;
+  expectedCurrency?: string;
 }
 
 export const normalizeCatalogText = (text: string) =>
@@ -42,16 +45,18 @@ export class CommerceService {
   }
 
   async listAgentProducts(userId: string) {
-    const { data, error } = await supabaseAdmin.from("products")
-      .select("id,name,description,price,currency,category,stock")
-      .eq("user_id", userId).eq("is_active", true)
-      .order("created_at", { ascending: false }).order("id");
+    const [{ data, error }, available] = await Promise.all([
+      supabaseAdmin.from("products").select("id,name,description,price,currency,category,stock")
+        .eq("user_id", userId).eq("is_active", true)
+        .order("created_at", { ascending: false }).order("id"),
+      readSellerAvailableStock(userId)
+    ]);
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []).map((item) => ({ ...item, stock: available.get(item.id) ?? 0 }));
   }
 
   async createOrder(params: CreateOrderParams) {
-    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_create_order", {
+    const { data: order, error } = await supabaseAdmin.rpc("agentx_seller_create_reserved_order", {
       p_user: params.userId,
       p_product: params.productId,
       p_quantity: params.quantity,
@@ -60,7 +65,9 @@ export class CommerceService {
       p_contact: params.contactId ?? null,
       p_method: params.paymentMethod ?? null,
       p_order_number: `AGX-${randomBytes(6).toString("hex").toUpperCase()}`,
-      p_source_message: params.sourceMessageId ?? null
+      p_source_message: params.sourceMessageId ?? null,
+      p_expected_price: params.expectedUnitPrice ?? null,
+      p_expected_currency: params.expectedCurrency ?? null
     });
     if (error) throw error;
     if (!order?.id || !order?.order_number) throw new Error("Order write returned no identifier");

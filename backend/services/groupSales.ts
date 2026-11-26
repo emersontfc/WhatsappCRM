@@ -4,6 +4,7 @@ import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { presentCatalogSuggestions, type CatalogDiscoveryItem } from "./catalogDiscovery.ts";
 import { canPostInGroup, groupParticipant, isGroupJid } from "./groupModeration.ts";
 import { claimWhatsAppAction } from "./whatsappActionClaims.ts";
+import { readSellerAvailableStock } from "./sellerStock.ts";
 
 type LinkedIdentity = { id?: string; lid?: string; phoneNumber?: string };
 
@@ -81,13 +82,17 @@ export async function processGroupSales(input: GroupSalesInput): Promise<boolean
   const phone = groupSalesPhone(await loadGroup(), jid, key, linked);
   if (!phone) return false;
 
-  const { data: products, error: productsError } = await supabaseAdmin.from("products")
-    .select("id,name,category,price,currency,stock").eq("user_id", userId).eq("is_active", true)
-    .gt("price", 0).gt("stock", 0).order("name").order("id").abortSignal(AbortSignal.timeout(4_000));
+  const [{ data: products, error: productsError }, available] = await Promise.all([
+    supabaseAdmin.from("products").select("id,name,category,price,currency,stock")
+      .eq("user_id", userId).eq("is_active", true)
+      .gt("price", 0).gt("stock", 0).order("name").order("id").abortSignal(AbortSignal.timeout(4_000)),
+    readSellerAvailableStock(userId)
+  ]);
   if (productsError) throw productsError;
   if (!await claimWhatsAppAction(userId, key.id)) return false;
 
   // An interrupted send may have been accepted remotely. Never resend a claimed event.
-  const sent = await send(groupSalesReply(command.query, products ?? [], phone));
+  const catalog = (products ?? []).map((item) => ({ ...item, stock: available.get(item.id) ?? 0 }));
+  const sent = await send(groupSalesReply(command.query, catalog, phone));
   return Boolean(sent?.key?.id);
 }

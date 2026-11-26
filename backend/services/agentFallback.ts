@@ -133,7 +133,8 @@ export function readCatalogReply(message: string, catalog: CatalogItem[] | null,
     return !viewingCatalog && selected.length === 1 && description ? summary + "\n" + description : summary;
   });
   const item = !viewingCatalog && selected.length === 1 ? selected[0] : null;
-  const offer = item?.id && item.stock > 0 ? { productId: item.id, unitPrice: item.price, currency: item.currency } : undefined;
+  const offer = item?.id && item.stock > 0 && item.price > 0 && /^[A-Z]{2,3}$/.test(item.currency)
+    ? { productId: item.id, unitPrice: item.price, currency: item.currency } : undefined;
   const next = viewingCatalog && selected.length > rows.length ? "Estes são alguns dos produtos. Envia um nome para pesquisar no resto do catálogo."
     : viewingCatalog || selected.length > 1 ? "Envia o nome do produto para ver mais detalhes."
     : offer ? "Para encomendar uma unidade, podes responder «peço 1»." : null;

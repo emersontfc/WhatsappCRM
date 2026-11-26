@@ -27,6 +27,16 @@ export function isSellerMethod(value: unknown): value is SellerMethod {
   return typeof value === "string" && Object.hasOwn(sellerMethods, value);
 }
 
+const reservationTime = new Intl.DateTimeFormat("pt-MZ", { dateStyle: "short", timeStyle: "short", timeZone: "Africa/Maputo" });
+
+export function sellerReservationLabel(status: string, expiresAt?: string | null): string | null {
+  const expires = expiresAt ? Date.parse(expiresAt) : NaN;
+  if (!Number.isFinite(expires)) return null;
+  if (status === "verification_pending") return "Stock reservado durante a revisão.";
+  if (status !== "created" && status !== "awaiting_payment") return null;
+  return expires <= Date.now() ? "Prazo da reserva terminado." : `Stock reservado até ${reservationTime.format(expires)} (hora de Maputo).`;
+}
+
 export interface SellerSettings {
   payment_method: SellerMethod;
   payment_recipient: string;
@@ -51,5 +61,6 @@ export interface SellerOverview {
     total_amount: number;
     currency: string;
     created_at: string;
+    reservation_expires_at?: string | null;
   }[];
 }

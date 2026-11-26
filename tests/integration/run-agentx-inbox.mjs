@@ -663,6 +663,7 @@ try {
   const receipt = "Confirmado ABZA12CD34. Transferiste 250.00MT e a taxa foi de 0.00MT para 258840000003 - Loja de teste aos 25/11/26 as 8:47 PM. O teu novo saldo M-Pesa e de 0.00MT. Continua a transferir SEM TAXAS de M-Pesa para M-Pesa. Em caso de duvida, liga 100.";
   const aiBeforeMpesa = aiRequests;
   await sell(receipt, "proof-one");
+  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação|validação humana/i);
   await sell(receipt, "proof-one");
   const [correctProof] = await read("payment_verifications", "?source_message_id=eq.proof-one");
   assert.equal(correctProof.status, "pending");
@@ -686,7 +687,7 @@ try {
   assert.equal(sentDocuments(app.outbound).length, 0);
   assert.equal(downloadedObjects.length, 0);
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
-  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação|validação humana/i);
+  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação|validação humana|já foi registado/i);
 
   const confirmCorrectProof = { ...approval, proofId: correctProof.id };
   assert.equal((await approve(order.id, confirmCorrectProof, 1)).status, 404);
@@ -811,6 +812,11 @@ try {
   assert.equal(bankOrder.seller_payment.recipient, "000111222333");
   assert.match(app.outbound.at(-1).content.text, /transferência bancária.*000111222333/i);
   assert.equal(sentDocuments(app.outbound).length, 2);
+  assert.equal((await api(`/commerce/orders/${bankOrder.id}/cancel`, 1, {})).status, 404);
+  const cancelBank = await api(`/commerce/orders/${bankOrder.id}/cancel`, 0, {});
+  assert.equal(cancelBank.status, 200, await cancelBank.clone().text());
+  assert.equal((await read("orders", `?id=eq.${bankOrder.id}`))[0].status, "cancelled");
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 1);
 
   aiEndpointAvailable = false;
   const outageIdentity = { jid: "258840000007@s.whatsapp.net" };
@@ -1389,7 +1395,7 @@ try {
   console.log("Existing connection was preserved and QR polling did not restart a paused session.");
 
   const stockForOfflinePurchase = await fetch(new URL(`/products?id=eq.${product.id}`, rest), {
-    method: "PATCH", headers: storageAuth, body: JSON.stringify({ stock: 2 })
+    method: "PATCH", headers: storageAuth, body: JSON.stringify({ stock: 3 })
   });
   assert.equal(stockForOfflinePurchase.status, 204);
   aiEndpointAvailable = false;
@@ -1411,7 +1417,7 @@ try {
   assert.ok(app.outbound.at(-1).content.text.includes(offlineOrder.order_number));
   const [offlineBuyerContact] = await read("contacts", "?phone=eq.258840000013");
   assert.equal(offlineBuyerContact.ai_paused, false);
-  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
   assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
 
   const unacknowledgedBuyer = "258840000016";
@@ -1488,10 +1494,12 @@ try {
   assert.equal(changedPrice.status, 204);
   await app.simulate("ingress", { ...accepted, messageId: "outage-conversation-price-changed" });
   assert.equal(app.outbound.at(-1).jid, conversationalJid);
-  assert.match(app.outbound.at(-1).content.text, /preço.*mudou.*275\s+MT/i);
+  assert.match(app.outbound.at(-1).content.text, /preço.*mudou/i);
   assert.doesNotMatch(app.outbound.at(-1).content.text, /AGX-|258840000005/);
+  await app.simulate("ingress", { jid: conversationalJid, text: "Livro do piloto", messageId: "outage-conversation-new-price" });
+  assert.match(app.outbound.at(-1).content.text, /Livro do piloto.*275\s+MT.*1 em stock/i);
   assert.equal((await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${conversationalBuyer}`)).length, 1);
-  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
   assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
 
   const advisedBuyer = "258840000017";
@@ -1553,6 +1561,141 @@ try {
   assert.doesNotMatch(semanticReply.content.text, paymentDetails);
   assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${semanticBuyer}`), []);
 
+  aiEndpointAvailable = false;
+  const aiBeforeReservation = aiRequests;
+  const singleUnit = await fetch(new URL("/products", rest), {
+    method: "POST", headers: { ...storageAuth, prefer: "return=representation" }, body: JSON.stringify({
+      user_id: owner, name: "Agenda de bolso", price: 120, currency: "MT", stock: 1, type: "physical", is_active: true
+    })
+  });
+  assert.equal(singleUnit.status, 201);
+  const [lastProduct] = await singleUnit.json();
+  const competingBuyers = ["258840000021", "258840000022"].map((phone, index) => ({
+    phone, jid: `${phone}@s.whatsapp.net`, quoteId: `reserve-quote-${index}`, acceptId: `reserve-accept-${index}`
+  }));
+  const competitorOrders = () => read("orders", `?user_id=eq.${owner}&customer_phone=in.(${competingBuyers.map(({ phone }) => phone).join(",")})`);
+  await Promise.all(competingBuyers.map(({ jid, quoteId }) => app.simulate("ingress", {
+    jid, text: "Agenda de bolso", messageId: quoteId
+  })));
+  for (const { jid } of competingBuyers) {
+    const quote = app.outbound.findLast((message) => message.jid === jid);
+    assert.match(quote.content.text, /Agenda de bolso.*120\s+MT.*1 em stock/i);
+    assert.match(quote.content.text, /peço 1/i);
+    assert.doesNotMatch(quote.content.text, paymentDetails);
+  }
+  assert.deepEqual(await competitorOrders(), []);
+  const lastUnitQuotes = `?user_id=eq.${owner}&product_id=eq.${lastProduct.id}`;
+  const storedQuotes = await read("agentx_seller_conversation_quotes", lastUnitQuotes);
+  assert.equal(storedQuotes.length, 2);
+  assert.ok(storedQuotes.every(({ accepted_message_id, unit_price }) => accepted_message_id === null && unit_price === 120));
+
+  const quotePort = app.port;
+  await app.stop();
+  app = await start(quotePort);
+  await Promise.all(competingBuyers.map(({ jid, acceptId }) => app.simulate("ingress", {
+    jid, text: "peço 1", messageId: acceptId
+  })));
+  const ordersAfterRace = await competitorOrders();
+  assert.equal(ordersAfterRace.length, 1, JSON.stringify(app.outbound.map(({ content }) => content.text)));
+  const [heldOrder] = ordersAfterRace;
+  assert.equal(heldOrder.status, "awaiting_payment");
+  assert.equal(heldOrder.total_amount, 120);
+  assert.ok(Date.parse(heldOrder.reservation_expires_at) > Date.now());
+  const holder = competingBuyers.find(({ phone }) => phone === heldOrder.customer_phone);
+  const waitingBuyer = competingBuyers.find(({ phone }) => phone !== heldOrder.customer_phone);
+  assert.equal(heldOrder.source_message_id, holder.acceptId);
+  const consumedQuotes = (await read("agentx_seller_conversation_quotes", lastUnitQuotes)).filter(({ accepted_message_id }) => accepted_message_id);
+  assert.equal(consumedQuotes.length, 1);
+  assert.equal(consumedQuotes[0].accepted_message_id, holder.acceptId);
+  assert.equal(consumedQuotes[0].order_id, heldOrder.id);
+  const heldReply = app.outbound.findLast(({ jid }) => jid === holder.jid);
+  assert.ok(heldReply.content.text.includes(heldOrder.order_number));
+  assert.match(heldReply.content.text, /M-Pesa.*258840000005/i);
+  const waitingReply = app.outbound.findLast(({ jid }) => jid === waitingBuyer.jid);
+  assert.match(waitingReply.content.text, /stock|reserva|disponível|esgotad/i);
+  assert.doesNotMatch(waitingReply.content.text, paymentDetails);
+  assert.equal((await read("products", `?id=eq.${lastProduct.id}`))[0].stock, 1);
+  assert.equal(sentDocuments(app.outbound).length, 0);
+  assert.equal(aiRequests, aiBeforeReservation);
+
+  const expireHold = await fetch(new URL(`/orders?id=eq.${heldOrder.id}`, rest), {
+    method: "PATCH", headers: storageAuth,
+    body: JSON.stringify({ reservation_expires_at: new Date(Date.now() - 1000).toISOString() })
+  });
+  assert.equal(expireHold.status, 204, await expireHold.clone().text());
+  await app.simulate("ingress", { jid: holder.jid, messageId: "expired-hold-payment-question",
+    text: `Qual é o número de M-Pesa para pagar o pedido ${heldOrder.order_number}?` });
+  const expiredReply = app.outbound.findLast(({ jid }) => jid === holder.jid);
+  assert.match(expiredReply.content.text, /expir|reserva|confirma/i);
+  assert.doesNotMatch(expiredReply.content.text, /258840000005|258870000006|000111222333/);
+  const lateProofId = "expired-hold-late-proof";
+  const lateProof = `Confirmado RSRV00001. Transferiste 120.00MT e a taxa foi de 0.00MT para 258840000005 - Loja de teste aos 25/11/26 as 8:47 PM. O teu novo saldo M-Pesa e de 0.00MT. Pedido ${heldOrder.order_number}.`;
+  await app.simulate("ingress", { jid: holder.jid, messageId: lateProofId, text: lateProof });
+  assert.deepEqual(await read("payment_verifications", `?source_message_id=eq.${lateProofId}`), []);
+
+  await app.simulate("ingress", { jid: waitingBuyer.jid, text: "Agenda de bolso", messageId: "released-hold-quote" });
+  assert.match(app.outbound.at(-1).content.text, /Agenda de bolso.*120\s+MT.*1 em stock/i);
+  await app.simulate("ingress", { jid: waitingBuyer.jid, text: "peço 1", messageId: "released-hold-accept" });
+  const [replacement] = await read("orders", "?source_message_id=eq.released-hold-accept");
+  assert.equal(replacement.customer_phone, waitingBuyer.phone);
+  assert.equal(replacement.status, "awaiting_payment");
+  assert.ok(app.outbound.at(-1).content.text.includes(replacement.order_number));
+  assert.match(app.outbound.at(-1).content.text, /M-Pesa.*258840000005/i);
+  assert.equal((await read("products", `?id=eq.${lastProduct.id}`))[0].stock, 1);
+  assert.equal(sentDocuments(app.outbound).length, 0);
+  const expiredSweep = await fetch(new URL("/rpc/agentx_expire_seller_reservations", rest), {
+    method: "POST", headers: storageAuth, body: JSON.stringify({ p_limit: 50 })
+  });
+  assert.equal(expiredSweep.status, 200, await expiredSweep.clone().text());
+  assert.ok(await expiredSweep.json() >= 1);
+  assert.equal((await read("orders", `?id=eq.${heldOrder.id}`))[0].status, "expired");
+  assert.equal((await read("orders", `?id=eq.${replacement.id}`))[0].status, "awaiting_payment");
+
+  const interruptedBuyer = "258840000023";
+  const interruptedJid = `${interruptedBuyer}@s.whatsapp.net`;
+  await app.simulate("ingress", { jid: interruptedJid, text: "Caderno A5", messageId: "reserve-interrupted-quote" });
+  assert.match(app.outbound.at(-1).content.text, /peço 1/i);
+  await app.simulate("ingress", { jid: interruptedJid, fromMe: true, text: "Ainda estou a verificar os artigos.", messageId: "reserve-interrupted-manual" });
+  await app.simulate("ingress", { jid: interruptedJid, text: "peço 1", messageId: "reserve-interrupted-accept" });
+  assert.equal(app.outbound.at(-1).jid, interruptedJid);
+  assert.match(app.outbound.at(-1).content.text, /proposta|produto/i);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, paymentDetails);
+  assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${interruptedBuyer}`), []);
+
+  const quotedBuyer = "258840000024";
+  const quotedJid = `${quotedBuyer}@s.whatsapp.net`;
+  const sendQuotedBuyer = (text, messageId, replyToWhatsAppId) => app.simulate("ingress", {
+    jid: quotedJid, text, messageId, replyToWhatsAppId
+  });
+  await sendQuotedBuyer("Caderno A5", "reserve-native-old-quote");
+  const [quotedContact] = await read("contacts", `?user_id=eq.${owner}&phone=eq.${quotedBuyer}`);
+  const latestQuote = async () => (await read("agentx_seller_conversation_quotes",
+    `?user_id=eq.${owner}&contact_id=eq.${quotedContact.id}&order=outbound_sequence.desc&limit=1`))[0];
+  const oldNativeQuote = await latestQuote();
+  assert.equal(oldNativeQuote.product_id, notebook.id);
+  await sendQuotedBuyer("Livro do piloto", "reserve-native-new-quote");
+  assert.equal((await latestQuote()).product_id, product.id);
+
+  await sendQuotedBuyer("peço 1", "reserve-native-replied-old", oldNativeQuote.outbound_message_id);
+  assert.equal(app.outbound.at(-1).jid, quotedJid);
+  assert.match(app.outbound.at(-1).content.text, /proposta|produto/i);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, paymentDetails);
+  const quotedOrders = `?user_id=eq.${owner}&customer_phone=eq.${quotedBuyer}`;
+  assert.deepEqual(await read("orders", quotedOrders), []);
+
+  await sendQuotedBuyer("Livro do piloto", "reserve-native-refreshed-quote");
+  const freshNativeQuote = await latestQuote();
+  assert.notEqual(freshNativeQuote.outbound_message_id, oldNativeQuote.outbound_message_id);
+  await sendQuotedBuyer("peço 1", "reserve-native-replied-current", freshNativeQuote.outbound_message_id);
+  const nativeOrders = await read("orders", quotedOrders);
+  assert.equal(nativeOrders.length, 1, app.outbound.at(-1).content.text);
+  assert.equal(nativeOrders[0].total_amount, 275);
+  assert.equal(nativeOrders[0].status, "awaiting_payment");
+  const [nativeItem] = await read("order_items", `?order_id=eq.${nativeOrders[0].id}`);
+  assert.equal(nativeItem.product_id, product.id);
+  assert.ok(app.outbound.at(-1).content.text.includes(nativeOrders[0].order_number));
+  assert.match(app.outbound.at(-1).content.text, /M-Pesa.*258840000005/i);
+
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log(`Seller flow passed on the ${fresh ? "freshly installed" : "repaired legacy"} schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document`);
@@ -1563,6 +1706,8 @@ try {
   console.log("Conversational offline purchase accepted one quote and rejected a vague selection, repeat request and changed price without creating more orders");
   console.log("Catalogue advice matched budget and recorded product benefits, with an order only after the buyer selected and accepted the product");
   console.log("AI product recommendations used owned catalogue details and discarded fabricated claims and product IDs");
+  console.log("A process restart preserved quotes; concurrent buyers got one hold for the last unit, and expiry released it without reducing stock");
+  console.log("A native WhatsApp reply accepted the current quote and could not create an order by referencing an older quote");
   console.log("Outgoing M-Pesa and e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {
   await browser?.close();

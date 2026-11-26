@@ -6,6 +6,7 @@ import { whatsappManager } from "../whatsappManager.ts";
 import { canPostInGroup, isGroupJid } from "../services/groupModeration.ts";
 import { scheduleDeadline, scheduleUuid, writableScheduleGroup, disconnectedSchedule } from "../services/schedulePolicy.ts";
 import { dispatchScheduled } from "../services/scheduledDispatch.ts";
+import { readSellerAvailableStock } from "../services/sellerStock.ts";
 import { CATALOG_CAPTION_LIMIT, CATALOG_COVER_LIMIT, campaignCode, campaignMessage, catalogCoverType,
   loadCatalogCover, merchantCampaignPhone, ownedCatalogCover, storeCatalogCover } from "../services/catalogCampaigns.ts";
 
@@ -18,7 +19,7 @@ function unavailable(res: Response, error: unknown) {
   if (code === "23505") return res.status(409).json({ error: "Este pedido já foi usado para outra publicação. Consulta as campanhas." });
   if (code === "22023") return res.status(400).json({ error: "Confirma os dados e a data da campanha." });
   if (["PGRST202", "PGRST205", "42P01", "42703"].includes(code ?? "")) {
-    return res.status(503).json({ error: "A gestão de campanhas precisa da migração 29." });
+    return res.status(503).json({ error: "A gestão de campanhas precisa das migrações 29 e 35." });
   }
   return res.status(503).json({ error: "Não foi possível concluir a operação da campanha." });
 }
@@ -84,11 +85,12 @@ campaigns.get("/", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Inicia sessão para consultar as campanhas." });
   try {
     const signal = AbortSignal.timeout(8_000);
-    const [products, recent, destinations] = await Promise.all([
+    const [products, recent, destinations, available] = await Promise.all([
       campaignProducts(userId).order("name").limit(100).abortSignal(signal),
       supabaseAdmin.from("agentx_catalog_campaigns").select("id,product_name,group_name,scheduled_at,published_at")
         .eq("user_id", userId).order("created_at", { ascending: false }).limit(30).abortSignal(signal),
-      campaignDestinations(userId)
+      campaignDestinations(userId),
+      readSellerAvailableStock(userId)
     ]);
     if (products.error || recent.error) throw products.error ?? recent.error;
     const entries = recent.data ?? [];
@@ -97,7 +99,10 @@ campaigns.get("/", async (req: AuthRequest, res) => {
     if (jobs?.error) throw jobs.error;
     const jobByCampaign = new Map((jobs?.data ?? []).map((row) => [row.campaign_id, row]));
     return res.set("Cache-Control", "no-store").json({ success: true, data: {
-      products: (products.data ?? []).map(({ catalog_cover_path, ...product }) => ({ ...product, hasCover: ownedCatalogCover(userId, catalog_cover_path) })),
+      products: (products.data ?? []).flatMap(({ catalog_cover_path, ...product }) => {
+        const stock = available.get(product.id) ?? 0;
+        return stock > 0 ? [{ ...product, stock, hasCover: ownedCatalogCover(userId, catalog_cover_path) }] : [];
+      }),
       ...destinations,
       schedulerEnabled: process.env.DISABLE_SCHEDULER !== "true",
       campaigns: entries.map((entry) => {
@@ -160,7 +165,9 @@ campaigns.post("/preview", async (req: AuthRequest, res) => {
     const { data, error } = await campaignProducts(userId).eq("id", productId).abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
     if (error) throw error;
     if (!data || !ownedCatalogCover(userId, data.catalog_cover_path)) return unavailable(res, { code: "P0002" });
-    return res.set("Cache-Control", "no-store").json({ success: true, preview: campaignMessage(data, caption.trim(), "") });
+    const stock = (await readSellerAvailableStock(userId)).get(data.id) ?? 0;
+    if (stock <= 0) return unavailable(res, { code: "P0002" });
+    return res.set("Cache-Control", "no-store").json({ success: true, preview: campaignMessage({ ...data, stock }, caption.trim(), "") });
   } catch (error) {
     return unavailable(res, error);
   }

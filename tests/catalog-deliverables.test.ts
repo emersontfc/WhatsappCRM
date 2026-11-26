@@ -26,7 +26,15 @@ function query(data: unknown) {
   return chain;
 }
 
-beforeEach(() => vi.resetAllMocks());
+function stockResult(availableStock = 2) {
+  return { abortSignal: vi.fn().mockResolvedValue({ data: [{ product_id: "book", available_stock: availableStock }], error: null }) };
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.rpc.mockImplementation((name: string) => name === "agentx_seller_catalog_availability"
+    ? stockResult() : { abortSignal: vi.fn().mockResolvedValue({ data: "lead", error: null }) });
+});
 
 const pdf = Buffer.from("%PDF-1.7\nLivro");
 const pdfItem = { product_name: "Livro", quantity: 1,
@@ -51,7 +59,6 @@ describe("commerce catalog and private files", () => {
   it("looks up the live account catalog without selecting private content", async () => {
     const lookup = query([{ id: "book", name: "Introdução", category: "Educação", price: 30, stock: 2 }]);
     mocks.from.mockReturnValue(lookup);
-    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: "lead", error: null }) });
     const response = await getProductsCatalogTool.execute({ category: "educacao", search: "introducao" }, ctx);
     expect(response.success).toBe(true);
     expect(response.data[0].name).toBe("Introdução");
@@ -64,12 +71,13 @@ describe("commerce catalog and private files", () => {
     mocks.from.mockReturnValue(query([]));
     const result = await createOrderTool.execute({ productName: "Unknown" }, ctx);
     expect(result.success).toBe(false);
-    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("agentx_seller_catalog_availability", { p_user: ctx.userId });
   });
 
   it("reports a legacy schema failure without sending the SQL error to a customer", async () => {
     mocks.from.mockReturnValue(query([{ id: "book", name: "Livro", price: 30, stock: 2 }]));
-    mocks.rpc.mockResolvedValue({ data: null, error: { code: "42703", message: "column last_action of relation leads does not exist" } });
+    mocks.rpc.mockImplementation((name: string) => name === "agentx_seller_catalog_availability" ? stockResult()
+      : Promise.resolve({ data: null, error: { code: "42703", message: "column last_action of relation leads does not exist" } }));
     const result = await createOrderTool.execute({ productName: "Livro" }, ctx);
     expect(result).toMatchObject({ success: false, code: "SALES_SCHEMA_REQUIRED" });
     expect(JSON.stringify(result)).not.toContain("last_action");

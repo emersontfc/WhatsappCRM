@@ -14,6 +14,7 @@ import { readAgentPaymentMethods, readAgentPaymentReply } from "./services/agent
 import { presentCatalogSuggestions } from "./services/catalogDiscovery.ts";
 import { processHumanHandoffs, requestHumanHandoff } from "./services/humanHandoff.ts";
 import { recordCatalogInterest } from "./tools/commerce/getProductsCatalog.ts";
+import { acceptSellerQuote, saveSellerQuote } from "./services/sellerQuotes.ts";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "your-fallback-encryption-key-32-chars-long";
 const IV_LENGTH = 16;
@@ -343,21 +344,6 @@ Ajude o cliente a escolher. Entenda pedidos informais como "queria algo para ofe
 
 // In-memory context cache
 const contextCache: Map<string, string[]> = new Map();
-const catalogOffers = new Map<string, CatalogOffer & { messageId: string; expiresAt: number }>();
-const catalogOfferLifetime = 10 * 60_000;
-
-export function forgetCatalogOffer(userId: string, contactId: string, outgoingMessageId?: string) {
-  const key = `${userId}:${contactId}`;
-  if (!outgoingMessageId || catalogOffers.get(key)?.messageId !== outgoingMessageId) catalogOffers.delete(key);
-}
-
-function rememberCatalogOffer(key: string, offer: CatalogOffer, messageId: string) {
-  const pending = { ...offer, messageId, expiresAt: Date.now() + catalogOfferLifetime };
-  catalogOffers.set(key, pending);
-  setTimeout(() => {
-    if (catalogOffers.get(key) === pending) catalogOffers.delete(key);
-  }, catalogOfferLifetime).unref();
-}
 
 export function robustParseAgentJSON(raw: string): { reply: string; tool: string | null; args: any; action?: string; intent?: string; data?: any } | null {
   if (!raw) return null;
@@ -512,7 +498,8 @@ function formatSalesCatalogue(result: ToolResult): string {
   })));
 }
 
-export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false, sourceMessageId?: string, contactId?: string) {
+export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string,
+  isSelfMessage: boolean = false, sourceMessageId?: string, contactId?: string, quotedMessageId?: string) {
   try {
     console.log(`[AI Engine] Checking agents for ${userId} (isSelfMessage: ${isSelfMessage})`);
     const { data: agents, error } = await supabaseAdmin
@@ -615,11 +602,6 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
                     (Boolean(myPhone) && cleanSenderPhone === myPhone);
 
     const role: UserRole = isOwner ? "admin" : "lead";
-    const offerKey = role === "lead" && contactData?.id ? `${userId}:${contactData.id}` : undefined;
-    const lastOffer = offerKey ? catalogOffers.get(offerKey) : undefined;
-    const pendingOffer = lastOffer && lastOffer.expiresAt > Date.now() ? lastOffer : undefined;
-    // Only the next turn can accept a quote. Consume synchronously so simultaneous replies cannot start two orders.
-    if (offerKey) catalogOffers.delete(offerKey);
     const linkedPhone = normalizeContactPhone(contactData?.phone);
     const toolPhone = normalizeContactPhone(cleanSenderPhone) || (linkedPhone !== cleanSenderLid ? linkedPhone : "") || "";
 
@@ -751,8 +733,17 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     if (role === "lead") {
       if (requestsHumanHandoff(text)) {
         localReply = await queueHumanReply(whatsappManager, userId, contactData?.id, sourceMessageId);
-      } else if (isCatalogAgent && shortQuantity !== null && (!pendingOffer || !sourceMessageId)) {
-        localReply = "Qual é o produto que queres encomendar? Envia o nome para eu indicar o preço e o stock.";
+      } else if (isCatalogAgent && shortQuantity !== null) {
+        if (!contactData?.id || !sourceMessageId || !toolPhone) {
+          localReply = "Qual é o produto que queres encomendar? Envia o nome para eu indicar o preço e o stock.";
+        } else {
+          try {
+            localReply = (await acceptSellerQuote({ userId, contactId: contactData.id,
+              sourceMessageId, phone: toolPhone, quantity: shortQuantity, paymentMethod: methods[0], quotedMessageId })).text;
+          } catch {
+            localReply = "Não consegui confirmar a proposta ou a reserva agora. Consulta o estado do pedido antes de pagares.";
+          }
+        }
       } else if (paymentQuestion && orderNumber) {
         localReply = await paymentReply();
       }
@@ -779,21 +770,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
           await recordCatalogInterest(toolContext);
         }
       }
-      if (isCatalogAgent && shortQuantity !== null && pendingOffer && sourceMessageId) {
-        const product = liveProducts?.find((item) => item.id === pendingOffer.productId);
-        if (!liveProducts) {
-          localReply = "Não consegui consultar o catálogo agora. Tenta novamente daqui a pouco.";
-        } else if (!product || !product.stock || product.stock < shortQuantity) {
-          localReply = "O produto indicado já não está disponível na quantidade pedida. Podes consultar o catálogo para escolher outra opção.";
-        } else if (Number(product.price) !== pendingOffer.unitPrice || (product.currency || "MT") !== pendingOffer.currency) {
-          localReply = `O preço de ${product.name} mudou para ${product.price} ${product.currency || "MT"}. Envia o nome do produto para confirmar o preço atual antes de encomendar.`;
-        } else {
-          const order = await executeToolByName("createOrder", {
-            productName: product.id, quantity: shortQuantity, paymentMethod: methods[0]
-          }, toolContext);
-          localReply = order.success ? `${shortQuantity} × ${product.name}\n${order.message}` : order.message;
-        }
-      } else if (explicitPurchase && isCatalogAgent && liveProducts && sourceMessageId) {
+      if (explicitPurchase && isCatalogAgent && liveProducts && sourceMessageId) {
         const confirmed = catalogOrderFromMessage(text, liveProducts);
         if (confirmed) {
           localReply = methods.length > 1 ? "Escolhe um único método de pagamento para eu registar o pedido."
@@ -883,8 +860,13 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       }
       if (finalReply) {
         const sent = await whatsappManager.sendMessage(userId, jid, finalReply);
-        if (offerKey && offeredProduct && sent?.key?.id && sent?.savedMessage?.contact_id === contactData?.id) {
-          rememberCatalogOffer(offerKey, offeredProduct, sent.key.id);
+        if (role === "lead" && contactData?.id && offeredProduct && sent?.key?.id &&
+            sent?.savedMessage?.contact_id === contactData.id) {
+          try {
+            await saveSellerQuote({ ...offeredProduct, userId, contactId: contactData.id, outboundMessageId: sent.key.id });
+          } catch {
+            console.warn("[Sales] Could not save the displayed quote.");
+          }
         }
       }
       

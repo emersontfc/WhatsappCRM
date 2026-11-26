@@ -20,13 +20,13 @@ import {
   ArrowRight
 } from "lucide-react";
 import { toast } from "sonner";
-import { apiFetch } from "../lib/api";
+import { ApiError, apiFetch } from "../lib/api";
 import { Button } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { Input } from "../components/ui/Input";
 import { cn } from "../lib/utils";
-import { isSellerMethod, sellerMethods, type OrderPayment, type RecipientEvidence } from "../../shared/seller";
+import { isSellerMethod, sellerMethods, sellerReservationLabel, type OrderPayment, type RecipientEvidence } from "../../shared/seller";
 
 interface Product {
   id: string;
@@ -48,7 +48,8 @@ interface Order {
   customer_phone: string;
   total_amount: number;
   currency: string;
-  status: "created" | "awaiting_payment" | "verification_pending" | "paid" | "fulfilled" | "rejected" | "cancelled";
+  status: "created" | "awaiting_payment" | "verification_pending" | "paid" | "fulfilled" | "rejected" | "cancelled" | "expired";
+  reservation_expires_at?: string | null;
   lead_id?: string | null;
   payment_method: string;
   seller_payment?: OrderPayment | null;
@@ -104,6 +105,11 @@ interface TimelineEvent {
   };
 }
 
+const orderStatusFilters = [
+  ["all", "Todos"], ["awaiting_payment", "Aguardam pagamento"], ["verification_pending", "Em revisão"],
+  ["paid", "Pagos"], ["fulfilled", "Entregues"], ["expired", "Expirados"], ["cancelled", "Cancelados"]
+] as const;
+
 function safeProofUrl(value: string) {
   try {
     const url = new URL(value, window.location.origin);
@@ -148,6 +154,10 @@ export default function Orders() {
   const [confirmingDelivery, setConfirmingDelivery] = useState(false);
   const [deliveryReviewError, setDeliveryReviewError] = useState("");
   const deliveryDialog = useRef<HTMLDialogElement>(null);
+  const [cancellation, setCancellation] = useState<Order | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancellationError, setCancellationError] = useState<{ message: string; blocked: boolean } | null>(null);
+  const cancellationDialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (approval && approvalDialog.current && !approvalDialog.current.open) approvalDialog.current.showModal();
   }, [approval]);
@@ -157,8 +167,13 @@ export default function Orders() {
   useEffect(() => {
     if (deliveryReview && deliveryDialog.current && !deliveryDialog.current.open) deliveryDialog.current.showModal();
   }, [deliveryReview]);
+  useEffect(() => {
+    if (cancellation && cancellationDialog.current && !cancellationDialog.current.open) cancellationDialog.current.showModal();
+  }, [cancellation]);
 
   const [proofsUnavailable, setProofsUnavailable] = useState(false);
+  const [ordersUnavailable, setOrdersUnavailable] = useState(false);
+  const latestDataRequest = useRef(0);
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -188,17 +203,21 @@ export default function Orders() {
   const [selectedOrderTimeline, setSelectedOrderTimeline] = useState<{ orderNumber: string; events: any[] } | null>(null);
 
   const fetchData = async () => {
+    const request = ++latestDataRequest.current;
     setLoading(true);
     const [ordersResult, productsResult, proofsResult, timelineResult] = await Promise.allSettled([
       apiFetch("/api/commerce/orders"), apiFetch("/api/commerce/products"),
       apiFetch("/api/commerce/verifications"), apiFetch("/api/commerce/operations-feed")
     ]);
-    if (ordersResult.status === "fulfilled" && ordersResult.value.success) setOrders(ordersResult.value.data || []);
-    if (productsResult.status === "fulfilled" && productsResult.value.success) setProducts(productsResult.value.data || []);
-    const proofsLoaded = proofsResult.status === "fulfilled" && proofsResult.value.success;
+    if (request !== latestDataRequest.current) return;
+    const ordersLoaded = ordersResult.status === "fulfilled" && ordersResult.value?.success === true;
+    setOrdersUnavailable(!ordersLoaded);
+    if (ordersLoaded) setOrders(ordersResult.value.data || []);
+    if (productsResult.status === "fulfilled" && productsResult.value?.success) setProducts(productsResult.value.data || []);
+    const proofsLoaded = proofsResult.status === "fulfilled" && proofsResult.value?.success;
     setProofsUnavailable(!proofsLoaded);
-    if (proofsResult.status === "fulfilled" && proofsResult.value.success) setVerifications(proofsResult.value.data || []);
-    if (timelineResult.status === "fulfilled" && timelineResult.value.success) setTimeline(timelineResult.value.data || []);
+    if (proofsResult.status === "fulfilled" && proofsLoaded) setVerifications(proofsResult.value.data || []);
+    if (timelineResult.status === "fulfilled" && timelineResult.value?.success) setTimeline(timelineResult.value.data || []);
     if ([ordersResult, productsResult, timelineResult].some((entry) => entry.status === "rejected")) {
       toast.error("Alguns dados comerciais estão indisponíveis.");
     }
@@ -362,6 +381,33 @@ export default function Orders() {
     }
   }
 
+  async function cancelOrder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!cancellation || cancelling || cancellationError?.blocked) return;
+    setCancelling(true);
+    setCancellationError(null);
+    try {
+      const result = await apiFetch(`/api/commerce/orders/${encodeURIComponent(cancellation.id)}/cancel`, { method: "POST" });
+      const nextStatus = result?.data?.status;
+      if (result?.success !== true || (nextStatus !== "cancelled" && nextStatus !== "expired")) {
+        throw new Error("Não foi possível confirmar o cancelamento.");
+      }
+      setOrders((current) => current.map((order) => order.id === cancellation.id ? { ...order, status: nextStatus } : order));
+      setCancellation(null);
+      if (nextStatus === "expired") toast.info("O pedido expirou.");
+      else toast.success("Pedido cancelado.");
+      void fetchData();
+    } catch (failure) {
+      const blocked = failure instanceof ApiError && (failure.status === 409 || failure.status === 404);
+      setCancellationError({ blocked, message: blocked
+        ? "Este pedido já não pode ser cancelado. Fecha esta janela para conferir o estado atualizado."
+        : failure instanceof Error ? failure.message : "Não foi possível confirmar o cancelamento." });
+      if (blocked) void fetchData();
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   const handleViewTimeline = async (order: Order) => {
     try {
       const res = await apiFetch(`/api/commerce/orders/${order.id}/timeline`);
@@ -388,7 +434,8 @@ export default function Orders() {
       o.order_number.toLowerCase().includes(search.toLowerCase()) ||
       o.customer_name?.toLowerCase().includes(search.toLowerCase()) ||
       o.customer_phone.includes(search);
-    const matchesStatus = statusFilter === "all" || o.status === statusFilter;
+    const matchesStatus = statusFilter === "all" || o.status === statusFilter ||
+      (statusFilter === "awaiting_payment" && o.status === "created");
     return matchesSearch && matchesStatus;
   });
 
@@ -402,6 +449,12 @@ export default function Orders() {
         return <Badge variant="warning" pulse className="bg-amber-50 text-amber-700 border-amber-200">Verificação Pendente</Badge>;
       case "awaiting_payment":
         return <Badge variant="warning" className="bg-slate-100 text-slate-700 border-slate-200">Aguardando Pagamento</Badge>;
+      case "created":
+        return <Badge variant="outline">Novo</Badge>;
+      case "expired":
+        return <Badge variant="outline">Expirado</Badge>;
+      case "cancelled":
+        return <Badge variant="outline">Cancelado</Badge>;
       case "rejected":
         return <Badge variant="error" className="bg-red-50 text-red-700 border-red-200">Rejeitado</Badge>;
       default:
@@ -551,19 +604,17 @@ export default function Orders() {
               />
             </div>
             <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1">
-              {["all", "awaiting_payment", "verification_pending", "paid", "fulfilled"].map(st => (
+              {orderStatusFilters.map(([st, label]) => (
                 <button
                   key={st}
                   onClick={() => setStatusFilter(st)}
+                  aria-pressed={statusFilter === st}
                   className={cn(
                     "px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-all",
                     statusFilter === st ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   )}
                 >
-                  {st === "all" ? "Todos" : 
-                   st === "awaiting_payment" ? "Aguardando" :
-                   st === "verification_pending" ? "Em Análise" :
-                   st === "paid" ? "Pagos" : "Entregues"}
+                  {label}
                 </button>
               ))}
             </div>
@@ -586,7 +637,9 @@ export default function Orders() {
                   {filteredOrders.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="text-center py-12 text-slate-400 font-medium">
-                        Nenhum pedido encontrado.
+                        {loading ? <span role="status">A carregar pedidos…</span> : ordersUnavailable
+                          ? <span role="alert">Não foi possível consultar os pedidos.</span>
+                          : orders.length ? "Nenhum pedido com estes filtros." : "Ainda não há pedidos."}
                       </td>
                     </tr>
                   ) : (
@@ -612,7 +665,10 @@ export default function Orders() {
                         <td className="py-4 px-4 font-black text-slate-900">
                           {order.total_amount} {order.currency}
                         </td>
-                        <td className="py-4 px-4">{getStatusBadge(order.status)}</td>
+                        <td className="py-4 px-4">
+                          {getStatusBadge(order.status)}
+                          <p className="mt-1 text-xs text-slate-600 empty:hidden">{sellerReservationLabel(order.status, order.reservation_expires_at)}</p>
+                        </td>
                         <td className="py-4 px-4 text-right">
                           <div className="flex items-center justify-end gap-2">
                             <Button
@@ -637,6 +693,11 @@ export default function Orders() {
                               className="whitespace-nowrap rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
                               Rever comprovativo
                             </Link>}
+                            {(order.status === "created" || order.status === "awaiting_payment") && <Button
+                              size="sm" variant="outline" className="whitespace-nowrap" aria-label={"Cancelar pedido " + order.order_number} onClick={() => {
+                                setCancellationError(null);
+                                setCancellation(order);
+                              }}>Cancelar pedido</Button>}
                           </div>
                         </td>
                       </tr>
@@ -780,7 +841,7 @@ export default function Orders() {
                       {prod.category || "Geral"}
                     </span>
                     <Badge variant="outline" className="text-[10px]">
-                      Estoque: {prod.stock}
+                      Stock total: {prod.stock}
                     </Badge>
                   </div>
                   <CardTitle className="text-lg font-bold text-slate-900 mt-2">{prod.name}</CardTitle>
@@ -902,6 +963,24 @@ export default function Orders() {
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" disabled={confirmingDelivery} onClick={() => setDeliveryReview(null)}>Cancelar</Button>
             <Button type="submit" disabled={confirmingDelivery}>{confirmingDelivery ? "A registar…" : "Confirmar entrega"}</Button>
+          </div>
+        </form>
+      </dialog>}
+
+      {cancellation && <dialog ref={cancellationDialog} aria-labelledby="cancellation-title" aria-describedby="cancellation-description"
+        onCancel={(event) => { event.preventDefault(); if (!cancelling) setCancellation(null); }}
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
+        <form onSubmit={cancelOrder} className="grid gap-4">
+          <h2 id="cancellation-title" className="text-lg font-bold">Cancelar pedido {cancellation.order_number}?</h2>
+          <p id="cancellation-description" className="text-sm text-slate-700">O pedido fica marcado como cancelado. Se tiver uma reserva de stock ativa, as unidades voltam ao stock disponível.</p>
+          {cancellationError && <p role="alert" className="text-sm text-red-700">{cancellationError.message}</p>}
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" autoFocus disabled={cancelling} onClick={() => setCancellation(null)}>
+              {cancellationError?.blocked ? "Fechar" : "Manter pedido"}
+            </Button>
+            <Button type="submit" variant="danger" disabled={cancelling || cancellationError?.blocked}>
+              {cancelling ? "A cancelar…" : "Confirmar cancelamento"}
+            </Button>
           </div>
         </form>
       </dialog>}

@@ -6,11 +6,11 @@ import campaigns from "../backend/routes/catalogCampaigns.ts";
 import { captureCatalogCampaignInterest, readCatalogCampaignCode } from "../backend/services/catalogCampaignAttribution.ts";
 import { campaignCode, campaignMessage, merchantCampaignPhone, ownedCatalogCover, prepareCatalogCampaignDispatch } from "../backend/services/catalogCampaigns.ts";
 
-const { from, rpc, getMe, writableGroup, dispatch, download } = vi.hoisted(() => ({
-  from: vi.fn(), rpc: vi.fn(), getMe: vi.fn(), writableGroup: vi.fn(), dispatch: vi.fn(), download: vi.fn()
+const { from, rpc, getMe, getGroups, writableGroup, dispatch, download } = vi.hoisted(() => ({
+  from: vi.fn(), rpc: vi.fn(), getMe: vi.fn(), getGroups: vi.fn(), writableGroup: vi.fn(), dispatch: vi.fn(), download: vi.fn()
 }));
 vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: { from, rpc, storage: { from: () => ({ download }) } } }));
-vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: { getMe } }));
+vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: { getMe, getGroups } }));
 vi.mock("../backend/services/schedulePolicy.ts", async (module) => ({
   ...await module<typeof import("../backend/services/schedulePolicy.ts")>(), writableScheduleGroup: writableGroup
 }));
@@ -53,15 +53,23 @@ afterAll(async () => {
 beforeEach(() => {
   vi.resetAllMocks();
   getMe.mockReturnValue({ id: `${phone}:21@s.whatsapp.net` });
+  getGroups.mockResolvedValue({});
   writableGroup.mockResolvedValue({ id: jid, subject: "Grupo da loja" });
   from.mockReturnValue(readResult(null));
-  rpc.mockReturnValue({ abortSignal: async () => ({ data: { id: campaignId, scheduleId, created: true, status: "pending" }, error: null }) });
+  rpc.mockImplementation((name: string) => name === "agentx_seller_catalog_availability" ? stockResult(5)
+    : { abortSignal: async () => ({ data: { id: campaignId, scheduleId, created: true, status: "pending" }, error: null }) });
 });
 afterEach(() => vi.unstubAllEnvs());
 
 function readResult(data: unknown) {
-  const query = { select: () => query, eq: () => query, abortSignal: () => query, maybeSingle: async () => ({ data, error: null }) };
+  const result = Promise.resolve({ data, error: null });
+  const query = { select: () => query, eq: () => query, gt: () => query, order: () => query, limit: () => query,
+    abortSignal: () => query, maybeSingle: () => result, then: result.then.bind(result) };
   return query;
+}
+
+function stockResult(stock: number) {
+  return { abortSignal: async () => ({ data: [{ product_id: productId, available_stock: stock }], error: null }) };
 }
 
 function publish(data: Record<string, unknown> = {}, authenticated = true) {
@@ -161,6 +169,28 @@ describe("catalogue group campaigns", () => {
     expect((await fetch(path, { method: "DELETE", headers })).status).toBe(409);
   });
 
+  it("shows available stock in the campaign list and preview, hiding products whose units are all held", async () => {
+    const headers = { authorization: "Bearer seller-session", "content-type": "application/json" };
+    const list = () => fetch(api, { headers });
+    const preview = () => fetch(api + "/preview", {
+      headers, method: "POST", body: JSON.stringify({ productId })
+    });
+    from.mockImplementation((table: string) => readResult(table === "products" ? [product] : []));
+    const listed = await list();
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({ data: { products: [{ id: productId, stock: 5, hasCover: true }] } });
+    rpc.mockReturnValueOnce(stockResult(0));
+    expect(await (await list()).json()).toMatchObject({ data: { products: [] } });
+
+    from.mockReturnValue(readResult(product));
+    const visiblePreview = await preview();
+    expect(visiblePreview.status).toBe(200);
+    expect((await visiblePreview.json()).preview).toContain("Stock disponível: 5");
+    rpc.mockReturnValueOnce(stockResult(0));
+    expect((await preview()).status).toBe(409);
+    expect(rpc.mock.calls).toEqual(Array.from({ length: 4 }, () => ["agentx_seller_catalog_availability", { p_user: userId }]));
+  });
+
   it("reads photo bytes only for the same account, claimed schedule and verified shop number", async () => {
     const filters: unknown[] = [];
     from.mockImplementation((table: string) => {
@@ -179,6 +209,9 @@ describe("catalogue group campaigns", () => {
     const prepared = await prepareCatalogCampaignDispatch(userId, campaignId, scheduleId, jid);
     expect(prepared).toMatchObject({ image, mimetype: "image/jpeg", filename: "produto.jpg" });
     expect(prepared?.message).toContain(`https://wa.me/${phone}`);
+    expect(prepared?.message).toContain("Stock disponível: 5");
+    rpc.mockReturnValueOnce(stockResult(0));
+    expect(await prepareCatalogCampaignDispatch(userId, campaignId, scheduleId, jid)).toBeNull();
     expect(filters).toContainEqual(["scheduled_messages", "status", "processing"]);
     expect(filters).toContainEqual(["products", "user_id", userId]);
     expect(download).toHaveBeenCalledExactlyOnceWith(coverPath, {}, expect.objectContaining({ signal: expect.any(AbortSignal) }));

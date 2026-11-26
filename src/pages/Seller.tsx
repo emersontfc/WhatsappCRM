@@ -5,7 +5,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { SellerCampaigns } from "../components/SellerCampaigns";
 import { apiFetch } from "../lib/api";
-import { sellerMethodKeys, sellerMethods, type PaymentDestinations, type SellerOverview, type SellerSettings } from "../../shared/seller";
+import { sellerMethodKeys, sellerMethods, sellerReservationLabel, type PaymentDestinations, type SellerOverview, type SellerSettings } from "../../shared/seller";
 
 const field = "block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-emerald-700";
 const action = "inline-flex min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 focus-visible:ring-2 focus-visible:ring-emerald-700";
@@ -125,7 +125,8 @@ export default function Seller() {
                   <Link className="flex flex-wrap items-start justify-between gap-2 rounded-lg p-2 hover:bg-slate-50" to={`/orders?q=${encodeURIComponent(order.order_number)}`}>
                     <span className="grid text-sm"><strong>{order.order_number}</strong><span className="text-slate-600">{order.customer_name || "Cliente"}</span></span>
                     <span className="grid text-right text-sm"><strong>{Number(order.total_amount).toLocaleString("pt-MZ")} {order.currency}</strong>
-                      <span className="text-slate-600">{orderStatus[order.status] ?? order.status}</span></span>
+                      <span className="text-slate-600">{orderStatus[order.status] ?? order.status}</span>
+                      <span className="text-xs text-slate-600 empty:hidden">{sellerReservationLabel(order.status, order.reservation_expires_at)}</span></span>
                   </Link>
                 </li>)}
               </ul>}

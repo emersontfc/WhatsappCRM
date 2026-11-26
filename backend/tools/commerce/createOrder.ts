@@ -4,7 +4,6 @@ import { isSellerMethod, sellerMethods } from "../../../shared/seller.ts";
 import { normalizeContactPhone } from "../../../shared/contactPhone.ts";
 import { salesToolFailure } from "../../services/salesToolFailure.ts";
 import { formatAgentOrderPaymentReply, readAgentPaymentMethods } from "../../services/agentPaymentReply.ts";
-import { sellerSettings } from "../../services/sellerWorkspace.ts";
 
 export const createOrderTool: ToolDefinition = {
   name: "createOrder",
@@ -33,9 +32,9 @@ export const createOrderTool: ToolDefinition = {
     required: ["productName"]
   },
   execute: async (args: { productName: string; quantity?: number; paymentMethod?: string }, ctx: ToolContext): Promise<ToolResult> => {
+    const paymentMethod = isSellerMethod(args.paymentMethod) || args.paymentMethod === "reference" ? args.paymentMethod : undefined;
     try {
       const quantity = args.quantity ?? 1;
-      const paymentMethod = isSellerMethod(args.paymentMethod) || args.paymentMethod === "reference" ? args.paymentMethod : undefined;
       const term = typeof args.productName === "string" ? normalizeCatalogText(args.productName) : "";
       if (!term || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
         return { success: false, message: "Indique o produto e uma quantidade entre 1 e 999." };
@@ -54,13 +53,6 @@ export const createOrderTool: ToolDefinition = {
       if (!phone) {
         return { success: false, message: "O contacto ainda não tem um número de telefone associado ao WhatsApp." };
       }
-      if (ctx.role === "lead" && isSellerMethod(paymentMethod)) {
-        const settings = await sellerSettings(ctx.userId);
-        if (!settings?.payment_destinations?.[paymentMethod]) {
-          return { success: false, message: `${sellerMethods[paymentMethod]} não está disponível. ${await readAgentPaymentMethods(ctx.userId)}` };
-        }
-      }
-
       const result = await commerceService.createOrder({
         userId: ctx.userId,
         customerPhone: phone,
@@ -69,7 +61,9 @@ export const createOrderTool: ToolDefinition = {
         sourceMessageId: ctx.messageId,
         paymentMethod,
         productId: product.id,
-        quantity
+        quantity,
+        expectedUnitPrice: product.price,
+        expectedCurrency: product.currency || "MT"
       });
 
       const order = result.order;
@@ -90,11 +84,16 @@ export const createOrderTool: ToolDefinition = {
       };
     } catch (error) {
       const detail = (error as { message?: string } | null)?.message;
+      if (detail === "Payment destination unavailable" && isSellerMethod(paymentMethod)) {
+        return { success: false, message: `${sellerMethods[paymentMethod]} não está disponível. ${await readAgentPaymentMethods(ctx.userId)}` };
+      }
       const fallback = detail === "Produto digital sem ficheiro ou conteúdo para entrega"
         ? "O ficheiro deste produto digital ainda não está pronto. Confirma a disponibilidade com a equipa."
-        : detail === "Produto indisponível ou sem stock suficiente"
-          ? "O produto está indisponível na quantidade pedida."
-          : "Não foi possível criar o pedido. Tenta novamente ou fala com a equipa.";
+        : detail === "Catalog price or currency changed"
+          ? "O preço ou a moeda mudou. Envia o nome do produto para veres o valor atual."
+          : detail === "Produto indisponível ou sem stock suficiente" || detail === "Insufficient available stock"
+            ? "O produto está indisponível na quantidade pedida."
+            : "Não foi possível criar o pedido. Tenta novamente ou fala com a equipa.";
       return salesToolFailure("createOrder", error, fallback);
     }
   }

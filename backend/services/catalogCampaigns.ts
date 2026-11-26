@@ -3,6 +3,7 @@ import { normalizeContactPhone } from "../../shared/contactPhone.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { scheduleUuid } from "./schedulePolicy.ts";
+import { readSellerAvailableStock } from "./sellerStock.ts";
 
 export const CATALOG_COVER_BUCKET = "agentx-catalog-covers";
 export const CATALOG_COVER_LIMIT = 5 * 1024 * 1024;
@@ -102,8 +103,10 @@ export async function prepareCatalogCampaignDispatch(userId: string, campaignId:
     .abortSignal(signal).maybeSingle();
   if (error) throw error;
   if (!product) return null;
+  const stock = (await readSellerAvailableStock(userId)).get(product.id) ?? 0;
+  if (stock <= 0) return null;
   const cover = await loadCatalogCover(userId, product.catalog_cover_path);
   if (!cover) return null;
-  const message = campaignMessage(product, record.caption, record.merchant_phone, record.code);
+  const message = campaignMessage({ ...product, stock }, record.caption, record.merchant_phone, record.code);
   return message.length <= 1024 ? { ...cover, message } : null;
 }

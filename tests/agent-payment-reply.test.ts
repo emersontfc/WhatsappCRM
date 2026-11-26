@@ -9,7 +9,8 @@ const phone = "258841234567";
 const snapshot = { method: "mpesa", recipient: "258841234000", name: "Loja Número Um" };
 const order = {
   id: "order-1", user_id: userId, customer_phone: phone, order_number: "AGX-AB12", status: "awaiting_payment",
-  total_amount: "250.25", currency: "MT", payment_method: "mpesa", seller_payment: snapshot, created_at: "2026-10-01"
+  total_amount: "250.25", currency: "MT", payment_method: "mpesa", seller_payment: snapshot, created_at: "2026-10-01",
+  reservation_expires_at: new Date(Date.now() + 30 * 60_000).toISOString()
 };
 const settings = {
   user_id: userId, notification_phone: "258840000000", payment_recipient: "258840000001", recipient_name: "Destino global",
@@ -63,6 +64,7 @@ describe("seller payment replies", () => {
     expect(answer).toContain("Pedido AGX-AB12 · 250,25 MT");
     expect(answer).toContain(`M-Pesa para ${snapshot.recipient} (titular: ${snapshot.name})`);
     expect(answer).toContain("referência AGX-AB12");
+    expect(answer).toContain("hora de Maputo");
     expect(answer).not.toMatch(/258841230099|258841230077|25884000000/);
     expect(from).not.toHaveBeenCalledWith("agentx_seller_settings");
   });
@@ -102,6 +104,14 @@ describe("seller payment replies", () => {
       expect(reply).toMatch(/confirmado[s]? com a equipa/);
       expect(reply).not.toMatch(/Paga por|titular|25884/);
     }
+  });
+
+  it("withholds payment details for expired reservations and legacy orders without a reservation", () => {
+    const expired = formatAgentOrderPaymentReply({ ...order, reservation_expires_at: "2020-01-01T00:00:00Z" });
+    const legacy = formatAgentOrderPaymentReply({ ...order, reservation_expires_at: null });
+    expect(expired).toMatch(/prazo da reserva|reserva .*expirou/i);
+    expect(legacy).toMatch(/equipa .+confirmar uma reserva/i);
+    for (const reply of [expired, legacy]) expect(reply).not.toContain(snapshot.recipient);
   });
 
   it("lists available method labels before a purchase without querying or rendering destinations from other fields", async () => {

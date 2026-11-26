@@ -47,6 +47,8 @@ SQL
   psql_fixture < supabase/migrations/26_seller_delivery_recovery.sql >/dev/null
   psql_fixture < supabase/migrations/27_whatsapp_action_claims.sql >/dev/null
   psql_fixture < supabase/migrations/32_human_handoff_alerts.sql >/dev/null
+  psql_fixture < supabase/migrations/35_seller_stock_reservations.sql >/dev/null
+  psql_fixture < supabase/migrations/36_seller_conversation_quotes.sql >/dev/null
 fi
 
 export AGENTX_FIXTURE_JWT_SECRET="agentx-inbox-jwt-test-secret-local-only"

@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 const fakeUser = "00000000-0000-4000-8000-000000000001";
 const groupAttachmentId = "00000000-0000-4000-8000-000000000025";
 const unrelatedAttachmentId = "00000000-0000-4000-8000-000000000026";
+const cancellableOrder = "00000000-0000-4000-8000-000000000027";
+const reviewingOrder = "00000000-0000-4000-8000-000000000028";
 const groupDocument = Buffer.from("%PDF-1.4 Receipt fixture");
 const fakeToken = "agentx-integration-session";
 const fakeSecret = "sb_secret_agentx-smoke-test-service-key";
@@ -32,10 +34,11 @@ let sellerDeliveryChecks = 0;
 let missingWorkflowContract = "";
 const workflowContracts = ["agentx_whatsapp_action_ready", "agentx_group_policy_ready", "agentx_catalog_campaigns_ready",
   "agentx_whatsapp_quote_ready", "agentx_whatsapp_operator_audit_ready", "agentx_human_handoff_ready",
-  "agentx_appointment_self_service_ready", "agentx_group_moderation_ready"];
+  "agentx_appointment_self_service_ready", "agentx_group_moderation_ready", "agentx_seller_reservations_ready",
+  "agentx_seller_quotes_ready"];
 const sellerMigrations = /migraç(?:ão|ões).*22/;
 
-const supabase = createServer((req, res) => {
+const supabase = createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   res.setHeader("content-type", "application/json");
   if (req.headers.apikey !== fakeSecret) {
@@ -50,6 +53,16 @@ const supabase = createServer((req, res) => {
   if (url.pathname === "/rest/v1/rpc/agentx_process_digital_deliveries") {
     workerCalls++;
     return res.end("0");
+  }
+  if (url.pathname === "/rest/v1/rpc/agentx_seller_cancel_order") {
+    assert.equal(req.method, "POST");
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const { p_user, p_order } = JSON.parse(Buffer.concat(chunks).toString());
+    assert.equal(p_user, fakeUser);
+    if (p_order === cancellableOrder) return res.end(JSON.stringify({ id: p_order, status: "cancelled" }));
+    res.statusCode = 400;
+    return res.end(JSON.stringify({ code: p_order === reviewingOrder ? "P0001" : "P0002" }));
   }
   const moduleContract = url.pathname.split("/").at(-1);
   if (workflowContracts.includes(moduleContract)) {
@@ -198,8 +211,8 @@ try {
 
   const healthy = await startApp();
   try {
-    const request = (path, auth = false) => fetch(healthy.base + path, {
-      headers: auth ? { authorization: `Bearer ${fakeToken}` } : {}, signal: AbortSignal.timeout(10_000)
+    const request = (path, auth = false, method = "GET") => fetch(healthy.base + path, {
+      headers: auth ? { authorization: `Bearer ${fakeToken}` } : {}, signal: AbortSignal.timeout(10_000), method
     });
     const readiness = await request("/api/ready");
     assert.equal(readiness.status, 200);
@@ -223,6 +236,15 @@ try {
     assert.equal(file.status, 200);
     assert.equal(file.headers.get("cache-control"), "no-store");
     assert.deepEqual(await file.json(), { success: true, name: "prova.pdf", mime: "application/pdf", base64: groupDocument.toString("base64") });
+
+    const cancel = (id, auth = true) => request(`/api/commerce/orders/${id}/cancel`, auth, "POST");
+    assert.equal((await cancel(cancellableOrder, false)).status, 401);
+    assert.equal((await cancel("invalid-id")).status, 400);
+    assert.equal((await cancel(reviewingOrder)).status, 409);
+    assert.equal((await cancel(unrelatedAttachmentId)).status, 404);
+    const cancelled = await cancel(cancellableOrder);
+    assert.equal(cancelled.status, 200);
+    assert.deepEqual(await cancelled.json(), { success: true, data: { id: cancellableOrder, status: "cancelled" } });
 
     const unknown = await request("/api");
     assert.equal(unknown.status, 404);

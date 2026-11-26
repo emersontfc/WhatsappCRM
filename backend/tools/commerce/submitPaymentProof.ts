@@ -5,6 +5,8 @@ import { extractProofWithAI } from "../../services/paymentProofExtractor.ts";
 import { supabaseAdmin } from "../../supabaseAdmin.ts";
 import { normalizeContactPhone } from "../../../shared/contactPhone.ts";
 
+const expiredProofReply = "A reserva expirou. Se já pagaste, fala com a equipa e indica o número do pedido antes de fazer outro pagamento.";
+
 export const submitPaymentProofTool: ToolDefinition = {
   name: "submitPaymentProof",
   description: "Regista o comprovativo em texto enviado nesta conversa para revisão. Se o cliente tiver vários pedidos, pede o número do pedido antes de registar.",
@@ -28,13 +30,16 @@ export const submitPaymentProofTool: ToolDefinition = {
       ?.trim().toUpperCase();
     try {
       const phones = /^2588[2-7]\d{7}$/.test(phone) ? [phone, phone.slice(3)] : [phone];
-      let lookup = supabaseAdmin.from("orders").select("id,order_number,customer_phone,seller_payment").eq("user_id", ctx.userId)
-        .in("customer_phone", phones).in("status", ["created", "awaiting_payment", "verification_pending", "rejected"]);
+      const statuses = ["created", "awaiting_payment", "verification_pending", "rejected"];
+      if (number) statuses.push("expired");
+      let lookup = supabaseAdmin.from("orders").select("id,order_number,customer_phone,seller_payment,status").eq("user_id", ctx.userId)
+        .in("customer_phone", phones).in("status", statuses);
       if (number) lookup = lookup.eq("order_number", number);
       const { data: orders, error } = await lookup.limit(2);
       if (error) throw error;
       if (!orders?.length) return { success: false, message: "Não encontrei um pedido pendente para este contacto." };
       if (orders.length > 1) return { success: false, message: "Há mais de um pedido pendente. Reenvia o comprovativo com o número do pedido." };
+      if (orders[0].status === "expired") return { success: false, message: expiredProofReply };
 
       const extracted = await extractProofWithAI(ctx.userId, text);
       const evidence = compareProofRecipient(extracted, orders[0].seller_payment);
@@ -44,10 +49,15 @@ export const submitPaymentProofTool: ToolDefinition = {
         success: true,
         message: evidence.recipientMatch === "mismatch"
           ? `O destinatário deste comprovativo difere dos dados de pagamento do pedido ${orders[0].order_number}. Envia o comprovativo correto ou fala com a equipa.`
-          : `O comprovativo do pedido ${orders[0].order_number} está registado. O pedido aguarda a confirmação do pagamento.`,
+          : result.created
+            ? `O comprovativo do pedido ${orders[0].order_number} está registado. O pedido aguarda a confirmação do pagamento.`
+            : `Este comprovativo já foi registado no pedido ${orders[0].order_number}. Confirma o estado do pedido antes de voltar a pagar.`,
         data: { verificationId: result.id, orderNumber: orders[0].order_number }
       };
-    } catch {
+    } catch (error) {
+      if ((error as { message?: string } | null)?.message === "Stock reservation expired") {
+        return { success: false, message: expiredProofReply };
+      }
       return { success: false, message: "Não foi possível registar o comprovativo. Tenta novamente ou fala com a equipa." };
     }
   }

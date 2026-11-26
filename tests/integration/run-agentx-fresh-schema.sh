@@ -31,6 +31,7 @@ psql_fixture -f /agentx/tests/integration/agentx-fresh-schema-contract.sql >/dev
 psql_fixture -f /agentx/tests/integration/group-policy-contract.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/whatsapp-operator-audit.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/human-handoff-contract.sql >/dev/null
+psql_fixture -f /agentx/tests/integration/seller-stock-reservations-contract.sql >/dev/null
 
 if install_fresh >"$logs/repeat" 2>&1; then
   printf 'Fresh installation unexpectedly accepted the existing schema.\n' >&2
@@ -41,4 +42,4 @@ if ! rg -q 'AgentX fresh install refused' "$logs/repeat"; then
   exit 1
 fi
 
-printf 'AgentX fresh schema passed: migrations, permissions, tenant RLS, storage ownership and populated-project refusal.\n'
+printf 'AgentX fresh schema passed: migrations, permissions, tenant RLS, reservations, storage ownership and populated-project refusal.\n'

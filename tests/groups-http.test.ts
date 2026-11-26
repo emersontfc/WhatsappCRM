@@ -64,8 +64,13 @@ beforeEach(() => {
   catalog.order.mockReturnValue(catalog);
   catalog.limit.mockResolvedValue({ data: [product], error: null });
   catalog.maybeSingle.mockResolvedValue({ data: product, error: null });
-  policyWrite.mockReturnValue({ abortSignal: async () => ({ data: null, error: null }) });
+  policyWrite.mockImplementation((name: string) => name === "agentx_seller_catalog_availability" ? promotionStock(1)
+    : { abortSignal: async () => ({ data: null, error: null }) });
 });
+
+function promotionStock(units: number) {
+  return { abortSignal: async () => ({ data: [{ product_id: product.id, available_stock: units }], error: null }) };
+}
 
 function request(path = "", method = "GET", body?: unknown, authorized = true) {
   return fetch(root + encodeURIComponent(jid) + path, {
@@ -243,5 +248,22 @@ describe("WhatsApp group administration API", () => {
     gateway.getGroupMetadata.mockResolvedValueOnce(metadata(false, true));
     expect((await publish({ text: "Teste" })).status).toBe(403);
     expect(gateway.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds products whose units are all held while keeping text-only promotions available", async () => {
+    policyWrite.mockReturnValue(promotionStock(0));
+    expect(await (await request("/promotion-products")).json()).toEqual({ success: true, products: [] });
+    expect((await request("/promotions", "POST", { productId: product.id, text: "Oferta" })).status).toBe(409);
+    expect(gateway.sendMessage).not.toHaveBeenCalled();
+    expect(policyWrite.mock.calls).toEqual([
+      ["agentx_seller_catalog_availability", { p_user: "account-a" }],
+      ["agentx_seller_catalog_availability", { p_user: "account-a" }]
+    ]);
+
+    policyWrite.mockClear();
+    gateway.sendMessage.mockResolvedValue({ key: { id: "text-promotion" } });
+    expect(await (await request("/promotions", "POST", { text: "Oferta da semana" })).json()).toEqual({ success: true, status: "sent" });
+    expect(policyWrite).not.toHaveBeenCalled();
+    expect(gateway.sendMessage).toHaveBeenCalledExactlyOnceWith("account-a", jid, "*Promoção*\n\nOferta da semana");
   });
 });
