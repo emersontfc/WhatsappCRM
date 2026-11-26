@@ -40,4 +40,19 @@ describe("WhatsApp connection policy", () => {
     secondary.mockResolvedValue({ version: [2, 3000, 1], isLatest: false });
     expect(await whatsappWebVersion()).toBeUndefined();
   });
+
+  it("recovers from a primary lookup that ignores its abort signal and never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const { whatsappWebVersion } = await import("../backend/services/whatsappConnectionPolicy");
+      primary.mockReturnValue(new Promise(() => {}));
+      secondary.mockResolvedValue({ version: [2, 3000, 3], isLatest: true });
+      const lookup = whatsappWebVersion();
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(await lookup).toEqual([2, 3000, 3]);
+      expect(primary.mock.calls[0][0].signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

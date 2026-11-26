@@ -54,6 +54,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
   private restartRequiredAttempts: Map<string, number> = new Map();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private manualReconnect = new Set<string>();
+  private startingConnections = new Map<string, Promise<WASocket | undefined>>();
   private maxReconnectAttempts = 5;
 
   private cancelReconnect(userId: string) {
@@ -80,7 +81,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
         message,
         metadata: metadata || {},
         created_at: new Date().toISOString(),
-      });
+      }).abortSignal(AbortSignal.timeout(4_000));
     } catch (err) {
       console.error("Error logging to Supabase:", err);
     }
@@ -91,7 +92,16 @@ export class WhatsAppManager implements IWhatsAppTransport {
     return session && session.status === "connected" ? 1 : 0;
   }
 
-  async createSession(userId: string, onUpdate?: (status: string, data?: string) => void) {
+  createSession(userId: string, onUpdate?: (status: string, data?: string) => void) {
+    const active = this.startingConnections.get(userId);
+    if (active) return active;
+    if (this.reconnectTimers.has(userId)) return Promise.resolve(undefined);
+    const connecting = this.openSession(userId, onUpdate).finally(() => this.startingConnections.delete(userId));
+    this.startingConnections.set(userId, connecting);
+    return connecting;
+  }
+
+  private async openSession(userId: string, onUpdate?: (status: string, data?: string) => void): Promise<WASocket | undefined> {
     try {
       console.log(`[WhatsApp] createSession called for ${userId}`);
       const existingSession = this.sessions.get(userId);
@@ -972,12 +982,15 @@ export class WhatsAppManager implements IWhatsAppTransport {
   }
 
   async pauseSession(userId: string) {
+    await this.startingConnections.get(userId);
+    this.cancelReconnect(userId);
+    this.manualReconnect.add(userId);
     const session = this.sessions.get(userId);
     if (session) {
+      this.sessions.delete(userId);
       try {
         session.socket.end(undefined);
       } catch (e) {}
-      this.sessions.delete(userId);
     }
     return { success: true };
   }
@@ -1080,6 +1093,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
   }
 
   async deleteSession(userId: string) {
+    await this.startingConnections.get(userId);
     this.cancelReconnect(userId);
     this.manualReconnect.delete(userId);
     this.reconnectAttempts.delete(userId);
@@ -1097,7 +1111,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
   getSessionStatus(userId: string) {
     const session = this.sessions.get(userId);
-    return session?.status || "disconnected";
+    if (session) return session.status;
+    return this.startingConnections.has(userId) || this.reconnectTimers.has(userId) ? "connecting" : "disconnected";
   }
 
   closeAllSessions() {

@@ -5,11 +5,23 @@ let pending: Promise<WAVersion | undefined> | undefined;
 
 async function lookupVersion() {
   for (const probe of [fetchLatestBaileysVersion, fetchLatestWaWebVersion]) {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const { version, isLatest } = await probe({ signal: AbortSignal.timeout(2_500) });
-      if (isLatest && version.length === 3 && version.every((part) => Number.isSafeInteger(part) && part >= 0)) return version;
+      // Some Baileys releases do not pass the supplied signal through to fetch.
+      const deadline = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+          resolve(undefined);
+          controller.abort();
+        }, 2_500);
+      });
+      const result = await Promise.race([probe({ signal: controller.signal }), deadline]);
+      if (result?.isLatest && result.version.length === 3 &&
+          result.version.every((part) => Number.isSafeInteger(part) && part >= 0)) return result.version;
     } catch {
       // Try the other supported lookup while keeping the pinned Baileys default available.
+    } finally {
+      clearTimeout(timer);
     }
   }
   return undefined;

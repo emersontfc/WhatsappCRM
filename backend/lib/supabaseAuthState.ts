@@ -64,6 +64,7 @@ export const useSupabaseAuthState = async (userId: string) => {
           .from("whatsapp_sessions")
           .select("session_data")
           .eq("user_id", userId)
+          .abortSignal(AbortSignal.timeout(6_000))
           .maybeSingle();
 
         if (row?.session_data) {

@@ -461,8 +461,6 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
   };
 
   const statusRequest = useRef<AbortController | null>(null);
-  const connectingSince = useRef<number | null>(null);
-  const qrSince = useRef<number | null>(null);
 
   const checkStatus = async (manual = false) => {
     if (statusRequest.current) return;
@@ -476,8 +474,6 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
       if (data?.success !== true || typeof data.status !== "string") throw new Error("O WhatsApp não confirmou o estado da ligação.");
       
       if (data.status === "connected") {
-        connectingSince.current = null;
-        qrSince.current = null;
         setStatus("connected");
         setQr(null);
         if (manual) toast.success("Conectado com sucesso!");
@@ -488,18 +484,6 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
           if (!signal.aborted && meData?.me) setMe(meData.me);
         } catch (e) {}
       } else if (data.status === "qr") {
-        connectingSince.current = null;
-        
-        // Check how long it's been showing QR
-        if (!qrSince.current) {
-          qrSince.current = Date.now();
-        } else if (Date.now() - qrSince.current > 120000) { // 120 seconds timeout for QR
-          console.log("[WhatsApp] QR timeout reached, resetting...");
-          qrSince.current = null;
-          if (await resetSession(signal)) toast.error("O código expirou. Tente novamente.");
-          return;
-        }
-
         // Fetch QR code specifically FIRST to avoid UI flicker
         const qrData = await apiFetch("/api/whatsapp/qr", { accountId: userId, signal });
         if (signal.aborted) return;
@@ -513,22 +497,10 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
           setQr(null);
         }
       } else if (data.status === "connecting") {
-        qrSince.current = null;
-        // Check how long it's been connecting
-        if (!connectingSince.current) {
-          connectingSince.current = Date.now();
-        } else if (Date.now() - connectingSince.current > 60000) { // 60 seconds timeout for connecting
-          console.log("[WhatsApp] Connecting timeout reached, resetting...");
-          connectingSince.current = null;
-          if (await resetSession(signal)) toast.error("A conexão demorou muito. Tente novamente.");
-          return;
-        }
         // Just wait if it's still connecting
         setStatus("connecting");
         setQr(null);
       } else {
-        connectingSince.current = null;
-        qrSince.current = null;
         setStatus(data.status || "disconnected");
         setQr(null);
         if (manual && data.status === "disconnected") toast.info("Desconectado.");
@@ -545,7 +517,7 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
     }
   };
 
-  const connect = async () => {
+  const connect = async (refreshQr = false) => {
     if (!userId) return;
     setLoading(true);
     setError(null);
@@ -553,10 +525,12 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
       const data = await apiFetch(`/api/whatsapp/connect`, {
         accountId: userId,
         method: "POST",
+        body: JSON.stringify({ refreshQr }),
       });
       
       setStatus(data.status || "connecting");
-      toast.info("Iniciando conexão...");
+      if (data.status === "connected") toast.success("WhatsApp ligado.");
+      else toast.info("A iniciar a ligação…");
     } catch (err: any) {
       console.error("[WhatsApp] Failed to connect:", err);
       setError(err.message);
@@ -565,7 +539,7 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
     }
   };
 
-  const resetSession = async (signal?: AbortSignal) => {
+  const resetSession = async () => {
     if (!userId) return;
     setLoading(true);
     setError(null);
@@ -573,23 +547,18 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
       const response = await apiFetch("/api/whatsapp/reset", {
         accountId: userId,
         method: "POST",
-        signal,
-        timeout: 8_000
+        timeout: 20_000
       });
-      if (signal?.aborted) return false;
       if (response?.success !== true) throw new Error("Não foi possível confirmar a reposição da sessão.");
       setStatus("disconnected");
       setQr(null);
       setPairingCode(null);
       setMe(null);
-      if (!signal) toast.success("Sessão resetada com sucesso!");
-      return true;
+      toast.success("Sessão desligada.");
     } catch (err: any) {
-      if (signal?.aborted) return false;
       console.error("Failed to reset:", err);
       setError(err.message);
       toast.error("Erro ao resetar sessão.");
-      return false;
     } finally {
       setLoading(false);
     }
@@ -1291,16 +1260,14 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
                               <div className="absolute inset-y-0 left-0 w-full bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-600 rounded-full animate-pulse" />
                             </div>
 
-                            {connectingSince.current && (Date.now() - connectingSince.current > 15000) && (
-                              <Button 
+                            <Button
                                 variant="ghost" 
                                 size="sm" 
                                 className="text-[10px] text-red-500 hover:text-red-600 font-bold uppercase tracking-widest mt-2 hover:bg-red-50 rounded-xl"
-                                onClick={() => void resetSession()}
+                                onClick={pauseSession}
                               >
-                                Reiniciar Conexão
+                                Cancelar ligação
                               </Button>
-                            )}
                           </div>
                         ) : qr ? (
                           <motion.div 
@@ -1319,7 +1286,7 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
                               variant="ghost" 
                               size="sm" 
                               className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 uppercase tracking-widest"
-                              onClick={connect}
+                              onClick={() => void connect(true)}
                             >
                               Atualizar QR Code
                             </Button>
@@ -1339,7 +1306,7 @@ export default function Dashboard({ user }: { user: DashboardUser }) {
                               </div>
                               <Button 
                                 className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider shadow-md shadow-emerald-500/20 transition-all"
-                                onClick={connect}
+                                onClick={() => void connect()}
                                 disabled={loading}
                               >
                                 {loading ? <RefreshCw className="animate-spin" /> : "GERAR QR CODE"}

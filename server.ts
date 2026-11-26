@@ -92,7 +92,7 @@ async function startServer() {
       frontendProblem(process.env, path.join(process.cwd(), "dist", "index.html")) === null,
     release,
     schedulerEnabled,
-    whatsappStatus: (userId) => whatsappManager.getSession(userId)?.status,
+    whatsappStatus: (userId) => whatsappManager.getSessionStatus(userId),
     deliveryStatus: () => delivery?.status() ?? { state: deliveryState, lastSuccessAt: null }
   });
 

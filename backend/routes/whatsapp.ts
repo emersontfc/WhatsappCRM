@@ -313,10 +313,13 @@ router.post("/connect", async (req: AuthRequest, res) => {
   if (!plan) return res.status(403).json({ success: false, error: "Plan not found" });
 
   try {
-    await whatsappManager.deleteSession(userId);
+    if (req.body?.refreshQr === true && whatsappManager.getSessionStatus(userId) === "qr") {
+      await whatsappManager.pauseSession(userId);
+    }
     await whatsappManager.createSession(userId);
-    const session = whatsappManager.getSession(userId);
-    res.json({ success: true, status: session?.status || "connecting" });
+    const status = whatsappManager.getSessionStatus(userId);
+    if (status === "disconnected") return res.status(503).json({ success: false, error: "O WhatsApp não iniciou a ligação. Tenta novamente." });
+    res.json({ success: true, status });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -332,18 +335,10 @@ router.get("/qr", (req: AuthRequest, res) => {
 
   try {
     const session = whatsappManager.getSession(userId);
-    if (!session) {
-      console.log(`[WhatsApp QR] No session found for user: ${userId}. Creating one...`);
-      whatsappManager.createSession(userId); // Trigger session creation if it doesn't exist
-      return res.json({ success: true, status: "connecting", qr: null });
-    }
-
-    console.log(`[WhatsApp QR] Returning QR for user: ${userId}, status: ${session.status}, hasQR: ${!!session.qr}`);
-
     res.json({
       success: true,
-      qr: session.qr || null,
-      status: session.status,
+      qr: session?.qr || null,
+      status: whatsappManager.getSessionStatus(userId),
     });
   } catch (error) {
     console.error(`[WhatsApp QR] Error for user ${userId}:`, error);
@@ -361,7 +356,7 @@ router.get("/status", (req: AuthRequest, res) => {
 
   try {
     const session = whatsappManager.getSession(userId);
-    let status = session?.status || "disconnected";
+    let status = whatsappManager.getSessionStatus(userId);
     
     // If status is QR but we don't have the code yet, report as connecting
     if (status === "qr" && !session?.qr) {

@@ -220,6 +220,9 @@ try {
   const call = (route, index, body) => api("/whatsapp" + route, index, body);
   const saveContact = (phone, index = 0, name = "Contacto guardado") => api("/contacts", index, { phone, name });
   assert.equal((await call("/chats", -1)).status, 401);
+  const existingConnection = await call("/connect", 0, {});
+  assert.equal(existingConnection.status, 200);
+  assert.equal((await existingConnection.json()).status, "connected");
   if (fresh) {
     const operations = await api("/operations");
     assert.equal(operations.status, 200);
@@ -1157,6 +1160,12 @@ try {
     assert.equal(repeats(), 0, "A replay after a process restart must not trigger an automation again");
     console.log("WhatsApp action deduplication passed: sync-only history, concurrent upserts and replay after restart.");
   }
+
+  assert.equal((await call("/pause", 1, {})).status, 200);
+  const qrAfterPause = (await (await call("/qr", 1)).json());
+  assert.deepEqual(qrAfterPause, { success: true, qr: null, status: "disconnected" });
+  assert.equal((await (await call("/status", 1)).json()).status, "disconnected");
+  console.log("Existing connection was preserved and QR polling did not restart a paused session.");
 
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
