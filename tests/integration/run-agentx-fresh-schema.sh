@@ -30,6 +30,7 @@ install_fresh >"$logs/install" 2>&1 || { cat "$logs/install"; exit 1; }
 psql_fixture -f /agentx/tests/integration/agentx-fresh-schema-contract.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/group-policy-contract.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/whatsapp-operator-audit.sql >/dev/null
+psql_fixture -f /agentx/tests/integration/human-handoff-contract.sql >/dev/null
 
 if install_fresh >"$logs/repeat" 2>&1; then
   printf 'Fresh installation unexpectedly accepted the existing schema.\n' >&2

@@ -30,6 +30,10 @@ CREATE TABLE public.agents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
   provider text, api_url text, api_key text, model text, is_active boolean, created_at timestamptz DEFAULT now()
 );
+CREATE TABLE public.agent_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
+  phone text NOT NULL, intent text, action text NOT NULL, data jsonb, response text, created_at timestamptz DEFAULT now()
+);
 CREATE TABLE public.leads (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES public.users(id),
   phone text NOT NULL, contact_id uuid REFERENCES public.contacts(id), name text, stage text, status text,
@@ -41,6 +45,7 @@ ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_logs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY fixture_profile ON public.users FOR SELECT TO authenticated
   USING (id = (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid);
 CREATE POLICY fixture_own_contacts ON public.contacts FOR SELECT TO authenticated

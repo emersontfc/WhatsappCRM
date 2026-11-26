@@ -219,7 +219,9 @@ Depois de aplicar as migrações, publique o commit da versão com `scripts/rele
 
 ### Atualizar os fluxos de WhatsApp, Grupos e Campanhas
 
-Numa base que já recebeu a migração 26, aplique `psql -X -f migrations/apply_agentx_whatsapp_workflows.sql` usando a ligação de migração. Para o SQL Editor do Supabase, gere o ficheiro com `node scripts/render-agentx-fresh-sql.mjs --whatsapp-upgrade > AgentX-migracoes-27-a-31.sql` e execute o conteúdo inteiro. Esta variante aplica as cinco migrações numa única transação. Depois, publique o commit e confirme `/api/ready`.
+Numa base que já recebeu a migração 26, aplique `psql -X -f migrations/apply_agentx_whatsapp_workflows.sql` usando a ligação de migração. Para o SQL Editor do Supabase, gere o ficheiro com `node scripts/render-agentx-fresh-sql.mjs --whatsapp-upgrade > AgentX-migracoes-27-a-32.sql` e execute o conteúdo inteiro. Esta variante aplica as seis migrações numa única transação. Depois, publique o commit e confirme `/api/ready`.
+
+Se a base já tiver a migração 31, pode executar apenas `supabase/migrations/32_human_handoff_alerts.sql`. Confirme que `SELECT public.agentx_human_handoff_ready();` devolve `true` antes de publicar. Com o WhatsApp ligado, teste a partir de um número de cliente e confirme que o aviso chega ao número principal em **Configurações** quando o cliente pede atendimento humano.
 
 Teste num grupo de piloto com a conta ligada como administradora. Confirme o horário de escrita, uma publicação do catálogo, a origem do lead depois de o cliente escrever em privado e um envio citado pela Agenda. O script de publicação valida as migrações e mantém uma imagem para reversão. As migrações acrescentam estruturas e deixam os registos disponíveis para uma nova publicação após uma reversão da imagem.
 

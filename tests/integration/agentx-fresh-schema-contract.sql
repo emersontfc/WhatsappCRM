@@ -2,7 +2,7 @@ BEGIN;
 
 DO $$
 BEGIN
-  ASSERT (SELECT count(*) = 1 FROM agentx_internal.installation WHERE version = '0000+00-31+20261123');
+  ASSERT (SELECT count(*) = 1 FROM agentx_internal.installation WHERE version = '0000+00-32+20261123');
   ASSERT to_regprocedure('public.exec_sql(text)') IS NULL;
   ASSERT NOT EXISTS (SELECT 1 FROM pg_class AS relation
     WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND NOT relrowsecurity);

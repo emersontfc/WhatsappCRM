@@ -617,6 +617,22 @@ try {
   assert.equal((await configure(changedSettings)).status, 200);
   await sell("Quero comprar o livro.", "purchase-one");
   assert.match(app.outbound.at(-1).content.text, /258840000003/);
+  await sell(`Qual é o número de M-Pesa para pagar o pedido ${order.order_number}?`, "purchase-payment-details");
+  const paymentReply = app.outbound.at(-1);
+  assert.equal(paymentReply.jid, identity.jid);
+  assert.ok(paymentReply.content.text.includes(order.order_number));
+  assert.match(paymentReply.content.text, /250\s+MT/);
+  assert.match(paymentReply.content.text, /M-Pesa.*258840000003.*Loja de teste/i);
+  assert.doesNotMatch(paymentReply.content.text, /258840000005|258850000004|258870000006|000111222333/);
+  await sell("E qual é o número?", "purchase-payment-details-follow-up");
+  assert.match(app.outbound.at(-1).content.text, /M-Pesa.*258840000003.*Loja de teste/i);
+  await app.simulate("sales", {
+    jid: "258840000010@s.whatsapp.net", text: `Qual é o número de M-Pesa para pagar o pedido ${order.order_number}?`,
+    messageId: "purchase-payment-details-wrong-buyer"
+  });
+  assert.equal(app.outbound.at(-1).jid, "258840000010@s.whatsapp.net");
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /258840000003|258840000005|258850000004|258870000006|000111222333/);
+  assert.equal((await read("leads", `?user_id=eq.${owner}&phone=eq.258840000010`)).length, 1);
   assert.equal((await (await api(seller)).json()).data.orders.length, 1);
   assert.equal((await api(`/commerce/orders/${order.id}/delivery`, 0, {})).status, 503);
 
@@ -724,7 +740,7 @@ try {
   assert.equal(manualLead.name, manual.name);
   assert.equal(manualLead.value, manual.value);
   assert.match(manualLead.notes, /Prefere o PDF/);
-  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, ownerLeadCount);
+  assert.equal((await read("leads", `?user_id=eq.${owner}`)).length, ownerLeadCount + 1);
   if (page) {
     await page.goto(app.base + `/leads?id=${lead.id}`);
     await page.getByRole("heading", { name: "Cliente atualizado", exact: true }).waitFor();
@@ -792,14 +808,47 @@ try {
 
   aiEndpointAvailable = false;
   const outageIdentity = { jid: "258840000007@s.whatsapp.net" };
-  await app.simulate("sales", { ...outageIdentity, text: "Quanto custa o Livro do piloto?", messageId: "outage-catalogue" });
-  assert.match(app.outbound.at(-1).content.text, /Livro do piloto.*250 MT.*1 em stock/);
-  await app.simulate("sales", { ...outageIdentity, text: "Quero comprar o livro.", messageId: "outage-purchase" });
-  assert.match(app.outbound.at(-1).content.text, /Encaminhei a conversa para a equipa/);
-  const [escalatedContact] = await read("contacts", "?phone=eq.258840000007");
+  await app.simulate("sales", { ...outageIdentity, text: "Quanto custa o Livro do piloto e aceitam M-Pesa?", messageId: "outage-catalogue" });
+  const catalogueReply = app.outbound.at(-1);
+  assert.equal(catalogueReply.jid, outageIdentity.jid);
+  assert.match(catalogueReply.content.text, /Livro do piloto.*250\s+MT.*1 em stock/);
+  for (const label of [/M-Pesa/i, /e-Mola/i, /transferência bancária/i]) assert.match(catalogueReply.content.text, label);
+  assert.doesNotMatch(catalogueReply.content.text, /258840000005|258850000004|258870000006|000111222333/);
+  const [catalogueContact] = await read("contacts", "?phone=eq.258840000007");
+  assert.equal(catalogueContact.ai_paused, false);
+  assert.deepEqual(await read("orders", "?source_message_id=eq.outage-catalogue"), []);
+  assert.deepEqual(await read("agentx_human_handoffs", `?contact_id=eq.${catalogueContact.id}`), []);
+
+  const handoffAdmin = "258850000011";
+  assert.equal((await api("/ai/profile", 0, { phone: "+258 85 000 0011", admin_phones: "258850000012" })).status, 200);
+  await app.simulate("sales", { ...outageIdentity, text: "Quero falar com uma pessoa.", messageId: "outage-human-request" });
+  const requesterReply = app.outbound.findLast((message) => message.jid === outageIdentity.jid);
+  assert.match(requesterReply?.content.text, /encaminh|equipa/i);
+  const [escalatedContact] = await read("contacts", `?id=eq.${catalogueContact.id}`);
   assert.equal(escalatedContact.ai_paused, true);
   assert.ok(escalatedContact.ai_paused_at);
-  assert.deepEqual(await read("orders", "?source_message_id=eq.outage-purchase"), []);
+  const handoffs = await read("agentx_human_handoffs", `?contact_id=eq.${catalogueContact.id}`);
+  assert.equal(handoffs.length, 1);
+  assert.equal(handoffs[0].user_id, owner);
+  assert.equal(handoffs[0].cause, "requested");
+  assert.equal(handoffs[0].source_message_id, "outage-human-request");
+  assert.equal(handoffs[0].paused_at, escalatedContact.ai_paused_at);
+  assert.deepEqual(await read("orders", "?source_message_id=eq.outage-human-request"), []);
+
+  await app.simulate("handoffs");
+  let [deliveredHandoff] = await read("agentx_human_handoffs", `?id=eq.${handoffs[0].id}`);
+  for (let attempt = 0; attempt < 20 && deliveredHandoff.status === "sending"; attempt++) {
+    await delay(100);
+    [deliveredHandoff] = await read("agentx_human_handoffs", `?id=eq.${handoffs[0].id}`);
+  }
+  assert.equal(deliveredHandoff.status, "sent");
+  assert.match(deliveredHandoff.whatsapp_message_id, /^fixture-outbound-/);
+  await app.simulate("handoffs");
+  const handoffAlerts = app.outbound.filter((message) => /à espera de atendimento humano/i.test(message.content.text ?? ""));
+  assert.equal(handoffAlerts.length, 1);
+  assert.equal(handoffAlerts[0].jid, `${handoffAdmin}@s.whatsapp.net`);
+  assert.equal(handoffAlerts[0].userId, owner);
+  assert.doesNotMatch(handoffAlerts[0].content.text, /258840000007|Quero falar com uma pessoa/);
 
   const smsIdentity = { jid: "258840000008@s.whatsapp.net" };
   aiEndpointAvailable = true;
@@ -1235,11 +1284,39 @@ try {
   assert.equal((await (await call("/status", 1)).json()).status, "disconnected");
   console.log("Existing connection was preserved and QR polling did not restart a paused session.");
 
+  const stockForOfflinePurchase = await fetch(new URL(`/products?id=eq.${product.id}`, rest), {
+    method: "PATCH", headers: storageAuth, body: JSON.stringify({ stock: 2 })
+  });
+  assert.equal(stockForOfflinePurchase.status, 204);
+  aiEndpointAvailable = false;
+  const aiBeforeOfflinePurchase = aiRequests;
+  const offlineBuyer = { jid: "258840000013@s.whatsapp.net", text: "Quero comprar 1 Livro do piloto por M-Pesa", messageId: "outage-exact-purchase" };
+  const documentsBeforeOfflinePurchase = sentDocuments(app.outbound).length;
+  await app.simulate("sales", offlineBuyer);
+  assert.equal(aiRequests, aiBeforeOfflinePurchase);
+  const [offlineOrder] = await read("orders", "?source_message_id=eq.outage-exact-purchase");
+  assert.equal(offlineOrder.status, "awaiting_payment");
+  assert.equal(offlineOrder.total_amount, 250);
+  assert.equal(offlineOrder.seller_payment.method, "mpesa");
+  assert.equal(offlineOrder.seller_payment.recipient, "258840000005");
+  const [offlineItem] = await read("order_items", `?order_id=eq.${offlineOrder.id}`);
+  assert.equal(offlineItem.product_id, product.id);
+  assert.equal(offlineItem.quantity, 1);
+  assert.equal(app.outbound.at(-1).jid, offlineBuyer.jid);
+  assert.match(app.outbound.at(-1).content.text, /M-Pesa.*258840000005/);
+  assert.ok(app.outbound.at(-1).content.text.includes(offlineOrder.order_number));
+  const [offlineBuyerContact] = await read("contacts", "?phone=eq.258840000013");
+  assert.equal(offlineBuyerContact.ai_paused, false);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
+
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log(`Seller flow passed on the ${fresh ? "freshly installed" : "repaired legacy"} schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document`);
   if (fresh) console.log("Fresh installation: deployment schema and subscription verified with stubbed Auth, Storage, AI and WhatsApp.");
-  console.log("AI outage fallback passed: catalogue from live data and human handoff before a purchase");
+  console.log("Seller replied during AI outage with live catalogue and configured payment methods; only the explicit request queued a human handoff");
+  console.log("Payment instructions reused the matching buyer's saved order destination after the merchant changed settings");
+  console.log("Explicit offline purchase created one unpaid order with stock and delivery unchanged");
   console.log("Outgoing M-Pesa and e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {
   await browser?.close();

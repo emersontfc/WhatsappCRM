@@ -51,7 +51,7 @@ describe("commerce catalog and private files", () => {
   it("looks up the live account catalog without selecting private content", async () => {
     const lookup = query([{ id: "book", name: "Introdução", category: "Educação", price: 30, stock: 2 }]);
     mocks.from.mockReturnValue(lookup);
-    mocks.rpc.mockResolvedValue({ data: "lead", error: null });
+    mocks.rpc.mockReturnValue({ abortSignal: vi.fn().mockResolvedValue({ data: "lead", error: null }) });
     const response = await getProductsCatalogTool.execute({ category: "educacao", search: "introducao" }, ctx);
     expect(response.success).toBe(true);
     expect(response.data[0].name).toBe("Introdução");

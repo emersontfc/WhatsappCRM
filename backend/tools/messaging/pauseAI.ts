@@ -5,7 +5,7 @@ export const pauseAITool: ToolDefinition = {
   name: "pause_ai_conversation",
   description: "Pausa a IA para um contacto específico (ativa o Modo Humano). Use quando o administrador disser 'pausa a IA nesta conversa', 'pausa o bot para o cliente X' ou quando um atendente humano for assumir.",
   category: "messaging",
-  allowedRoles: ["admin", "lead"], // Can be triggered by admin command or by lead asking for human
+  allowedRoles: ["admin"],
   parameters: {
     type: "object",
     properties: {

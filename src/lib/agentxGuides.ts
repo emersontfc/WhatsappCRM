@@ -60,7 +60,7 @@ export const guides: Guide[] = [
     steps: [
       { title: "Abre a conversa", detail: "Encontra o contacto na lista de Mensagens. Usa Carregar mensagens anteriores para consultar uma parte mais antiga do histórico." },
       { title: "Responde com contexto", detail: "Numa mensagem de texto guardada, escolhe Responder para a citar. Escreve a resposta e envia, ou usa Agendar mensagem para definir uma hora." },
-      { title: "Assume o atendimento", detail: "Seleciona Assumir Conversa para pausar a IA naquele contacto. Usa Retomar IA quando quiseres voltar a ativá-la." },
+      { title: "Assume o atendimento", detail: "Usa o filtro Humano para encontrar conversas com a IA pausada, incluindo as que o agente encaminhou. Para assumir outra conversa, seleciona Assumir Conversa. Depois de responderes, usa Retomar IA quando quiseres voltar a ativá-la." },
       { title: "Guarda notas internas", detail: "Abre o perfil CRM do contacto, escreve em Notas Internas e guarda. A nota fica disponível no painel para consulta." }
     ],
     keywords: "inbox chat citação atendimento humano notas etiquetas contacto"
@@ -106,7 +106,7 @@ export const guides: Guide[] = [
       { title: "Define o papel do agente", detail: "Escolhe Vendas ou Multifuncional para o percurso comercial. Escreve instruções que expliquem o que vendes, como atendes e quando o agente deve encaminhar a conversa para uma pessoa." },
       { title: "Testa com o teu catálogo", detail: "Publica um produto ativo. A partir de outro número, pergunta pelo produto e pelo preço. Em seguida testa um pedido e confirma se o lead e o pedido aparecem no painel." }
     ],
-    note: { title: "Quando for preciso intervir", detail: "Abre a conversa em Mensagens e usa Assumir Conversa. O histórico ajuda-te a perceber o que foi dito antes de responder." },
+    note: { title: "Avisos de atendimento humano", detail: "Em Configurações → Meu Perfil → Comandos e avisos pelo WhatsApp, guarda o número do administrador com o indicativo do país. Com a ligação ativa, o AgentX tenta avisar esse número quando a IA encaminha uma conversa. Se o número não puder ser usado, tenta o primeiro número adicional elegível. Na falta de um número separado elegível, o aviso pode aparecer na conversa do número ligado consigo mesmo. Abre Mensagens e usa o filtro Humano para responder." },
     keywords: "inteligência artificial gemini bot catálogo vendedor teste humano configuração"
   },
   {
@@ -134,6 +134,7 @@ export const guides: Guide[] = [
     action: { label: "Abrir Comprovativos pendentes", to: "/orders?tab=verifications" },
     steps: [
       { title: "Configura os meios de pagamento", detail: "Em Vendedor → Pagamento e avisos, guarda o destinatário e o nome do titular para cada meio que aceitas. Podes indicar um número de WhatsApp para receber avisos." },
+      { title: "Testa os dados enviados ao cliente", detail: "Pergunta «Como posso pagar?» no WhatsApp para ver os meios configurados. Num pedido pronto para pagar, verifica se o agente indica o destinatário, o titular, a referência e o total do pedido." },
       { title: "Recebe o comprovativo", detail: "Pede ao cliente para enviar o comprovativo e indicar o código do pedido, sobretudo se tiver mais de um pedido aberto. O AgentX tenta extrair o valor, a referência e o titular quando estão presentes." },
       { title: "Confirma no prestador", detail: "Abre Comprovativos pendentes e seleciona Rever e aprovar. Confere no prestador a entrada do dinheiro, o valor e o destinatário antes de marcar a confirmação e aprovar no AgentX." },
       { title: "Trata as divergências", detail: "Se o valor, o titular ou o destinatário divergirem, revê o pedido e usa Rejeitar com o motivo correspondente." }
@@ -223,7 +224,7 @@ export const guides: Guide[] = [
     icon: Terminal,
     action: { label: "Autorizar números no perfil", to: whatsappCommandsSettingsPath },
     steps: [
-      { title: "Autoriza o teu número", detail: "Em Configurações → Meu Perfil → Comandos pelo WhatsApp, preenche Número WhatsApp do administrador com indicativo do país. Usa Números adicionais autorizados para acrescentar outros números, separados por vírgula. Guarda as alterações." },
+      { title: "Autoriza o teu número", detail: "Em Configurações → Meu Perfil → Comandos e avisos pelo WhatsApp, preenche Número WhatsApp do administrador com indicativo do país. Usa Números adicionais autorizados para acrescentar outros números, separados por vírgula. Guarda as alterações." },
       { title: "Envia um comando à empresa", detail: "No WhatsApp de um número autorizado, abre uma conversa individual com o número ligado ao AgentX. Com a ligação ativa, envia /agentx para veres os comandos. A resposta chega nessa conversa." },
       { title: "Indica o número do cliente", detail: "Nos comandos de pausa, retoma ou agendamento, substitui o número do exemplo pelo número do cliente com indicativo do país." },
       { title: "Usa a conversa contigo mesmo", detail: "Também podes enviar um comando novo no chat contigo mesmo a partir do próprio número ligado." }

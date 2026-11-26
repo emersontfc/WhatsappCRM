@@ -1,6 +1,7 @@
 import { processAppointmentReminders } from "./services/appointmentDelivery.ts";
 import { dispatchScheduled } from "./services/scheduledDispatch.ts";
 import { processGroupAccessSchedules } from "./services/groupAccessSchedule.ts";
+import { processHumanHandoffs } from "./services/humanHandoff.ts";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { whatsappManager } from "./whatsappManager.ts";
 
@@ -46,6 +47,21 @@ export function startScheduler() {
   };
   const groupAccessTimer = setInterval(processGroupAccess, 60_000);
   void processGroupAccess();
+
+  let handoffsRunning = false;
+  const processHandoffs = async () => {
+    if (handoffsRunning) return;
+    handoffsRunning = true;
+    try {
+      await processHumanHandoffs(whatsappManager);
+    } catch (error) {
+      if (!isSchemaError(error)) console.warn("[Scheduler] Human handoff alerts unavailable:", (error as { code?: string })?.code);
+    } finally {
+      handoffsRunning = false;
+    }
+  };
+  const handoffTimer = setInterval(processHandoffs, 60_000);
+  void processHandoffs();
 
   async function dispatchDue(table: "scheduled_messages" | "scheduled_status", now: string) {
     const { data, error } = await supabaseAdmin.from(table).select("id,user_id")
@@ -132,5 +148,6 @@ export function startScheduler() {
     clearInterval(timer);
     clearInterval(appointmentTimer);
     clearInterval(groupAccessTimer);
+    clearInterval(handoffTimer);
   } };
 }

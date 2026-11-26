@@ -7,7 +7,11 @@ import { executeToolByName, getToolsPromptDescription, UserRole, ToolResult } fr
 import { submitPaymentProofTool } from "./tools/commerce/submitPaymentProof.ts";
 import { parseMozambicanReceiptSMS } from "./services/paymentProofSms.ts";
 import { normalizeContactPhone } from "../shared/contactPhone.ts";
-import { agentFallbackReply } from "./services/agentFallback.ts";
+import { agentFallbackReply, asksAboutAcceptedMethods, catalogOrderFromMessage, containsPaymentInstructions,
+  isExplicitPurchase, isPaymentQuestion, requestedPaymentMethods, requestsHumanHandoff, suggestsHumanHandoff } from "./services/agentFallback.ts";
+import { readAgentPaymentMethods, readAgentPaymentReply } from "./services/agentPaymentReply.ts";
+import { processHumanHandoffs, requestHumanHandoff } from "./services/humanHandoff.ts";
+import { recordCatalogInterest } from "./tools/commerce/getProductsCatalog.ts";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "your-fallback-encryption-key-32-chars-long";
 const IV_LENGTH = 16;
@@ -287,14 +291,16 @@ Use 'createMarketingCampaign' quando solicitado para preparar disparos direciona
 Você possui autonomia comercial: pode consultar o catálogo com 'getProductsCatalog', criar pedidos com 'createOrder', receber comprovativos com 'submitPaymentProof', consultar status com 'getOrderStatus' e qualificar leads com 'qualifyLead'.`;
     }
 
-    roleHeader = `VOCÊ É O AGENTX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Crie o pedido apenas após aceitação explícita da compra.\nAjude o cliente com cordialidade, precisão e integridade.`;
+    roleHeader = `VOCÊ É O AGENTX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Continue a conversar quando houver dúvidas sobre o catálogo. Crie o pedido apenas se a mensagem atual expressar aceitação da compra. As instruções de pagamento devem vir do sistema. Nunca escreva contas, números de pagamento ou promessas de encaminhamento na sua resposta. Se não conseguir esclarecer algo, faça uma pergunta curta ou diga que o cliente pode escrever "quero falar com a equipa".`;
     baseInstruction = agent.instructions || "Você é um assistente útil, ágil e inteligente.";
   }
 
   const toolsInstruction = getToolsPromptDescription(role);
   const systemInstruction = `${roleHeader}\n\n${baseInstruction}\n\n${toolsInstruction}${catalogContext}`;
   const contextStr = (Array.isArray(context) ? context : []).slice(-5)
-    .filter((turn): turn is string => typeof turn === "string").map((turn) => turn.slice(0, 1000)).join("\n");
+    .filter((turn): turn is string => typeof turn === "string")
+    .map((turn) => turn.startsWith("Agent:") && containsPaymentInstructions(turn)
+      ? "Agent: Foram consultadas as instruções do pedido." : turn.slice(0, 1000)).join("\n");
   const prompt = contextStr ? `CONTEXT:\n${contextStr}\n\nUSER:\n${message}` : message;
   
   const providers: Record<string, (agent: any, prompt: string, systemInstruction?: string, signal?: AbortSignal) => Promise<string>> = {
@@ -460,21 +466,25 @@ export function formatToolOutputForWhatsApp(toolName: string, result: ToolResult
   return formatted;
 }
 
-async function queueHumanReply(userId: string, contactId?: string): Promise<string> {
+async function queueHumanReply(whatsappManager: any, userId: string, contactId?: string, sourceMessageId?: string): Promise<string> {
   if (contactId) {
     try {
-      const { data, error } = await supabaseAdmin.from("contacts")
-        .update({ ai_paused: true, ai_paused_at: new Date().toISOString() })
-        .eq("user_id", userId).eq("id", contactId).select("id")
-        .abortSignal(AbortSignal.timeout(3_000)).maybeSingle();
-      if (!error && data?.id) return "Encaminhei a conversa para a equipa. Podes deixar os detalhes por aqui.";
-      console.warn("[AI Engine] Human takeover not confirmed", { code: error?.code });
+      const result = await requestHumanHandoff(userId, contactId, sourceMessageId);
+      if (result === "queued") {
+        void processHumanHandoffs(whatsappManager, new Date(), { userId, contactId })
+          .catch(() => console.warn("[Handoff] Immediate dispatch unavailable; queued for the scheduler"));
+        return "Encaminhei a conversa para a equipa. Podes deixar os detalhes por aqui.";
+      }
+      if (result === "already") return "O pedido de atendimento já está registado. Podes deixar os detalhes por aqui.";
     } catch {
       console.warn("[AI Engine] Human takeover unavailable");
     }
   }
-  return "Não consegui consultar essa informação agora. Podes pedir apoio à equipa nesta conversa.";
+  return 'Não foi possível encaminhar a conversa agora. Tenta escrever "quero falar com a equipa" novamente.';
 }
+
+const continueConversation = 'Diz-me o que procuras para eu ajudar. Se preferires atendimento humano, escreve "quero falar com a equipa".';
+const confirmPurchase = 'Para registar o pedido, indica o nome do produto, a quantidade e o meio de pagamento. Por exemplo: "Quero comprar 1 Livro por M-Pesa".';
 
 export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false, sourceMessageId?: string, contactId?: string) {
   try {
@@ -695,8 +705,23 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     await whatsappManager.sendPresenceUpdate(userId, jid, "composing");
 
     let catalogContext = "";
+    let localReply: string | null = null;
     let liveProducts: Awaited<ReturnType<typeof commerceService.listAgentProducts>> | null = null;
+    const explicitPurchase = role === "lead" && isExplicitPurchase(text);
+    const methods = role === "lead" ? requestedPaymentMethods(text, explicitPurchase) : [];
+    const orderNumber = role === "lead" ? text.match(/\bAGX-[A-Z0-9]+(?:-[A-Z0-9]+)*\b/i)?.[0] : undefined;
+    const paymentQuestion = role === "lead" && isPaymentQuestion(text, context);
+    const isCatalogAgent = !agent.specialization || ["vendas", "multifuncional"].includes(agent.specialization);
+    const paymentReply = () => readAgentPaymentReply({ userId, phone: toolPhone,
+      desiredMethod: methods.length === 1 ? methods[0] : undefined, orderNumber });
     if (role === "lead") {
+      if (requestsHumanHandoff(text)) {
+        localReply = await queueHumanReply(whatsappManager, userId, contactData?.id, sourceMessageId);
+      } else if (paymentQuestion && orderNumber) {
+        localReply = await paymentReply();
+      }
+    }
+    if (role === "lead" && !localReply) {
       try {
         liveProducts = await commerceService.listAgentProducts(userId);
         const recent = liveProducts.slice(0, 20).map((product) => ({
@@ -706,11 +731,30 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       } catch {
         catalogContext = "\n\nO catálogo está temporariamente indisponível. Consulte getProductsCatalog antes de informar preços e não invente produtos.";
       }
+      if (isCatalogAgent) {
+        localReply = agentFallbackReply(text, liveProducts, context);
+        if (localReply && liveProducts) {
+          await recordCatalogInterest(toolContext);
+        }
+      }
+      if (explicitPurchase && isCatalogAgent && liveProducts && sourceMessageId) {
+        const confirmed = catalogOrderFromMessage(text, liveProducts);
+        if (confirmed) {
+          localReply = methods.length > 1 ? "Escolhe um único método de pagamento para eu registar o pedido."
+            : (await executeToolByName("createOrder", { ...confirmed, paymentMethod: methods[0] }, toolContext)).message;
+        }
+      } else if (paymentQuestion) {
+        if (localReply || asksAboutAcceptedMethods(text)) {
+          localReply = [localReply, await readAgentPaymentMethods(userId)].filter(Boolean).join("\n\n");
+        } else {
+          localReply = await paymentReply();
+        }
+      }
     }
-    const providerReply = await requestAgentReply(agent, text, context, role, catalogContext);
+    const providerReply = localReply ? null : await requestAgentReply(agent, text, context, role, catalogContext);
     await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
-    const responseText = providerReply ?? (role === "lead"
-      ? agentFallbackReply(text, liveProducts, context) ?? await queueHumanReply(userId, contactData?.id)
+    const responseText = localReply ?? providerReply ?? (role === "lead"
+      ? explicitPurchase ? confirmPurchase : agentFallbackReply(text, null) ?? continueConversation
       : "O provedor de IA está indisponível. Usa a opção Testar agente em Agente IA para verificar a ligação.");
 
     if (responseText) {
@@ -723,9 +767,18 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         finalReply = parsed.reply || "";
         
         // 1. Tool Registry execution (New Agentic Architecture)
-        if (parsed.tool) {
+        const tool = parsed.tool?.trim().toLowerCase();
+        if (role === "lead" && tool === "createorder" && !explicitPurchase) {
+          finalReply = confirmPurchase;
+        } else if (role === "lead" && (tool === "pause_ai_conversation" || tool === "pause_ai" || parsed.action === "pause_bot")) {
+          finalReply = continueConversation;
+        } else if (parsed.tool) {
           console.log(`[AI Engine] Executing Tool: "${parsed.tool}" for role "${role}"`);
-          const toolResult = await executeToolByName(parsed.tool, parsed.args || {}, toolContext);
+          const args = role === "lead" && tool === "createorder"
+            ? { ...parsed.args, paymentMethod: methods[0] } : parsed.args || {};
+          const toolResult = role === "lead" && tool === "createorder" && methods.length > 1
+            ? { success: false, message: "Escolhe um único método de pagamento para eu registar o pedido." }
+            : await executeToolByName(parsed.tool, args, toolContext);
 
           if (toolResult) {
             actionResult = toolResult;
@@ -763,6 +816,12 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         finalReply = responseText.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
       }
 
+      if (role === "lead" && providerReply && containsPaymentInstructions(finalReply) &&
+          !(parsed?.tool?.trim().toLowerCase() === "createorder" && actionResult?.success)) {
+        finalReply = await paymentReply();
+      } else if (role === "lead" && providerReply && suggestsHumanHandoff(finalReply)) {
+        finalReply = continueConversation;
+      }
       if (finalReply) {
         await whatsappManager.sendMessage(userId, jid, finalReply);
       }
@@ -782,7 +841,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
       await whatsappManager.log(userId, "info", `Agente IA respondeu para ${jid}`, { 
         provider: agent.provider, 
-        response: finalReply,
+        response: containsPaymentInstructions(finalReply) ? "Foram consultadas as instruções do pedido." : finalReply,
         intent: parsed?.intent,
         action: parsed?.tool || parsed?.action,
         action_success: actionResult?.success

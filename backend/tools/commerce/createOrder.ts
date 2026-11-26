@@ -3,6 +3,8 @@ import { commerceService, normalizeCatalogText } from "../../services/commerceSe
 import { isSellerMethod, sellerMethods } from "../../../shared/seller.ts";
 import { normalizeContactPhone } from "../../../shared/contactPhone.ts";
 import { salesToolFailure } from "../../services/salesToolFailure.ts";
+import { formatAgentOrderPaymentReply, readAgentPaymentMethods } from "../../services/agentPaymentReply.ts";
+import { sellerSettings } from "../../services/sellerWorkspace.ts";
 
 export const createOrderTool: ToolDefinition = {
   name: "createOrder",
@@ -52,6 +54,12 @@ export const createOrderTool: ToolDefinition = {
       if (!phone) {
         return { success: false, message: "O contacto ainda não tem um número de telefone associado ao WhatsApp." };
       }
+      if (ctx.role === "lead" && isSellerMethod(paymentMethod)) {
+        const settings = await sellerSettings(ctx.userId);
+        if (!settings?.payment_destinations?.[paymentMethod]) {
+          return { success: false, message: `${sellerMethods[paymentMethod]} não está disponível. ${await readAgentPaymentMethods(ctx.userId)}` };
+        }
+      }
 
       const result = await commerceService.createOrder({
         userId: ctx.userId,
@@ -67,26 +75,11 @@ export const createOrderTool: ToolDefinition = {
       const order = result.order;
       const orderMethod = order.payment_method;
       const totalFormatted = `${order.total_amount} ${order.currency}`;
-      if (order.status !== "created" && order.status !== "awaiting_payment") {
-        const instructions = order.status === "verification_pending" ? "O comprovativo aguarda revisão. Aguarde o resultado."
-          : order.status === "paid" || order.status === "fulfilled" ? "O pagamento já foi confirmado."
-          : "Consulte o estado do pedido com a equipa antes de pagar.";
-        return { success: true, message: `Pedido ${order.order_number} · ${totalFormatted}. ${instructions}` };
-      }
-
-      // 4. Instructions based on payment method
-      let instructions = "Pede à equipa os dados de pagamento antes de transferires qualquer valor.";
-      const destination = order.seller_payment;
-      if (destination && isSellerMethod(destination.method)) {
-        instructions = `Pague ${totalFormatted} por ${sellerMethods[destination.method]} para ${destination.recipient} (titular: ${destination.name}). Envie o texto do comprovativo nesta conversa com o número ${order.order_number}.`;
-        if (isSellerMethod(paymentMethod) && paymentMethod !== destination.method) {
-          instructions = `O pedido está registado para ${sellerMethods[destination.method]}. Se precisares de pagar por ${sellerMethods[paymentMethod]}, confirma primeiro com a equipa. ${instructions}`;
-        }
-      }
+      const instructions = formatAgentOrderPaymentReply(order, isSellerMethod(paymentMethod) ? paymentMethod : undefined);
 
       return {
         success: true,
-        message: `Pedido ${order.order_number} · ${totalFormatted}. ${instructions}`,
+        message: instructions,
         data: {
           orderNumber: order.order_number,
           orderId: order.id,

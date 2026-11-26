@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encrypt, runAI, runCustom, runGemini } from "../backend/agentManager.ts";
-import { agentFallbackReply } from "../backend/services/agentFallback.ts";
+import { agentFallbackReply, catalogOrderFromMessage, containsPaymentInstructions, isExplicitPurchase,
+  isPaymentQuestion, requestedPaymentMethods, requestsHumanHandoff, suggestsHumanHandoff } from "../backend/services/agentFallback.ts";
 
 const { geminiClient, generateContent } = vi.hoisted(() => ({ geminiClient: vi.fn(), generateContent: vi.fn() }));
 vi.mock("@google/genai", () => ({
@@ -83,7 +84,7 @@ describe("AI provider resilience", () => {
 
 describe("WhatsApp without a model", () => {
   const products = [
-    { name: "Livro do piloto", price: "250", currency: "MT", stock: 2 },
+    { id: "book", name: "Livro do piloto", price: "250", currency: "MT", stock: 2 },
     { name: "Camisa verde", price: 500, currency: "MT", stock: 0 }
   ];
 
@@ -98,9 +99,42 @@ describe("WhatsApp without a model", () => {
       .toContain("Livro do piloto");
   });
 
-  it("leaves purchases, payments and unavailable catalogue data for the team", () => {
-    expect(agentFallbackReply("Quero comprar o livro do piloto, quanto custa?", products)).toBeNull();
+  it("treats price questions as read-only even when the buyer mentions a purchase and payment", () => {
+    const question = "Quero comprar o livro, quanto custa e aceitam M-Pesa?";
+    expect(agentFallbackReply(question, products)).toContain("Livro do piloto · 250 MT · 2 em stock");
+    expect(isExplicitPurchase(question)).toBe(false);
+    expect(isPaymentQuestion(question)).toBe(true);
     expect(agentFallbackReply("Paguei 250 MT pelo livro do piloto, confirma?", products)).toBeNull();
     expect(agentFallbackReply("Mostra o catálogo", null)).toBeNull();
+  });
+
+  it("accepts explicit purchases and recognises an exact item and quantity without the model", () => {
+    const order = "Quero comprar 2 unidades de Livro do piloto por e-Mola";
+    expect(isExplicitPurchase(order)).toBe(true);
+    expect(isPaymentQuestion(order)).toBe(false);
+    expect(requestedPaymentMethods(order)).toEqual(["emola"]);
+    expect(catalogOrderFromMessage(order, products)).toEqual({ productName: "book", quantity: 2 });
+    expect(catalogOrderFromMessage("Quero comprar 2 livros", products)).toBeNull();
+    expect(isExplicitPurchase("Não quero comprar o livro")).toBe(false);
+  });
+
+  it("recognises an explicit request for a person without assuming handoff for catalogue questions", () => {
+    expect(requestsHumanHandoff("Quero falar com uma pessoa.")).toBe(true);
+    expect(requestsHumanHandoff("Passe-me para um atendente.")).toBe(true);
+    expect(requestsHumanHandoff("Não quero falar com a equipa. Quero consultar o catálogo.")).toBe(false);
+    expect(requestsHumanHandoff("Quanto custa o livro?")).toBe(false);
+    expect(requestsHumanHandoff("Tens o livro Como Falar Com Uma Pessoa?")).toBe(false);
+    expect(suggestsHumanHandoff("Vou passar o teu caso para o atendimento humano.")).toBe(true);
+  });
+
+  it("identifies payment directions in untrusted provider replies", () => {
+    expect(containsPaymentInstructions("Paga por M-Pesa para 84 123 4567")).toBe(true);
+    expect(containsPaymentInstructions("Link de pagamento: https://payments.invalid")).toBe(true);
+    expect(containsPaymentInstructions("Aceitamos M-Pesa. O livro custa 250 MT.")).toBe(false);
+  });
+
+  it("uses a short number follow-up only in the context of a payment conversation", () => {
+    expect(isPaymentQuestion("E qual é o número?", ["User: Dá para pagar por e-Mola?", "Agent: Aceitamos e-Mola."])).toBe(true);
+    expect(isPaymentQuestion("E qual é o número?", ["Agent: A loja abre às 9 horas."])).toBe(false);
   });
 });

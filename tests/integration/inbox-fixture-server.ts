@@ -1,6 +1,7 @@
 import { whatsappManager } from "../../backend/whatsappManager.ts";
 import { handleAgentMessage } from "../../backend/agentManager.ts";
 import { handleIncomingMessage } from "../../backend/automationManager.ts";
+import { processHumanHandoffs } from "../../backend/services/humanHandoff.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 
 // Only the WhatsApp transport is simulated. The app and its database client are unchanged.
@@ -46,6 +47,7 @@ process.on("message", async (message: {
   if (message.event === "unconfirmed") confirmSend = false;
   if (message.event === "confirmed") confirmSend = true;
   let ok = true;
+  if (message.event === "handoffs") await processHumanHandoffs(whatsappManager);
   if (message.event === "ingress" && message.text && message.messageId && message.jid) {
     const userId = message.account === "other" ? other : owner;
     const session = message.account === "other" ? otherSession : ownerSession;

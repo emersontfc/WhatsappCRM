@@ -63,6 +63,7 @@ COMMIT;
 \ir ../supabase/migrations/29_catalog_campaigns.sql
 \ir ../supabase/migrations/30_whatsapp_quoted_agenda.sql
 \ir ../supabase/migrations/31_whatsapp_operator_audit.sql
+\ir ../supabase/migrations/32_human_handoff_alerts.sql
 \ir apply_agentx_v2.sql
 
 BEGIN;
@@ -103,6 +104,7 @@ BEGIN
      OR public.agentx_catalog_campaigns_ready() IS DISTINCT FROM true
      OR public.agentx_whatsapp_quote_ready() IS DISTINCT FROM true
      OR public.agentx_whatsapp_operator_audit_ready() IS DISTINCT FROM true
+     OR public.agentx_human_handoff_ready() IS DISTINCT FROM true
      OR NOT has_function_privilege('service_role', 'public.agentx_seller_confirm_delivery(uuid,uuid)', 'EXECUTE')
      OR public.agentx_contact_phone('841234567') IS DISTINCT FROM '258841234567' THEN
     RAISE EXCEPTION 'AgentX fresh install: schema contract is incomplete';
@@ -110,7 +112,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-31+20261123');
+INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-32+20261123');
 COMMIT;
 NOTIFY pgrst, 'reload schema';
 SELECT pg_advisory_unlock(879621, 3);

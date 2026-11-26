@@ -500,25 +500,28 @@ export default function Settings() {
 
                       <section id="whatsapp-comandos" aria-labelledby="whatsapp-comandos-title" tabIndex={-1}
                         className="scroll-mt-4 space-y-4 border-t border-slate-100 pt-4 focus:outline-none">
-                        <h2 id="whatsapp-comandos-title" className="font-semibold text-slate-900">Comandos pelo WhatsApp</h2>
+                        <h2 id="whatsapp-comandos-title" className="font-semibold text-slate-900">Comandos e avisos pelo WhatsApp</h2>
                         <div className="space-y-1.5">
                           <label htmlFor="whatsapp-admin-phone" className="text-sm font-medium text-slate-900">Número WhatsApp do administrador</label>
                           <Input id="whatsapp-admin-phone" type="tel" aria-describedby="whatsapp-admin-phone-help"
                             value={profile.phone || ""} onChange={e => setProfile({ ...profile, phone: e.target.value })}
                             placeholder="+258 84 123 4567" />
-                          <p id="whatsapp-admin-phone-help" className="text-xs text-slate-600">Indica, com indicativo do país, o número a partir do qual vais enviar comandos ao AgentX.</p>
+                          <p id="whatsapp-admin-phone-help" className="text-xs text-slate-600">Indica um número com indicativo do país para enviar comandos ao AgentX e receber avisos de atendimento humano.</p>
                         </div>
                         <div className="space-y-1.5">
                           <label htmlFor="whatsapp-admin-phones" className="text-sm font-medium text-slate-900">Números adicionais autorizados <span className="font-normal text-slate-500">(opcional)</span></label>
                           <Input id="whatsapp-admin-phones" aria-describedby="whatsapp-admin-phones-help"
                             value={profile.admin_phones || ""} onChange={e => setProfile({ ...profile, admin_phones: e.target.value })}
                             placeholder="+258 85 123 4567, +258 86 123 4567" />
-                          <p id="whatsapp-admin-phones-help" className="text-xs text-slate-600">Separa os números por vírgula e inclui o indicativo do país em cada um.</p>
+                          <p id="whatsapp-admin-phones-help" className="text-xs text-slate-600">Separa os números por vírgula e inclui o indicativo do país em cada um. Se o número principal não puder ser usado para um aviso de atendimento, o AgentX tenta o primeiro número adicional elegível.</p>
                         </div>
                         <div className="space-y-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 text-sm text-slate-700">
                           <p>Depois de guardar, abre no teu WhatsApp uma conversa individual com o número ligado ao AgentX e envia <code className="font-semibold text-emerald-900">/agentx</code>.</p>
-                          <p>O campo <strong>WhatsApp para avisos</strong> em Vendedor serve para receber notificações. A aprovação de pagamentos é feita no painel.</p>
-                          <Link to="/docs#whatsapp-commands" className="font-semibold text-emerald-800 underline underline-offset-2">Ver comandos e exemplos</Link>
+                          <p>Em Vendedor, o campo <strong>WhatsApp para avisos</strong> recebe notificações de pagamento. A aprovação é feita no painel.</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-2">
+                            <Link to="/docs#whatsapp-commands" className="font-semibold text-emerald-800 underline underline-offset-2">Ver comandos e exemplos</Link>
+                            <Link to="/docs#messages-inbox" className="font-semibold text-emerald-800 underline underline-offset-2">Como assumir uma conversa</Link>
+                          </div>
                         </div>
                       </section>
 

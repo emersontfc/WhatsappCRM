@@ -34,7 +34,7 @@ export function WhatsAppOperatorCard({ agendaLink = true }: { agendaLink?: boole
   };
 
   return <Card>
-    <CardHeader><CardTitle>Comandos pelo WhatsApp</CardTitle></CardHeader>
+    <CardHeader><CardTitle>Comandos e avisos pelo WhatsApp</CardTitle></CardHeader>
     <CardContent className="grid gap-4">
       <div className="space-y-2 text-sm text-slate-700">
         <p>Do teu WhatsApp autorizado, abre uma conversa individual com o número ligado ao AgentX. Envia <code className="font-semibold text-emerald-900">/agentx</code> para veres os comandos.</p>
@@ -62,13 +62,18 @@ export function WhatsAppOperatorCard({ agendaLink = true }: { agendaLink?: boole
         </ul>
       </details>
       <div className="space-y-2 border-t border-slate-100 pt-3">
+        <div className="space-y-1 text-sm text-slate-700">
+          <p className="font-semibold text-slate-900">Avisos de atendimento humano</p>
+          <p>Quando a IA encaminha uma conversa, o AgentX tenta enviar um aviso para o número do administrador indicado no perfil. Em Mensagens, usa o filtro Humano para encontrar a conversa e responder.</p>
+          <Link to="/messages" className="inline-block font-semibold text-emerald-800 underline underline-offset-2">Abrir Mensagens</Link>
+        </div>
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={alerts === true} disabled={alerts === null || saving}
             onChange={(event) => void update(event.target.checked)} />
           Avisar no número ligado quando um cliente escrever, até uma vez por contacto a cada 30 minutos.
         </label>
         {unavailable && <p className="text-sm text-slate-600" role="status">Preferências de aviso indisponíveis.</p>}
-        <p className="text-xs text-slate-600">Em Vendedor, o WhatsApp para avisos recebe notificações de vendas. A aprovação de pagamentos é feita no painel.</p>
+        <p className="text-xs text-slate-600">Em Vendedor, o WhatsApp para avisos recebe notificações de pagamento. A aprovação é feita no painel.</p>
       </div>
       {agendaLink && <Link to="/schedule" className="text-sm font-medium text-emerald-700 underline">Abrir agenda</Link>}
     </CardContent>

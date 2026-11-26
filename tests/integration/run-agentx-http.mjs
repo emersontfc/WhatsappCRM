@@ -31,7 +31,7 @@ let sellerDeliveryState = "ready";
 let sellerDeliveryChecks = 0;
 let missingWorkflowContract = "";
 const workflowContracts = ["agentx_whatsapp_action_ready", "agentx_group_policy_ready", "agentx_catalog_campaigns_ready",
-  "agentx_whatsapp_quote_ready", "agentx_whatsapp_operator_audit_ready"];
+  "agentx_whatsapp_quote_ready", "agentx_whatsapp_operator_audit_ready", "agentx_human_handoff_ready"];
 const sellerMigrations = /migraç(?:ão|ões).*22/;
 
 const supabase = createServer((req, res) => {

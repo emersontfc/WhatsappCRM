@@ -3,6 +3,19 @@ import { ToolDefinition, ToolContext, ToolResult } from "../types.ts";
 import { commerceService, normalizeCatalogText } from "../../services/commerceService.ts";
 import { salesToolFailure } from "../../services/salesToolFailure.ts";
 
+export async function recordCatalogInterest(ctx: ToolContext) {
+  if (ctx.role !== "lead" || !/^\d{8,15}$/.test(ctx.phone)) return;
+  try {
+    const { error } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
+      p_user: ctx.userId, p_phone: ctx.phone, p_contact: ctx.contactId ?? null,
+      p_name: ctx.contactName ?? null, p_activity: "catalog", p_message: ctx.incomingText ?? null
+    }).abortSignal(AbortSignal.timeout(3_000));
+    if (error) console.warn("[Catalog] Could not capture the sales lead", error.code);
+  } catch {
+    console.warn("[Catalog] Sales lead write unavailable");
+  }
+}
+
 export const getProductsCatalogTool: ToolDefinition = {
   name: "getProductsCatalog",
   description: "Consulta o catálogo de produtos e serviços disponíveis com preços reais, estoque e categorias.",
@@ -28,17 +41,7 @@ export const getProductsCatalogTool: ToolDefinition = {
         .filter((product) => normalizeCatalogText(product.category || "").includes(category) &&
           normalizeCatalogText(product.name).includes(search));
 
-      if (ctx.role === "lead" && /^\d{8,15}$/.test(ctx.phone)) {
-        try {
-          const { error } = await supabaseAdmin.rpc("agentx_capture_sales_lead", {
-            p_user: ctx.userId, p_phone: ctx.phone, p_contact: ctx.contactId ?? null,
-            p_name: ctx.contactName ?? null, p_activity: "catalog", p_message: ctx.incomingText ?? null
-          });
-          if (error) console.warn("[Catalog] Could not capture the sales lead", error.code);
-        } catch {
-          console.warn("[Catalog] Sales lead write unavailable");
-        }
-      }
+      await recordCatalogInterest(ctx);
       if (products.length === 0) {
         return { success: true, message: "Nenhum produto corresponde à pesquisa.", data: [] };
       }
