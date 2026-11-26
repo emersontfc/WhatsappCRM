@@ -235,6 +235,16 @@ O cliente pode confirmar a proposta durante 10 minutos. Um pedido confirmado res
 
 Se for preciso voltar a uma imagem anterior à implementação das reservas, pause temporariamente os agentes de vendas. Reative-os quando a versão que verifica os prazos das reservas estiver em execução.
 
+### Equipa, comprovativos privados e avisos
+
+Com o esquema de empresas AgentX v2 e as migrações até à 36 instalados, aplique `migrations/apply_agentx_team_operations.sql` com `psql -X -f`. Para o SQL Editor do Supabase, gere um script único com `node scripts/render-agentx-fresh-sql.mjs --team-upgrade > AgentX-migracoes-37-a-39.sql` e execute-o antes da publicação. A verificação da versão confirma as três migrações.
+
+Em **Equipa e tarefas**, o titular associa a loja à empresa e atribui **Vendedor** ou **Responsável financeiro** a cada conta com email confirmado. A equipa usa a mesma fila de pedidos. Para rever um comprovativo, o responsável financeiro confirma primeiro a entrada no prestador. O registo identifica a conta que tomou a decisão.
+
+No WhatsApp privado, envie um JPEG, PNG ou PDF com o código AGX indicado pelo pedido para testar a associação. Em **Equipa e tarefas**, verifique a revisão pendente e a abertura do ficheiro com uma conta financeira. Para avisos confirmados como não enviados, a fila indica quando é possível voltar a tentar. Se o WhatsApp não confirmar o envio, confira a conversa antes de reenviar.
+
+Em **Primeiro teste**, escolha o percurso da loja, das marcações ou dos grupos. Execute o primeiro teste nos ecrãs indicados. O progresso da lista é guardado no navegador com a conta atual.
+
 As novas reservas públicas oferecem **Gerir marcação**. Para enviar o link também por WhatsApp, configure `PUBLIC_APP_URL` com a origem HTTPS pública do painel. O servidor também aceita `VITE_API_URL` quando contém uma origem pública válida. Se usar `APPOINTMENT_MANAGEMENT_SECRET`, guarde um valor forte e estável para o servidor poder voltar a incluir links já emitidos nos lembretes após rodar as credenciais da base.
 
 Em **Grupos**, escolha o grupo em que a conta ligada é administradora. As ações de moderação ficam separadas por regra e por tipo de conteúdo. As ocorrências encaminhadas aparecem na fila de revisão. Ative **Vendas no grupo** para permitir `/loja` ou `/loja <produto>` e use **Agendar promoção** para criar uma campanha do catálogo para aquele grupo.

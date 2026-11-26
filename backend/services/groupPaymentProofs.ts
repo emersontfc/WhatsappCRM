@@ -1,17 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
 import type { GroupMetadata, WAMessageKey } from "@whiskeysockets/baileys";
 import { normalizeContactPhone } from "../../shared/contactPhone.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
-import { commerceService } from "./commerceService.ts";
 import { groupParticipant, isGroupAdmin, isGroupJid } from "./groupModeration.ts";
 import { extractProofWithAI } from "./paymentProofExtractor.ts";
 import { compareProofRecipient, parseMozambicanReceiptSMS, proofRecipient, type ExtractedPaymentData } from "./paymentProofSms.ts";
+import { PAYMENT_PROOF_LIMIT, storePaymentProofAttachment, type PaymentProofAttachment } from "./paymentProofAttachments.ts";
 
 export const GROUP_PROOF_BUCKET = "agentx-group-proofs";
-export const GROUP_PROOF_LIMIT = 5 * 1024 * 1024;
-type GroupProofMime = "application/pdf" | "image/png" | "image/jpeg" | "image/webp";
+export const GROUP_PROOF_LIMIT = PAYMENT_PROOF_LIMIT;
 type Identity = { id?: string; lid?: string; phoneNumber?: string };
-type Attachment = { filename?: string; load: () => Promise<Buffer> };
 
 export function groupProofOrderNumber(text: string, hasAttachment: boolean) {
   if (text.length > 4000) return null;
@@ -37,28 +34,6 @@ export function groupBuyerPhone(group: GroupMetadata, key: WAMessageKey, linked?
   return numbers.size === 1 ? numbers.values().next().value ?? null : null;
 }
 
-function groupProofMime(content: Buffer): GroupProofMime | null {
-  if (content.subarray(0, 5).equals(Buffer.from("%PDF-"))) return "application/pdf";
-  if (content.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) return "image/png";
-  if (content.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))) return "image/jpeg";
-  if (content.toString("ascii", 0, 4) === "RIFF" && content.toString("ascii", 8, 12) === "WEBP") return "image/webp";
-  return null;
-}
-
-async function storeGroupProof(userId: string, attachment: Attachment) {
-  const content = await attachment.load();
-  const mime = groupProofMime(content);
-  if (!mime || content.length > GROUP_PROOF_LIMIT) throw new Error("Invalid group proof file");
-  const ext = mime === "application/pdf" ? "pdf" : mime.split("/")[1];
-  const proposed = attachment.filename?.split(/[/\\]/).pop()?.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
-  const stem = proposed?.replace(/\.[a-z0-9]+$/i, "").slice(0, 120) || "comprovativo";
-  const path = `${userId}/${randomUUID()}`;
-  const { error } = await supabaseAdmin.storage.from(GROUP_PROOF_BUCKET)
-    .upload(path, content, { contentType: mime, upsert: false });
-  if (error) throw error;
-  return { path, name: `${stem}.${ext}`, mime, size: content.length, sha256: createHash("sha256").update(content).digest("hex") };
-}
-
 export async function readGroupProofIntake(userId: string, jid: string) {
   const { data, error } = await supabaseAdmin.from("group_rules").select("proof_intake_enabled")
     .eq("user_id", userId).eq("group_jid", jid).abortSignal(AbortSignal.timeout(4_000)).maybeSingle();
@@ -67,7 +42,7 @@ export async function readGroupProofIntake(userId: string, jid: string) {
 }
 
 export async function processGroupPaymentProof(input: {
-  userId: string; jid: string; key: WAMessageKey; text: string; attachment?: Attachment;
+  userId: string; jid: string; key: WAMessageKey; text: string; attachment?: PaymentProofAttachment;
   linked?: Identity; loadGroup: () => Promise<GroupMetadata>;
 }) {
   const { userId, jid, key, text, attachment, linked, loadGroup } = input;
@@ -100,8 +75,9 @@ export async function processGroupPaymentProof(input: {
       currency: "", confidenceScore: 0, rawText: text, ...proofRecipient(text) }
     : await extractProofWithAI(userId, text);
   const evidence = compareProofRecipient(proof, order.seller_payment);
-  const file = attachment ? await storeGroupProof(userId, attachment) : null;
-  const { data: saved, error: saveError } = await supabaseAdmin.rpc("agentx_submit_group_payment_proof", {
+  const file = attachment ? await storePaymentProofAttachment(GROUP_PROOF_BUCKET, userId, attachment) : null;
+  if (attachment && !file) throw new Error("Invalid group proof file");
+  const { data: saved, error: saveError } = await supabaseAdmin.rpc("agentx_submit_group_payment_proof_with_notice", {
     p_user: userId, p_group: jid, p_order: order.id, p_phone: order.customer_phone, p_source_message: sourceId,
     p_proof: {
       provider: proof.provider, transaction_reference: proof.transactionReference, amount: proof.amount,
@@ -118,5 +94,4 @@ export async function processGroupPaymentProof(input: {
     if (cleanupError) console.warn("[GroupProofs] Could not remove an unreferenced upload");
   }
   if (saveError) throw saveError;
-  if (saved?.created === true) await commerceService.notifyProofReviewer(userId, order);
 }

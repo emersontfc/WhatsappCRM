@@ -1,9 +1,14 @@
 -- Scenario data only. The installer must create every AgentX table and policy.
-INSERT INTO auth.users (id) VALUES
-  ('00000000-0000-4000-8000-000000000001'), ('00000000-0000-4000-8000-000000000002');
+INSERT INTO auth.users (id, email, email_confirmed_at) VALUES
+  ('00000000-0000-4000-8000-000000000001', 'loja-a@example.invalid', now()),
+  ('00000000-0000-4000-8000-000000000002', 'loja-b@example.invalid', now()),
+  ('00000000-0000-4000-8000-000000000003', 'vendas@example.invalid', now()),
+  ('00000000-0000-4000-8000-000000000004', 'financeiro@example.invalid', now());
 INSERT INTO public.users (id, email, name, role, plan) VALUES
   ('00000000-0000-4000-8000-000000000001', 'loja-a@example.invalid', 'Loja A', 'user', 'Pro'),
-  ('00000000-0000-4000-8000-000000000002', 'loja-b@example.invalid', 'Loja B', 'user', 'Pro');
+  ('00000000-0000-4000-8000-000000000002', 'loja-b@example.invalid', 'Loja B', 'user', 'Pro'),
+  ('00000000-0000-4000-8000-000000000003', 'vendas@example.invalid', 'Vendas', 'user', 'Pro'),
+  ('00000000-0000-4000-8000-000000000004', 'financeiro@example.invalid', 'Financeiro', 'user', 'Pro');
 INSERT INTO public.subscriptions (user_id, plan, plan_id, status, end_date)
   SELECT u.id, p.name, p.id, 'active', now() + interval '30 days'
   FROM public.users u JOIN public.plans p ON p.name = u.plan;

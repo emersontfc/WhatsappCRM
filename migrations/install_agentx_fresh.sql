@@ -69,6 +69,9 @@ COMMIT;
 \ir ../supabase/migrations/35_seller_stock_reservations.sql
 \ir ../supabase/migrations/36_seller_conversation_quotes.sql
 \ir apply_agentx_v2.sql
+\ir ../supabase/migrations/37_seller_company_team.sql
+\ir ../supabase/migrations/38_whatsapp_private_payment_proofs.sql
+\ir ../supabase/migrations/39_seller_notices.sql
 
 BEGIN;
 
@@ -113,6 +116,9 @@ BEGIN
      OR public.agentx_group_moderation_ready() IS DISTINCT FROM true
      OR public.agentx_seller_reservations_ready() IS DISTINCT FROM true
      OR public.agentx_seller_quotes_ready() IS DISTINCT FROM true
+     OR public.agentx_seller_team_ready() IS DISTINCT FROM true
+     OR public.agentx_direct_proof_contract_ready() IS DISTINCT FROM true
+     OR public.agentx_seller_notices_ready() IS DISTINCT FROM true
      OR NOT has_function_privilege('service_role', 'public.agentx_seller_confirm_delivery(uuid,uuid)', 'EXECUTE')
      OR public.agentx_contact_phone('841234567') IS DISTINCT FROM '258841234567' THEN
     RAISE EXCEPTION 'AgentX fresh install: schema contract is incomplete';
@@ -120,7 +126,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-36+20261123');
+INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-39+20261123');
 COMMIT;
 NOTIFY pgrst, 'reload schema';
 SELECT pg_advisory_unlock(879621, 3);

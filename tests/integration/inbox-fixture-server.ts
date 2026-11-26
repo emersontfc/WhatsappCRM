@@ -3,6 +3,7 @@ import { whatsappManager } from "../../backend/whatsappManager.ts";
 import { handleAgentMessage } from "../../backend/agentManager.ts";
 import { handleIncomingMessage } from "../../backend/automationManager.ts";
 import { processHumanHandoffs } from "../../backend/services/humanHandoff.ts";
+import { processSellerNotices } from "../../backend/services/sellerNotices.ts";
 import type { WASocket } from "@whiskeysockets/baileys";
 
 // Only the WhatsApp transport is simulated. The app and its database client are unchanged.
@@ -47,17 +48,25 @@ process.on("message", async (message: {
   participant?: string; participantAlt?: string; fromMe?: boolean; timestamp?: number;
   replyToWhatsAppId?: string;
   media?: "image" | "video" | "document" | "audio" | "sticker";
+  mediaBytes?: string; fileName?: string; mimetype?: string; mediaDownloadFails?: boolean;
+  noticeId?: string; offline?: boolean;
 }) => {
   if (message.event === "unconfirmed") confirmSend = false;
   if (message.event === "confirmed") confirmSend = true;
   let ok = true;
   if (message.event === "handoffs") await processHumanHandoffs(whatsappManager);
+  if (message.event === "sellerNotices") {
+    const transport = message.offline ? { getSessionStatus: () => "disconnected", sendMessage: whatsappManager.sendMessage.bind(whatsappManager) }
+      : whatsappManager;
+    await processSellerNotices(transport, new Date(), message.noticeId ? { userId: owner, noticeId: message.noticeId } : undefined);
+  }
   if (message.event === "ingress" && (message.text || message.media) && message.messageId && message.jid) {
     const userId = message.account === "other" ? other : owner;
     const session = message.account === "other" ? otherSession : ownerSession;
-    const caption = message.text ?? undefined;
+    const bytes = message.mediaBytes ? Buffer.from(message.mediaBytes, "base64") : undefined;
+    const media = { caption: message.text, fileName: message.fileName, mimetype: message.mimetype, fileLength: bytes?.length };
     const content = message.media === "audio" ? { audioMessage: { ptt: true } }
-      : message.media ? { [`${message.media}Message`]: { caption } }
+      : message.media ? { [`${message.media}Message`]: media }
         : message.replyToWhatsAppId ? { extendedTextMessage: { text: message.text, contextInfo: { stanzaId: message.replyToWhatsAppId } } }
           : { conversation: message.text };
     const incoming = {
@@ -70,8 +79,13 @@ process.on("message", async (message: {
     if (message.upsertType === "history") {
       ok = Boolean(await whatsappManager.syncMessage(userId, incoming, message.altJid));
     } else {
+      const loadFixtureMedia = bytes ? async () => {
+        process.send?.({ event: "proof-media-request", messageId: message.messageId });
+        if (message.mediaDownloadFails) throw new Error("Simulated WhatsApp file download error");
+        return bytes;
+      } : undefined;
       await whatsappManager.handleMessageUpsert(userId, session.socket as unknown as WASocket,
-        { messages: [incoming], type: message.upsertType ?? "notify" });
+        { messages: [incoming], type: message.upsertType ?? "notify" }, loadFixtureMedia);
     }
   }
   if (message.event === "incoming") {

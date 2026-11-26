@@ -2,6 +2,7 @@ import { processAppointmentReminders } from "./services/appointmentDelivery.ts";
 import { dispatchScheduled } from "./services/scheduledDispatch.ts";
 import { processGroupAccessSchedules } from "./services/groupAccessSchedule.ts";
 import { processHumanHandoffs } from "./services/humanHandoff.ts";
+import { processSellerNotices } from "./services/sellerNotices.ts";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { whatsappManager } from "./whatsappManager.ts";
 
@@ -62,6 +63,21 @@ export function startScheduler() {
   };
   const handoffTimer = setInterval(processHandoffs, 60_000);
   void processHandoffs();
+
+  let sellerNoticesRunning = false;
+  const processNotices = async () => {
+    if (sellerNoticesRunning) return;
+    sellerNoticesRunning = true;
+    try {
+      await processSellerNotices(whatsappManager);
+    } catch (error) {
+      if (!isSchemaError(error)) console.warn("[Scheduler] Seller notices unavailable:", (error as { code?: string })?.code);
+    } finally {
+      sellerNoticesRunning = false;
+    }
+  };
+  const sellerNoticeTimer = setInterval(processNotices, 60_000);
+  void processNotices();
 
   const expireReservations = async () => {
     try {
@@ -161,6 +177,7 @@ export function startScheduler() {
     clearInterval(appointmentTimer);
     clearInterval(groupAccessTimer);
     clearInterval(handoffTimer);
+    clearInterval(sellerNoticeTimer);
     clearInterval(reservationTimer);
   } };
 }

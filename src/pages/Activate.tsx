@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { 
   CreditCard, 
   CheckCircle2, 
@@ -174,6 +174,9 @@ export default function Activate() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-10 animate-in fade-in duration-500 pb-16">
+      <Link to="/onboarding" className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 focus-visible:outline-2 focus-visible:outline-emerald-600">
+        Preparar primeiro teste <ArrowRight size={16} aria-hidden="true" />
+      </Link>
       
       {/* 👑 ADMIN BANNER */}
       {isAdmin && (

@@ -35,7 +35,7 @@ let missingWorkflowContract = "";
 const workflowContracts = ["agentx_whatsapp_action_ready", "agentx_group_policy_ready", "agentx_catalog_campaigns_ready",
   "agentx_whatsapp_quote_ready", "agentx_whatsapp_operator_audit_ready", "agentx_human_handoff_ready",
   "agentx_appointment_self_service_ready", "agentx_group_moderation_ready", "agentx_seller_reservations_ready",
-  "agentx_seller_quotes_ready"];
+  "agentx_seller_quotes_ready", "agentx_seller_team_ready", "agentx_direct_proof_contract_ready", "agentx_seller_notices_ready"];
 const sellerMigrations = /migraç(?:ão|ões).*22/;
 
 const supabase = createServer(async (req, res) => {

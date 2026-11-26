@@ -27,11 +27,18 @@ install_fresh() {
 }
 psql_fixture -f /agentx/tests/integration/agentx-fresh-managed-fixture.sql >/dev/null
 install_fresh >"$logs/install" 2>&1 || { cat "$logs/install"; exit 1; }
+reapply_team() {
+  node scripts/render-agentx-fresh-sql.mjs --team-upgrade | docker exec -i "$db" psql -X -U postgres -v ON_ERROR_STOP=1
+}
+reapply_team >"$logs/team-upgrade" 2>&1 || { cat "$logs/team-upgrade"; exit 1; }
 psql_fixture -f /agentx/tests/integration/agentx-fresh-schema-contract.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/group-policy-contract.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/whatsapp-operator-audit.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/human-handoff-contract.sql >/dev/null
 psql_fixture -f /agentx/tests/integration/seller-stock-reservations-contract.sql >/dev/null
+psql_fixture -f /agentx/tests/integration/seller-company-team-contract.sql >/dev/null
+psql_fixture -f /agentx/tests/integration/direct-payment-proofs-contract.sql >/dev/null
+psql_fixture -f /agentx/tests/integration/seller-notice-contract.sql >/dev/null
 
 if install_fresh >"$logs/repeat" 2>&1; then
   printf 'Fresh installation unexpectedly accepted the existing schema.\n' >&2
@@ -42,4 +49,4 @@ if ! rg -q 'AgentX fresh install refused' "$logs/repeat"; then
   exit 1
 fi
 
-printf 'AgentX fresh schema passed: migrations, permissions, tenant RLS, reservations, storage ownership and populated-project refusal.\n'
+printf 'AgentX fresh schema passed: migrations, permissions, tenant RLS, reservations, team access, private proofs, notice recovery and populated-project refusal.\n'

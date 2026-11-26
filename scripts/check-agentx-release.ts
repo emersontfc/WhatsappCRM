@@ -19,7 +19,10 @@ const workflowContracts = [
   ["agentx_appointment_self_service_ready", "33_appointment_self_service.sql"],
   ["agentx_group_moderation_ready", "34_group_content_moderation.sql"],
   ["agentx_seller_reservations_ready", "35_seller_stock_reservations.sql"],
-  ["agentx_seller_quotes_ready", "36_seller_conversation_quotes.sql"]
+  ["agentx_seller_quotes_ready", "36_seller_conversation_quotes.sql"],
+  ["agentx_seller_team_ready", "37_seller_company_team.sql"],
+  ["agentx_direct_proof_contract_ready", "38_whatsapp_private_payment_proofs.sql"],
+  ["agentx_seller_notices_ready", "39_seller_notices.sql"]
 ] as const;
 
 async function check() {

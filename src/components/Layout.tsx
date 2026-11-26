@@ -41,9 +41,10 @@ import { DEFAULT_NICHE, NICHE_CONFIGS, toCanonicalNiche, type CanonicalBusinessT
 interface LayoutProps {
   children: React.ReactNode;
   user: Pick<User, "id" | "email" | "user_metadata">;
+  pageTitle?: string;
 }
 
-export default function Layout({ children, user }: LayoutProps) {
+export default function Layout({ children, user, pageTitle }: LayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { id: userId, email: userEmail = "" } = user;
@@ -130,6 +131,7 @@ export default function Layout({ children, user }: LayoutProps) {
       title: "Vendas e clientes",
       items: [
         { name: "Vendedor", path: "/seller", icon: ShoppingCart },
+        { name: "Equipa e tarefas", path: "/team", icon: Users2 },
         { name: "Catálogo e pedidos", path: "/orders", icon: ShoppingCart },
         { name: "Entrega de ficheiros", path: "/digital-orders", icon: ShoppingCart },
         { name: "Leads", path: "/leads", icon: UserPlus },
@@ -269,7 +271,7 @@ export default function Layout({ children, user }: LayoutProps) {
             </Button>
             <div className="flex flex-col min-w-0">
               <h1 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight truncate">
-                {allNavItems.find(item => item.path === location.pathname)?.name || "Dashboard"}
+                {pageTitle ?? (allNavItems.find(item => item.path === location.pathname)?.name || "Dashboard")}
               </h1>
               <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5">
                 {isAdmin && (

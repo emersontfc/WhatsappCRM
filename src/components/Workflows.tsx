@@ -129,6 +129,7 @@ export function Workflows({ accountId, niche, whatsappStatus, free }: {
         {whatsappStatus !== "connected" && <a href="#ligar-whatsapp" className="font-semibold text-emerald-800 underline underline-offset-4">
           <MessageCircle aria-hidden="true" size={16} className="mr-1 inline" /> {whatsappStatus ? "Ver ligação ao WhatsApp" : "Ligar ou verificar WhatsApp"}
         </a>}
+        <Link to="/onboarding" className="font-semibold text-emerald-800 hover:underline">Preparar primeiro teste</Link>
         <Link to="/messages" className="font-semibold text-slate-700 hover:underline">Abrir conversas</Link>
         <Link to="/appointments?tab=agenda" className="font-semibold text-slate-700 hover:underline">
           <CalendarDays aria-hidden="true" size={16} className="mr-1 inline" /> Ver agenda

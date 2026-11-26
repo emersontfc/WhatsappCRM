@@ -10,6 +10,7 @@ import Layout from "./components/Layout";
 const Landing = lazy(() => import("./pages/Landing"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Activate = lazy(() => import("./pages/Activate"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Contacts = lazy(() => import("./pages/Contacts"));
 const Messages = lazy(() => import("./pages/Messages"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -26,6 +27,7 @@ const ActivityLog = lazy(() => import("./pages/ActivityLog"));
 const Appointments = lazy(() => import("./pages/Appointments"));
 const Orders = lazy(() => import("./pages/Orders"));
 const Seller = lazy(() => import("./pages/Seller"));
+const SellerTeam = lazy(() => import("./pages/SellerTeam"));
 const DigitalOrders = lazy(() => import("./pages/DigitalOrders"));
 const PublicBooking = lazy(() => import("./pages/PublicBooking"));
 const Docs = lazy(() => import("./pages/Docs"));
@@ -77,10 +79,11 @@ export default function App() {
           <Route path="/docs" element={<Docs />} />
           <Route path="/documentacao" element={<Docs />} />
 
-          {/* 🔥 Onboarding REMOVIDO - redirect permanente */}
-          <Route path="/onboarding" element={<Navigate to="/dashboard" replace />} />
-
           {/* Privadas */}
+          <Route
+            path="/onboarding"
+            element={user ? <Layout user={user} pageTitle="Primeiro teste"><Onboarding key={user.id} accountId={user.id} /></Layout> : <Navigate to="/login" replace />}
+          />
           <Route
             path="/dashboard"
             element={user ? <Layout user={user}><Dashboard key={user.id} user={user} /></Layout> : <Navigate to="/login" replace />}
@@ -92,6 +95,10 @@ export default function App() {
           <Route
             path="/seller"
             element={user ? <Layout user={user}><Seller key={user.id} /></Layout> : <Navigate to="/login" replace />}
+          />
+          <Route
+            path="/team"
+            element={user ? <Layout user={user} pageTitle="Equipa e tarefas"><SellerTeam key={user.id} accountId={user.id} /></Layout> : <Navigate to="/login" replace />}
           />
           <Route
             path="/orders"

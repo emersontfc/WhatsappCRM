@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { 
   ShoppingCart, 
@@ -27,6 +27,7 @@ import { Badge } from "../components/ui/Badge";
 import { Input } from "../components/ui/Input";
 import { cn } from "../lib/utils";
 import { isSellerMethod, sellerMethods, sellerReservationLabel, type OrderPayment, type RecipientEvidence } from "../../shared/seller";
+import { sellerTeamRoles, type SellerTeamRole } from "../../shared/sellerTeam";
 
 interface Product {
   id: string;
@@ -119,9 +120,9 @@ function safeProofUrl(value: string) {
   }
 }
 
-async function saveGroupProof(id: string) {
+async function saveProof(id: string, commerceFetch: typeof apiFetch) {
   try {
-    const { base64, name } = await apiFetch(`/api/commerce/verifications/${id}/attachment`);
+    const { base64, name } = await commerceFetch(`/api/commerce/verifications/${id}/attachment`);
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
     const link = document.createElement("a");
@@ -135,10 +136,33 @@ async function saveGroupProof(id: string) {
 }
 
 export default function Orders() {
+  const [searchParams] = useSearchParams();
+  const organizationId = searchParams.get("empresa");
+  return <OrdersWorkspace key={organizationId === null ? "personal" : `empresa:${organizationId}`} organizationId={organizationId} />;
+}
+
+function OrdersWorkspace({ organizationId }: { organizationId: string | null }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const scoped = organizationId !== null;
+  const commerceFetch = useCallback<typeof apiFetch>((path, options) => {
+    if (organizationId === null) return apiFetch(path, options);
+    const headers = new Headers(options?.headers);
+    headers.set("X-AgentX-Company", organizationId);
+    return apiFetch(path, { ...options, headers });
+  }, [organizationId]);
+  const [role, setRole] = useState<SellerTeamRole | null>(scoped ? null : "owner");
+  const [companyName, setCompanyName] = useState("");
+  const [accessError, setAccessError] = useState("");
+  const teamHref = organizationId === null ? "/team" : `/team?${new URLSearchParams({ empresa: organizationId })}`;
+  const canManageSales = role === "owner" || role === "operator";
+  const canReviewPayments = role === "owner" || role === "finance_admin";
   const tab = searchParams.get("tab");
-  const activeTab = tab === "verifications" || tab === "products" || tab === "timeline" ? tab : "orders";
-  const setActiveTab = (next: string) => setSearchParams({ tab: next });
+  const activeTab = (tab === "verifications" && canReviewPayments) || ((tab === "products" || tab === "timeline") && canManageSales)
+    ? tab : "orders";
+  const orderParams = (next: string, filters: Record<string, string> = {}) => new URLSearchParams({
+    ...(organizationId === null ? {} : { empresa: organizationId }), tab: next, ...filters
+  });
+  const setActiveTab = (next: string) => setSearchParams(orderParams(next));
   const [approval, setApproval] = useState<{
     id: string; proofId: string; number: string; amount: number; currency: string;
     method?: string; destination?: OrderPayment | null;
@@ -202,31 +226,58 @@ export default function Orders() {
   // Timeline modal for specific order
   const [selectedOrderTimeline, setSelectedOrderTimeline] = useState<{ orderNumber: string; events: any[] } | null>(null);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     const request = ++latestDataRequest.current;
     setLoading(true);
+    let currentRole: SellerTeamRole = "owner";
+    if (organizationId !== null) {
+      try {
+        const { data } = await commerceFetch("/api/commerce/access");
+        if (data?.organizationId !== organizationId.toLowerCase() || !["owner", "operator", "finance_admin"].includes(data.role)) {
+          throw new Error("Não foi possível verificar o teu papel nesta empresa.");
+        }
+        if (request !== latestDataRequest.current) return;
+        currentRole = data.role;
+        setCompanyName(typeof data.name === "string" ? data.name : "");
+      } catch (error) {
+        if (request !== latestDataRequest.current) return;
+        setRole(null);
+        setOrders([]);
+        setProducts([]);
+        setVerifications([]);
+        setTimeline([]);
+        setAccessError(error instanceof Error ? error.message : "Não foi possível verificar as permissões da empresa.");
+        setLoading(false);
+        return;
+      }
+      setAccessError("");
+      setRole(currentRole);
+    }
+    const empty = Promise.resolve({ success: true, data: [] });
     const [ordersResult, productsResult, proofsResult, timelineResult] = await Promise.allSettled([
-      apiFetch("/api/commerce/orders"), apiFetch("/api/commerce/products"),
-      apiFetch("/api/commerce/verifications"), apiFetch("/api/commerce/operations-feed")
+      commerceFetch("/api/commerce/orders"), currentRole === "finance_admin" ? empty : commerceFetch("/api/commerce/products"),
+      currentRole === "operator" ? empty : commerceFetch("/api/commerce/verifications"),
+      currentRole === "finance_admin" ? empty : commerceFetch("/api/commerce/operations-feed")
     ]);
     if (request !== latestDataRequest.current) return;
     const ordersLoaded = ordersResult.status === "fulfilled" && ordersResult.value?.success === true;
     setOrdersUnavailable(!ordersLoaded);
-    if (ordersLoaded) setOrders(ordersResult.value.data || []);
-    if (productsResult.status === "fulfilled" && productsResult.value?.success) setProducts(productsResult.value.data || []);
+    setOrders(ordersLoaded ? ordersResult.value.data || [] : []);
+    setProducts(productsResult.status === "fulfilled" && productsResult.value?.success ? productsResult.value.data || [] : []);
     const proofsLoaded = proofsResult.status === "fulfilled" && proofsResult.value?.success;
     setProofsUnavailable(!proofsLoaded);
-    if (proofsResult.status === "fulfilled" && proofsLoaded) setVerifications(proofsResult.value.data || []);
-    if (timelineResult.status === "fulfilled" && timelineResult.value?.success) setTimeline(timelineResult.value.data || []);
+    setVerifications(proofsResult.status === "fulfilled" && proofsLoaded ? proofsResult.value.data || [] : []);
+    setTimeline(timelineResult.status === "fulfilled" && timelineResult.value?.success ? timelineResult.value.data || [] : []);
     if ([ordersResult, productsResult, timelineResult].some((entry) => entry.status === "rejected")) {
       toast.error("Alguns dados comerciais estão indisponíveis.");
     }
     setLoading(false);
-  };
+  }, [commerceFetch, organizationId]);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+    return () => { latestDataRequest.current++; };
+  }, [fetchData]);
 
   const [productFile, setProductFile] = useState<File | null>(null);
 
@@ -238,7 +289,7 @@ export default function Orders() {
     const body = new FormData();
     body.append("file", file);
     try {
-      await apiFetch(`/api/commerce/products/${id}/deliverable`, { method: "PUT", body });
+      await commerceFetch(`/api/commerce/products/${id}/deliverable`, { method: "PUT", body });
       toast.success("Ficheiro privado guardado");
       void fetchData();
     } catch (error) {
@@ -261,7 +312,7 @@ export default function Orders() {
       const body = new FormData();
       for (const [key, value] of Object.entries(newProduct)) body.append(key, value);
       if (newProduct.type === "digital" && productFile) body.append("file", productFile);
-      const res = await apiFetch("/api/commerce/products", {
+      const res = await commerceFetch("/api/commerce/products", {
         method: "POST",
         body: productFile && newProduct.type === "digital" ? body : JSON.stringify(newProduct)
       });
@@ -311,7 +362,7 @@ export default function Orders() {
     setApproving(true);
     setApprovalError("");
     try {
-      const res = await apiFetch(`/api/commerce/orders/${approval.id}/approve`, {
+      const res = await commerceFetch(`/api/commerce/orders/${approval.id}/approve`, {
         method: "POST",
         body: JSON.stringify({ settlementVerified: true, proofId: approval.proofId })
       });
@@ -329,7 +380,7 @@ export default function Orders() {
 
   const retryDelivery = async (id: string) => {
     try {
-      const result = await apiFetch(`/api/commerce/orders/${id}/delivery`, { method: "POST" });
+      const result = await commerceFetch(`/api/commerce/orders/${id}/delivery`, { method: "POST" });
       if (result.delivered) toast.success("Envio aceite pelo WhatsApp.");
       else toast.info(result.message || "Entrega pendente.");
       void fetchData();
@@ -344,7 +395,7 @@ export default function Orders() {
     setConfirmingDelivery(true);
     setDeliveryReviewError("");
     try {
-      const result = await apiFetch(`/api/commerce/orders/${deliveryReview.id}/delivery/confirm`, {
+      const result = await commerceFetch(`/api/commerce/orders/${deliveryReview.id}/delivery/confirm`, {
         method: "POST", body: JSON.stringify({ deliveryVerified: true })
       });
       if (result.delivered !== true) throw new Error("A revisão da entrega ficou por confirmar.");
@@ -365,13 +416,15 @@ export default function Orders() {
     setRejecting(true);
     setRejectionError("");
     try {
-      const res = await apiFetch(`/api/commerce/orders/${rejection.id}/reject`, {
+      const res = await commerceFetch(`/api/commerce/orders/${rejection.id}/reject`, {
         method: "POST",
         body: JSON.stringify({ reason, proofId: rejection.proofId })
       });
       if (!res.success) throw new Error("Não foi possível rejeitar o comprovativo.");
       toast.info(res.awaitingOtherProofs ? "Comprovativo rejeitado. Os restantes continuam em revisão."
-        : res.notified ? "Comprovativo rejeitado e cliente notificado." : "Comprovativo rejeitado. O aviso ficou por confirmar.");
+        : res.notified ? "Comprovativo rejeitado e cliente notificado."
+          : res.noticeQueued ? "Comprovativo rejeitado. O aviso está na fila de envio."
+          : "Comprovativo rejeitado. O aviso ficou por confirmar.");
       setRejection(null);
       void fetchData();
     } catch (error) {
@@ -387,7 +440,7 @@ export default function Orders() {
     setCancelling(true);
     setCancellationError(null);
     try {
-      const result = await apiFetch(`/api/commerce/orders/${encodeURIComponent(cancellation.id)}/cancel`, { method: "POST" });
+      const result = await commerceFetch(`/api/commerce/orders/${encodeURIComponent(cancellation.id)}/cancel`, { method: "POST" });
       const nextStatus = result?.data?.status;
       if (result?.success !== true || (nextStatus !== "cancelled" && nextStatus !== "expired")) {
         throw new Error("Não foi possível confirmar o cancelamento.");
@@ -410,7 +463,7 @@ export default function Orders() {
 
   const handleViewTimeline = async (order: Order) => {
     try {
-      const res = await apiFetch(`/api/commerce/orders/${order.id}/timeline`);
+      const res = await commerceFetch(`/api/commerce/orders/${order.id}/timeline`);
       if (res.success) {
         setSelectedOrderTimeline({
           orderNumber: order.order_number,
@@ -427,13 +480,13 @@ export default function Orders() {
     .filter(o => o.status === "paid" || o.status === "fulfilled")
     .reduce((acc, curr) => acc + (Number(curr.total_amount) || 0), 0);
   const paidCount = orders.filter(o => o.status === "paid" || o.status === "fulfilled").length;
-  const pendingCount = verifications.length;
+  const pendingCount = canReviewPayments ? verifications.length : orders.filter((order) => order.status === "verification_pending").length;
 
   const filteredOrders = orders.filter(o => {
     const matchesSearch = 
       o.order_number.toLowerCase().includes(search.toLowerCase()) ||
       o.customer_name?.toLowerCase().includes(search.toLowerCase()) ||
-      o.customer_phone.includes(search);
+      o.customer_phone?.includes(search);
     const matchesStatus = statusFilter === "all" || o.status === statusFilter ||
       (statusFilter === "awaiting_payment" && o.status === "created");
     return matchesSearch && matchesStatus;
@@ -462,6 +515,17 @@ export default function Orders() {
     }
   };
 
+  if (!role) return <section className="mx-auto max-w-4xl space-y-4 py-6">
+    <h1 className="text-2xl font-bold">Pedidos da empresa</h1>
+    {accessError ? <>
+      <p role="alert" className="text-sm text-rose-800">{accessError}</p>
+      <div className="flex flex-wrap items-center gap-4">
+        <Button onClick={fetchData} variant="outline" disabled={loading}>Verificar acesso</Button>
+        <Link to={teamHref} className="text-sm font-semibold text-emerald-800 underline">Voltar à equipa</Link>
+      </div>
+    </> : <p role="status" className="text-sm text-slate-600">A verificar o teu acesso…</p>}
+  </section>;
+
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
       {/* Header */}
@@ -469,25 +533,27 @@ export default function Orders() {
         <div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
             <ShoppingCart className="text-emerald-600" size={32} />
-            Catálogo e pedidos
+            {role === "finance_admin" ? "Pedidos e comprovativos" : "Catálogo e pedidos"}
           </h1>
+          {scoped && companyName && <p className="mt-2 text-sm font-medium text-emerald-800">{companyName} · {sellerTeamRoles[role]}</p>}
           <p className="text-sm text-slate-500 mt-1">
-            Adiciona os produtos que o agente pode apresentar e acompanha as vendas até à entrega.
+            {role === "finance_admin" ? "Confere os pagamentos da empresa e acompanha o estado dos pedidos."
+              : "Adiciona os produtos que o agente pode apresentar e acompanha as vendas até à entrega."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Link to="/seller" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
-            Vendedor
-          </Link>
-          <Link to="/digital-orders" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
-            Entrega de ficheiros
-          </Link>
+          {scoped ? <Link to={teamHref} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
+            Voltar à equipa
+          </Link> : <>
+            <Link to="/seller" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">Vendedor</Link>
+            <Link to="/digital-orders" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">Entrega de ficheiros</Link>
+          </>}
           <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
             <RefreshCw size={16} className={cn(loading && "animate-spin")} /> Atualizar
           </Button>
-          <Button onClick={() => setShowProductModal(true)} className="gap-2 bg-emerald-600 hover:bg-emerald-700">
+          {canManageSales && <Button onClick={() => setShowProductModal(true)} className="gap-2 bg-emerald-600 hover:bg-emerald-700">
             <Plus size={16} /> Novo Produto
-          </Button>
+          </Button>}
         </div>
       </div>
 
@@ -520,8 +586,8 @@ export default function Orders() {
         <Card className="border border-slate-100 shadow-sm">
           <CardContent className="p-6 flex items-center justify-between">
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Comprovativos Pendentes</p>
-              <h3 className="text-2xl font-black text-amber-600 mt-1">{pendingCount} validações</h3>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{canReviewPayments ? "Comprovativos pendentes" : "Pedidos em revisão"}</p>
+              <h3 className="text-2xl font-black text-amber-600 mt-1">{pendingCount}</h3>
             </div>
             <div className="h-12 w-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
               <Clock size={24} />
@@ -529,7 +595,7 @@ export default function Orders() {
           </CardContent>
         </Card>
 
-        <Card className="border border-slate-100 shadow-sm">
+        {canManageSales && <Card className="border border-slate-100 shadow-sm">
           <CardContent className="p-6 flex items-center justify-between">
             <div>
               <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Itens no Catálogo</p>
@@ -539,11 +605,11 @@ export default function Orders() {
               <Package size={24} />
             </div>
           </CardContent>
-        </Card>
+        </Card>}
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-slate-200 gap-2">
+      <div className="flex flex-wrap border-b border-slate-200 gap-2">
         <button
           onClick={() => setActiveTab("orders")}
           className={cn(
@@ -554,7 +620,7 @@ export default function Orders() {
           <ShoppingCart size={16} /> Pedidos ({orders.length})
         </button>
 
-        <button
+        {canReviewPayments && <button
           onClick={() => setActiveTab("verifications")}
           className={cn(
             "pb-3 px-4 font-bold text-sm transition-all border-b-2 flex items-center gap-2",
@@ -567,9 +633,9 @@ export default function Orders() {
               {pendingCount}
             </span>
           )}
-        </button>
+        </button>}
 
-        <button
+        {canManageSales && <button
           onClick={() => setActiveTab("products")}
           className={cn(
             "pb-3 px-4 font-bold text-sm transition-all border-b-2 flex items-center gap-2",
@@ -577,9 +643,9 @@ export default function Orders() {
           )}
         >
           <Package size={16} /> Catálogo de Produtos ({products.length})
-        </button>
+        </button>}
 
-        <button
+        {canManageSales && <button
           onClick={() => setActiveTab("timeline")}
           className={cn(
             "pb-3 px-4 font-bold text-sm transition-all border-b-2 flex items-center gap-2",
@@ -587,7 +653,7 @@ export default function Orders() {
           )}
         >
           <Clock size={16} /> Linha Temporal de Operações
-        </button>
+        </button>}
       </div>
 
       {/* Tab 1: Orders */}
@@ -647,7 +713,7 @@ export default function Orders() {
                       <tr key={order.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-4 px-4">
                           <span className="font-mono font-bold text-slate-900">{order.order_number}</span>
-                          {order.lead_id && <Link to={`/leads?id=${order.lead_id}`} className="block text-xs font-medium text-emerald-700 underline">Ver lead</Link>}
+                          {(!scoped || role === "owner") && order.lead_id && <Link to={`/leads?id=${order.lead_id}`} className="block text-xs font-medium text-emerald-700 underline">Ver lead</Link>}
                         </td>
                         <td className="py-4 px-4">
                           <p className="font-bold text-slate-900">{order.customer_name || "Cliente"}</p>
@@ -671,7 +737,7 @@ export default function Orders() {
                         </td>
                         <td className="py-4 px-4 text-right">
                           <div className="flex items-center justify-end gap-2">
-                            <Button
+                            {canManageSales && <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => handleViewTimeline(order)}
@@ -679,21 +745,21 @@ export default function Orders() {
                               className="text-slate-400 hover:text-slate-800"
                             >
                               <Eye size={16} />
-                            </Button>
+                            </Button>}
 
-                            {order.status === "paid" && (order.delivery_started_at
+                            {canManageSales && order.status === "paid" && (order.delivery_started_at
                               ? <Button size="sm" variant="outline" className="text-amber-800" onClick={() => {
                                 setDeliveryReviewError("");
                                 setDeliveryReview(order);
                               }}>Rever entrega</Button>
                               : <Button size="sm" variant="outline" onClick={() => retryDelivery(order.id)}>Tentar entrega</Button>)}
 
-                            {order.status === "verification_pending" && <Link
-                              to={`/orders?tab=verifications&q=${encodeURIComponent(order.order_number)}`}
+                            {canReviewPayments && order.status === "verification_pending" && <Link
+                              to={`/orders?${orderParams("verifications", { q: order.order_number })}`}
                               className="whitespace-nowrap rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100">
                               Rever comprovativo
                             </Link>}
-                            {(order.status === "created" || order.status === "awaiting_payment") && <Button
+                            {canManageSales && (order.status === "created" || order.status === "awaiting_payment") && <Button
                               size="sm" variant="outline" className="whitespace-nowrap" aria-label={"Cancelar pedido " + order.order_number} onClick={() => {
                                 setCancellationError(null);
                                 setCancellation(order);
@@ -716,10 +782,10 @@ export default function Orders() {
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
             <h2 className="font-bold text-slate-900">Confirmar comprovativos de vendas</h2>
             <p className="mt-1 text-slate-700">Confere no prestador se o valor do pedido entrou na conta da loja.</p>
-            {query && <Link to="/orders?tab=verifications" className="mt-2 mr-4 inline-block font-semibold text-emerald-800 underline">Ver todos os comprovativos</Link>}
-            <Link to="/digital-orders?view=review" className="mt-2 inline-block font-semibold text-emerald-800 underline">
+            {query && <Link to={`/orders?${orderParams("verifications")}`} className="mt-2 mr-4 inline-block font-semibold text-emerald-800 underline">Ver todos os comprovativos</Link>}
+            {!scoped && <Link to="/digital-orders?view=review" className="mt-2 inline-block font-semibold text-emerald-800 underline">
               Rever comprovativos na Entrega de ficheiros
-            </Link>
+            </Link>}
           </div>
           {loading ? <p role="status">A carregar comprovativos…</p> : proofsUnavailable ? (
             <div role="status" className="rounded-xl border p-4">
@@ -752,6 +818,7 @@ export default function Orders() {
                       Cliente: +{ver.customer_phone} {ver.sender_name && `(${ver.sender_name})`}
                     </CardDescription>
                     {ver.extracted_data?.source === "whatsapp_group" && <span className="text-xs text-slate-600">Grupo do WhatsApp</span>}
+                    {ver.extracted_data?.source === "whatsapp_private" && <span className="text-xs text-slate-600">Conversa privada no WhatsApp</span>}
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="bg-white p-3 rounded-xl border border-slate-100">
@@ -790,7 +857,7 @@ export default function Orders() {
                         Abrir comprovativo anexado
                       </a>
                     )}
-                    {ver.proof_media_url?.startsWith("agentx-group-proof:") && <Button variant="outline" size="sm" onClick={() => void saveGroupProof(ver.id)}>
+                    {/^(?:agentx-group-proof:|agentx-proof-sha256:)/.test(ver.proof_media_url ?? "") && <Button variant="outline" size="sm" onClick={() => void saveProof(ver.id, commerceFetch)}>
                       <FileText size={16} className="mr-2" /> Descarregar comprovativo
                     </Button>}
                     {!ver.order_id && <p className="text-sm text-amber-800">Este comprovativo ainda não tem um pedido associado.</p>}
@@ -903,7 +970,7 @@ export default function Orders() {
         </Card>
       )}
 
-      {approval && (
+      {canReviewPayments && approval && (
         <dialog ref={approvalDialog} aria-labelledby="approval-title"
           onCancel={(event) => { event.preventDefault(); if (!approving) setApproval(null); }}
           className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
@@ -929,7 +996,7 @@ export default function Orders() {
         </dialog>
       )}
 
-      {rejection && <dialog ref={rejectionDialog} aria-labelledby="rejection-title"
+      {canReviewPayments && rejection && <dialog ref={rejectionDialog} aria-labelledby="rejection-title"
         onCancel={(event) => { event.preventDefault(); if (!rejecting) setRejection(null); }}
         className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
         <form onSubmit={rejectProof} className="grid gap-4">
@@ -946,14 +1013,16 @@ export default function Orders() {
         </form>
       </dialog>}
 
-      {deliveryReview && <dialog ref={deliveryDialog} aria-labelledby="delivery-review-title"
+      {canManageSales && deliveryReview && <dialog ref={deliveryDialog} aria-labelledby="delivery-review-title"
         onCancel={(event) => { event.preventDefault(); if (!confirmingDelivery) setDeliveryReview(null); }}
         className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
         <form onSubmit={confirmDelivery} className="grid gap-4">
           <h2 id="delivery-review-title" className="text-lg font-bold">Rever entrega do pedido {deliveryReview.order_number}</h2>
           <p className="text-sm text-amber-800">{deliveryReview.delivery_error || "Envio por confirmar"}</p>
-          <p className="text-sm text-slate-700">Confere a conversa do cliente e regista a entrega depois de confirmares a receção de todos os itens.</p>
-          {deliveryReview.customer_phone && <Link to={`/messages?phone=${encodeURIComponent(deliveryReview.customer_phone)}`}
+          <p className="text-sm text-slate-700">{role === "operator"
+            ? "Confirma a receção com o cliente ou com quem acompanha a conversa da empresa antes de registar a entrega."
+            : "Confere a conversa do cliente e regista a entrega depois de confirmares a receção de todos os itens."}</p>
+          {role === "owner" && deliveryReview.customer_phone && <Link to={`/messages?phone=${encodeURIComponent(deliveryReview.customer_phone)}`}
             target="_blank" rel="noopener noreferrer" className="text-sm text-emerald-800 underline">Abrir conversa</Link>}
           <label className="flex items-start gap-2 text-sm font-medium">
             <input className="mt-1" type="checkbox" name="received" required disabled={confirmingDelivery} />
@@ -967,7 +1036,7 @@ export default function Orders() {
         </form>
       </dialog>}
 
-      {cancellation && <dialog ref={cancellationDialog} aria-labelledby="cancellation-title" aria-describedby="cancellation-description"
+      {canManageSales && cancellation && <dialog ref={cancellationDialog} aria-labelledby="cancellation-title" aria-describedby="cancellation-description"
         onCancel={(event) => { event.preventDefault(); if (!cancelling) setCancellation(null); }}
         className="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl backdrop:bg-slate-900/50">
         <form onSubmit={cancelOrder} className="grid gap-4">
@@ -986,7 +1055,7 @@ export default function Orders() {
       </dialog>}
 
       {/* New Product Modal */}
-      {showProductModal && (
+      {canManageSales && showProductModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <Card className="w-full max-w-lg shadow-2xl bg-white">
             <CardHeader>

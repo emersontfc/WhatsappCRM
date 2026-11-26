@@ -1,6 +1,7 @@
 import { groupContentRule, isGroupJid, moderateGroupMessage, welcomeGroupParticipants } from "./services/groupModeration.ts";
 import { parseGroupSalesCommand, processGroupSales } from "./services/groupSales.ts";
 import { GROUP_PROOF_LIMIT, groupProofOrderNumber, processGroupPaymentProof } from "./services/groupPaymentProofs.ts";
+import { directProofCandidate, processDirectPaymentProof, selectDirectPaymentProof } from "./services/directPaymentProofs.ts";
 import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "./services/whatsappOperator.ts";
 import makeWASocket, {
   Contact as BaileysContact,
@@ -31,8 +32,8 @@ const logger = pino({ level: "silent" });
 const lidFrom = (jid?: string | null) => /^(\d{5,20})(?::\d+)?@lid$/i.exec(jid ?? "")?.[1] ?? null;
 const phoneFromJid = (jid?: string | null) => /@(?:s\.whatsapp\.net|c\.us)$/i.test(jid ?? "") ? normalizeContactPhone(jid) : null;
 
-async function loadGroupProofMedia(msg: WAMessage, length: number) {
-  if (length > GROUP_PROOF_LIMIT) throw new Error("Group proof exceeds file limit");
+async function loadProofMedia(msg: WAMessage, length: number) {
+  if (length > GROUP_PROOF_LIMIT) throw new Error("Payment proof exceeds file limit");
   const stream = await downloadMediaMessage(msg, "stream", { options: { signal: AbortSignal.timeout(12_000) } });
   const chunks: Buffer[] = [];
   let size = 0;
@@ -40,7 +41,7 @@ async function loadGroupProofMedia(msg: WAMessage, length: number) {
     for await (const chunk of stream) {
       const bytes = Buffer.from(chunk);
       size += bytes.length;
-      if (size > GROUP_PROOF_LIMIT) throw new Error("Group proof exceeds file limit");
+      if (size > GROUP_PROOF_LIMIT) throw new Error("Payment proof exceeds file limit");
       chunks.push(bytes);
     }
     return Buffer.concat(chunks, size);
@@ -332,7 +333,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
     }
   }
 
-  async handleMessageUpsert(userId: string, socket: WASocket, { messages, type }: BaileysEventMap["messages.upsert"]) {
+  async handleMessageUpsert(userId: string, socket: WASocket, { messages, type }: BaileysEventMap["messages.upsert"],
+    loadPaymentProofMedia = loadProofMedia) {
     console.log(`[WhatsApp] messages.upsert triggered for ${userId}, type: ${type}, count: ${messages.length}`);
     if (type !== "notify" && type !== "append") return;
     for (const msg of messages) {
@@ -367,7 +369,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
               void processGroupPaymentProof({ userId, jid, key: msg.key, text: proofText, linked: socket.user,
                 loadGroup: () => socket.groupMetadata(jid), attachment: media ? {
                   filename: content?.documentMessage?.fileName ?? undefined,
-                  load: () => loadGroupProofMedia(msg, Number(media.fileLength ?? 0))
+                  load: () => loadPaymentProofMedia(msg, Number(media.fileLength ?? 0))
                 } : undefined }).catch(() => console.warn("[GroupProofs] Could not process a group proof"));
             }
           } else {
@@ -390,9 +392,42 @@ export class WhatsAppManager implements IWhatsAppTransport {
         }
 
         const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
+        const candidate = isMe === false && /@(?:s\.whatsapp\.net|c\.us|lid)$/i.test(jid)
+          ? directProofCandidate(extractMessageContent(msg.message)) : null;
+        const ageAtIngress = Date.now() - Number(msg.messageTimestamp) * 1000;
+        const liveProof = candidate && type === "notify" && msgKeyId && msgKeyId.length <= 150 &&
+          Number.isFinite(ageAtIngress) && ageAtIngress >= -30_000 && ageAtIngress < 5 * 60_000;
+        let selection: Awaited<ReturnType<typeof selectDirectPaymentProof>> | undefined;
         const saved = await this.syncMessage(userId, msg, altJid, undefined, undefined, undefined, undefined, undefined,
-          { liveIngress: true });
+          { liveIngress: candidate ? Boolean(liveProof) : true,
+            privateProof: liveProof ? async (contactId) => {
+              try {
+                selection = await selectDirectPaymentProof(userId, contactId, candidate);
+              } catch {
+                console.warn("[DirectProofs] Could not resolve the proof destination");
+                selection = { status: "invalid" };
+              }
+              return selection.status !== "ordinary";
+            } : undefined });
         if (type !== "notify" || saved?.agentx_live_ingress !== true || !msgKeyId) continue;
+
+        if (candidate && !selection) continue;
+        if (candidate && selection && selection.status !== "ordinary") {
+          if (saved.contact_id && await claimWhatsAppAction(userId, msgKeyId)) {
+            let reply: string | null;
+            try {
+              reply = candidate.length > GROUP_PROOF_LIMIT && selection.status === "matched"
+                ? "Envia uma foto ou um PDF de até 5 MB com o número AGX do pedido."
+                : await processDirectPaymentProof({ userId, contactId: saved.contact_id, sourceMessageId: msgKeyId, candidate },
+                  selection, { filename: candidate.filename, load: () => loadPaymentProofMedia(msg, candidate.length) });
+            } catch {
+              console.warn("[DirectProofs] Private attachment intake could not complete");
+              reply = "Não consegui confirmar o registo do comprovativo. Reenvia o mesmo ficheiro com o número AGX ou fala com a equipa. Não faças outro pagamento.";
+            }
+            if (reply) await this.sendMessage(userId, jid, reply, undefined, undefined, undefined, undefined, undefined, saved.contact_id);
+          }
+          continue;
+        }
 
         const age = Date.now() - Date.parse(saved.timestamp);
         if (text && parseOperatorCommand(text)) {
@@ -457,13 +492,14 @@ export class WhatsAppManager implements IWhatsAppTransport {
     explicitMimetype?: string, 
     explicitFilename?: string,
     verifiedContactId?: string,
-    options: { liveIngress?: boolean; replyToMessageId?: string } = {}
+    options: { liveIngress?: boolean; replyToMessageId?: string; privateProof?: (contactId: string | null) => Promise<boolean> } = {}
   ): Promise<any> {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(userId)) return null;
 
       if (!msg.message) return null;
+      const content = extractMessageContent(msg.message) ?? msg.message;
       
       const jid = msg.key.remoteJid;
       if (!jid) return null;
@@ -471,31 +507,30 @@ export class WhatsAppManager implements IWhatsAppTransport {
       if (jid === "status@broadcast") return null;
       const groupMessage = isGroupJid(jid);
       if (groupMessage && !msg.key.fromMe) {
-        const content = extractMessageContent(msg.message);
         const caption = content?.conversation || content?.extendedTextMessage?.text ||
           content?.imageMessage?.caption || content?.documentMessage?.caption || "";
         if (groupProofOrderNumber(caption, Boolean(content?.imageMessage || content?.documentMessage))) return null;
       }
 
-      let text = msg.message.conversation || 
-                   msg.message.extendedTextMessage?.text || 
-                   msg.message.imageMessage?.caption || 
-                   msg.message.videoMessage?.caption ||
-                   msg.message.documentMessage?.caption ||
+      let text = content.conversation ||
+                   content.extendedTextMessage?.text ||
+                   content.imageMessage?.caption ||
+                   content.videoMessage?.caption ||
+                   content.documentMessage?.caption ||
                    "";
 
       if (!text) {
-        if (msg.message.imageMessage) text = "📷 Foto";
-        else if (msg.message.videoMessage) text = "🎥 Vídeo";
-        else if (msg.message.audioMessage) text = "🎵 Áudio";
-        else if (msg.message.documentMessage) text = "📄 Documento";
-        else if (msg.message.stickerMessage) text = "🎨 Sticker";
-        else if (msg.message.buttonsResponseMessage?.selectedButtonId) text = msg.message.buttonsResponseMessage.selectedButtonId;
-        else if (msg.message.templateButtonReplyMessage?.selectedId) text = msg.message.templateButtonReplyMessage.selectedId;
-        else if (msg.message.listResponseMessage?.singleSelectReply?.selectedRowId) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
-        else if (msg.message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+        if (content.imageMessage) text = "📷 Foto";
+        else if (content.videoMessage) text = "🎥 Vídeo";
+        else if (content.audioMessage) text = "🎵 Áudio";
+        else if (content.documentMessage) text = "📄 Documento";
+        else if (content.stickerMessage) text = "🎨 Sticker";
+        else if (content.buttonsResponseMessage?.selectedButtonId) text = content.buttonsResponseMessage.selectedButtonId;
+        else if (content.templateButtonReplyMessage?.selectedId) text = content.templateButtonReplyMessage.selectedId;
+        else if (content.listResponseMessage?.singleSelectReply?.selectedRowId) text = content.listResponseMessage.singleSelectReply.selectedRowId;
+        else if (content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
           try {
-            const p = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+            const p = JSON.parse(content.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
             text = p.id || p.selectedId || "";
           } catch (e) {}
         }
@@ -552,31 +587,34 @@ export class WhatsAppManager implements IWhatsAppTransport {
       let mediaFilename = explicitFilename || "";
 
       if (!mediaType) {
-        if (msg.message.imageMessage) {
+        if (content.imageMessage) {
           mediaType = "image";
-          mediaMimetype = msg.message.imageMessage.mimetype || "image/jpeg";
+          mediaMimetype = content.imageMessage.mimetype || "image/jpeg";
           mediaFilename = "image.jpg";
-        } else if (msg.message.videoMessage) {
+        } else if (content.videoMessage) {
           mediaType = "video";
-          mediaMimetype = msg.message.videoMessage.mimetype || "video/mp4";
+          mediaMimetype = content.videoMessage.mimetype || "video/mp4";
           mediaFilename = "video.mp4";
-        } else if (msg.message.audioMessage) {
+        } else if (content.audioMessage) {
           mediaType = "audio";
-          mediaMimetype = msg.message.audioMessage.mimetype || "audio/ogg";
+          mediaMimetype = content.audioMessage.mimetype || "audio/ogg";
           mediaFilename = "audio.ogg";
-        } else if (msg.message.documentMessage) {
+        } else if (content.documentMessage) {
           mediaType = "document";
-          mediaMimetype = msg.message.documentMessage.mimetype || "application/pdf";
-          mediaFilename = msg.message.documentMessage.fileName || "document";
-        } else if (msg.message.stickerMessage) {
+          mediaMimetype = content.documentMessage.mimetype || "application/pdf";
+          mediaFilename = content.documentMessage.fileName || "document";
+        } else if (content.stickerMessage) {
           mediaType = "sticker";
-          mediaMimetype = msg.message.stickerMessage.mimetype || "image/webp";
+          mediaMimetype = content.stickerMessage.mimetype || "image/webp";
           mediaFilename = "sticker.webp";
         }
       }
 
       // Download incoming media from WhatsApp if not already provided
-      if (!groupMessage && !msg.key.fromMe && !mediaUrl && (msg.message.audioMessage || msg.message.imageMessage || msg.message.videoMessage || msg.message.documentMessage || msg.message.stickerMessage)) {
+      const privateProof = !isGroupOrBroadcast && msg.key.fromMe === false && directProofCandidate(content) &&
+        (options.privateProof ? await options.privateProof(contactId) : true);
+      if (!groupMessage && !msg.key.fromMe && !mediaUrl && !privateProof &&
+          (content.audioMessage || content.imageMessage || content.videoMessage || content.documentMessage || content.stickerMessage)) {
         try {
           const session = this.sessions.get(userId);
           if (session?.socket) {

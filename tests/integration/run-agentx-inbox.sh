@@ -44,11 +44,17 @@ SQL
   for _ in 1 2; do
     psql_fixture < supabase/migrations/22_seller_payment_methods.sql >/dev/null
   done
+  psql_fixture < supabase/migrations/25_group_payment_proofs.sql >/dev/null
   psql_fixture < supabase/migrations/26_seller_delivery_recovery.sql >/dev/null
   psql_fixture < supabase/migrations/27_whatsapp_action_claims.sql >/dev/null
   psql_fixture < supabase/migrations/32_human_handoff_alerts.sql >/dev/null
   psql_fixture < supabase/migrations/35_seller_stock_reservations.sql >/dev/null
   psql_fixture < supabase/migrations/36_seller_conversation_quotes.sql >/dev/null
+  docker cp migrations "$db:/agentx-migrations"
+  psql_fixture -f /agentx-migrations/apply_agentx_v2.sql >/dev/null
+  for migration in 37_seller_company_team 38_whatsapp_private_payment_proofs 39_seller_notices; do
+    psql_fixture < "supabase/migrations/${migration}.sql" >/dev/null
+  done
 fi
 
 export AGENTX_FIXTURE_JWT_SECRET="agentx-inbox-jwt-test-secret-local-only"

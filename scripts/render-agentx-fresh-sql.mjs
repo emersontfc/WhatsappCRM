@@ -4,6 +4,7 @@ const root = new URL("../", import.meta.url);
 const fresh = new URL("migrations/install_agentx_fresh.sql", root);
 const digital = new URL("migrations/apply_agentx_v2.sql", root);
 const upgrade = new URL("migrations/apply_agentx_whatsapp_workflows.sql", root);
+const teamUpgrade = new URL("migrations/apply_agentx_team_operations.sql", root);
 
 // The fresh-install guard guarantees that none of the conditional v2 tables exist.
 // Remove psql directives and combine the migration transactions for the SQL Editor.
@@ -30,10 +31,12 @@ function render(file) {
 }
 
 const args = process.argv.slice(2);
-if (args.length > 1 || (args.length === 1 && args[0] !== "--whatsapp-upgrade")) {
-  throw new Error("Usage: node scripts/render-agentx-fresh-sql.mjs [--whatsapp-upgrade]");
+if (args.length > 1 || (args.length === 1 && !["--whatsapp-upgrade", "--team-upgrade"].includes(args[0]))) {
+  throw new Error("Usage: node scripts/render-agentx-fresh-sql.mjs [--whatsapp-upgrade|--team-upgrade]");
 }
-const [target, instruction] = args.length
-  ? [upgrade, "atualizar um projeto AgentX com a migração 26 aplicada."]
-  : [fresh, "executar apenas num projeto Supabase vazio."];
+const [target, instruction] = args[0] === "--team-upgrade"
+  ? [teamUpgrade, "atualizar um projeto AgentX com a migração 36 e o esquema de empresas v2 aplicados."]
+  : args[0] === "--whatsapp-upgrade"
+    ? [upgrade, "atualizar um projeto AgentX com a migração 26 aplicada."]
+    : [fresh, "executar apenas num projeto Supabase vazio."];
 process.stdout.write(`-- AgentX | ${instruction}\nBEGIN;\nSELECT pg_advisory_xact_lock(879621, 3);\n${render(target)}\nCOMMIT;\n`);

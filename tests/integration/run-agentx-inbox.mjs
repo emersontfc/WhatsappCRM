@@ -11,6 +11,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const owner = "00000000-0000-4000-8000-000000000001";
 const other = "00000000-0000-4000-8000-000000000002";
+const salesOperator = "00000000-0000-4000-8000-000000000003";
+const financeOperator = "00000000-0000-4000-8000-000000000004";
 const otherContact = "00000000-0000-4000-8000-000000000022";
 const previousLeadId = "00000000-0000-4000-8000-000000000031";
 const duplicateLeadId = "00000000-0000-4000-8000-000000000032";
@@ -29,8 +31,8 @@ function token(role, sub) {
   return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
 }
 
-const users = [owner, other].map((id, index) => ({
-  id, email: `loja-${index ? "b" : "a"}@example.invalid`, role: "authenticated", aud: "authenticated",
+const users = [[owner, "loja-a"], [other, "loja-b"], [salesOperator, "vendas"], [financeOperator, "financeiro"]].map(([id, handle]) => ({
+  id, email: `${handle}@example.invalid`, role: "authenticated", aud: "authenticated",
   app_metadata: { provider: "email" }, user_metadata: {}, created_at: "2026-01-01T00:00:00Z"
 }));
 const userTokens = users.map((user) => token("authenticated", user.id));
@@ -166,7 +168,11 @@ async function start(port = 0) {
   });
   const stopped = once(child, "exit");
   const outbound = [];
-  child.on("message", (message) => { if (message.event === "outbound") outbound.push(message); });
+  const proofDownloads = [];
+  child.on("message", (message) => {
+    if (message.event === "outbound") outbound.push(message);
+    if (message.event === "proof-media-request") proofDownloads.push(message.messageId);
+  });
   let logs = "";
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (data) => { logs = (logs + data).slice(-8000); });
   async function stop() {
@@ -191,7 +197,7 @@ async function start(port = 0) {
   }
   for (let attempt = 0; attempt < 200; attempt++) {
     const match = /Server listening on port (\d+)/.exec(logs);
-    if (match) return { port: Number(match[1]), base: `http://127.0.0.1:${match[1]}`, stop, simulate, outbound };
+    if (match) return { port: Number(match[1]), base: `http://127.0.0.1:${match[1]}`, stop, simulate, outbound, proofDownloads };
     if (child.exitCode !== null) break;
     await delay(100);
   }
@@ -659,6 +665,7 @@ try {
   assert.equal(sentDocuments(app.outbound).length, 0);
   assert.equal(downloadedObjects.length, 0);
 
+  await app.simulate("sellerNotices");
   const priorNotifications = notifications();
   const receipt = "Confirmado ABZA12CD34. Transferiste 250.00MT e a taxa foi de 0.00MT para 258840000003 - Loja de teste aos 25/11/26 as 8:47 PM. O teu novo saldo M-Pesa e de 0.00MT. Continua a transferir SEM TAXAS de M-Pesa para M-Pesa. Em caso de duvida, liga 100.";
   const aiBeforeMpesa = aiRequests;
@@ -683,11 +690,12 @@ try {
   assert.equal((await read("orders", `?id=eq.${order.id}`))[0].status, "verification_pending");
   assert.equal((await read("payment_verifications", `?order_id=eq.${order.id}`)).length, 2);
   assert.equal((await (await api(seller)).json()).data.pendingReviews, 1);
+  await app.simulate("sellerNotices");
   assert.equal(notifications(), priorNotifications + 1);
   assert.equal(sentDocuments(app.outbound).length, 0);
   assert.equal(downloadedObjects.length, 0);
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 3);
-  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação|validação humana|já foi registado/i);
+  assert.match(app.outbound.findLast(({ jid }) => jid === identity.jid).content.text, /aguarda.*confirmação|validação humana|já foi registado/i);
 
   const confirmCorrectProof = { ...approval, proofId: correctProof.id };
   assert.equal((await approve(order.id, confirmCorrectProof, 1)).status, 404);
@@ -872,6 +880,7 @@ try {
   const sms = "D da transacao PP261125.2001.i00000. Transferiste 250.00MT para conta 870000006, nome: LOJA DE TESTE as 20:01:33 de 25/11/2026. Taxa: 0.00MT. O saldo da tua conta e xxxxMT. Conteudo: megas.";
   const documentsBeforeSms = sentDocuments(app.outbound).length;
   const downloadsBeforeSms = downloadedObjects.length;
+  await app.simulate("sellerNotices");
   const notificationsBeforeSms = notifications();
   const aiBeforeSms = aiRequests;
   aiEndpointAvailable = false;
@@ -891,11 +900,12 @@ try {
   assert.equal(smsProof.extracted_data.date, "25/11/2026");
   assert.equal((await read("orders", `?id=eq.${smsOrder.id}`))[0].status, "verification_pending");
   assert.equal((await approve(smsOrder.id, { proofId: smsProof.id })).status, 400);
+  await app.simulate("sellerNotices");
   assert.equal(notifications(), notificationsBeforeSms + 1);
   assert.equal(sentDocuments(app.outbound).length, documentsBeforeSms);
   assert.equal(downloadedObjects.length, downloadsBeforeSms);
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 1);
-  assert.match(app.outbound.at(-1).content.text, /aguarda.*confirmação/i);
+  assert.match(app.outbound.findLast(({ jid }) => jid === smsIdentity.jid).content.text, /aguarda.*confirmação/i);
 
   const smsApproval = await approve(smsOrder.id, { ...approval, proofId: smsProof.id });
   assert.equal(smsApproval.status, 200);
@@ -1695,6 +1705,155 @@ try {
   assert.equal(nativeItem.product_id, product.id);
   assert.ok(app.outbound.at(-1).content.text.includes(nativeOrders[0].order_number));
   assert.match(app.outbound.at(-1).content.text, /M-Pesa.*258840000005/i);
+
+  const teamPath = "/seller-team/companies";
+  const companiesResult = await api(teamPath);
+  assert.equal(companiesResult.status, 200, await companiesResult.clone().text());
+  const [existingCompany] = (await companiesResult.json()).data;
+  const linkedCompany = await api(teamPath, 0, existingCompany ? { organizationId: existingCompany.organizationId } : { name: "Loja A" });
+  assert.equal(linkedCompany.status, 201, await linkedCompany.clone().text());
+  const { organizationId: companyId } = (await linkedCompany.json()).data;
+  const companyPath = `${teamPath}/${companyId}`;
+  const teamMember = (body, index = 0) => fetch(app.base + "/api" + companyPath + "/members", {
+    method: "PUT", headers: { authorization: `Bearer ${userTokens[index]}`, "content-type": "application/json" }, body: JSON.stringify(body)
+  });
+  for (const [index, role] of [[2, "operator"], [3, "finance_admin"]]) {
+    const added = await teamMember({ email: users[index].email, role });
+    assert.equal(added.status, 200, await added.clone().text());
+    assert.deepEqual((await (await api(teamPath, index)).json()).data.map((row) => [row.organizationId, row.role]), [[companyId, role]]);
+  }
+  const commerceAs = (route, index, body) => fetch(app.base + "/api/commerce" + route, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "x-agentx-company": companyId, "content-type": "application/json", ...(index < 0 ? {} : { authorization: `Bearer ${userTokens[index]}` }) },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(12000)
+  });
+
+  const privateBuyer = "258840000025";
+  const privateBuyerJid = `${privateBuyer}@s.whatsapp.net`;
+  for (const id of ["direct-image-order", "direct-pdf-order"]) {
+    await app.simulate("sales", { jid: privateBuyerJid, text: "Quero comprar 1 Caderno A5 por M-Pesa", messageId: id });
+  }
+  const [imageOrder] = await read("orders", "?source_message_id=eq.direct-image-order");
+  const [pdfOrder] = await read("orders", "?source_message_id=eq.direct-pdf-order");
+  assert.equal(imageOrder.status, "awaiting_payment");
+  assert.equal(pdfOrder.status, "awaiting_payment");
+  const sellerOrders = await commerceAs("/orders", 2);
+  assert.equal(sellerOrders.status, 200);
+  assert.ok((await sellerOrders.json()).data.some(({ id }) => id === imageOrder.id));
+  assert.equal((await commerceAs("/orders", 1)).status, 403);
+
+  const pngProofBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/zXQAAAAASUVORK5CYII=", "base64");
+  const privateImage = { jid: privateBuyerJid, media: "image", mediaBytes: pngProofBytes.toString("base64"), mimetype: "image/png" };
+  const privatePdf = { jid: privateBuyerJid, media: "document", mediaBytes: pdfBytes.toString("base64"), mimetype: "application/pdf", fileName: "comprovativo.pdf" };
+  await app.simulate("ingress", { ...privateImage, messageId: "direct-proof-ambiguous", text: "Segue o comprovativo" });
+  assert.match(app.outbound.at(-1).content.text, /número exato.*AGX/i);
+  assert.ok(!app.proofDownloads.includes("direct-proof-ambiguous"));
+  const [intake] = await read("agentx_direct_proof_intake_events", "?source_message_id=eq.direct-proof-ambiguous");
+  assert.equal(intake.reason, "ambiguous_order");
+
+  const imageMessage = { ...privateImage, messageId: "direct-image-proof", text: `Comprovativo do pedido ${imageOrder.order_number}` };
+  await app.simulate("ingress", imageMessage);
+  await app.simulate("ingress", imageMessage);
+  const failedPdf = { ...privatePdf, messageId: "direct-pdf-download-failed", mediaDownloadFails: true, text: `Comprovativo do pedido ${pdfOrder.order_number}` };
+  await app.simulate("ingress", failedPdf);
+  assert.deepEqual(await read("payment_verifications", "?source_message_id=eq.direct:direct-pdf-download-failed"), []);
+  await app.simulate("ingress", { ...failedPdf, messageId: "direct-pdf-proof", mediaDownloadFails: false });
+  assert.equal(app.proofDownloads.filter((id) => id === imageMessage.messageId).length, 1);
+  assert.equal(app.proofDownloads.filter((id) => id === failedPdf.messageId).length, 1);
+  assert.equal(app.proofDownloads.filter((id) => id === "direct-pdf-proof").length, 1);
+
+  const [imageProof] = await read("payment_verifications", "?source_message_id=eq.direct:direct-image-proof");
+  const [pdfProof] = await read("payment_verifications", "?source_message_id=eq.direct:direct-pdf-proof");
+  for (const [proof, expectedOrder, bytes, mime] of [[imageProof, imageOrder, pngProofBytes, "image/png"], [pdfProof, pdfOrder, pdfBytes, "application/pdf"]]) {
+    assert.equal(proof.order_id, expectedOrder.id);
+    assert.equal(proof.user_id, owner);
+    assert.equal(proof.status, "pending");
+    assert.equal((await read("orders", `?id=eq.${expectedOrder.id}`))[0].status, "verification_pending");
+    assert.equal((await read("payment_verifications", `?order_id=eq.${expectedOrder.id}`)).length, 1);
+    const attachmentPath = `/verifications/${proof.id}/attachment`;
+    for (const [index, expected] of [[-1, 401], [1, 403], [2, 403]]) {
+      assert.equal((await commerceAs(attachmentPath, index)).status, expected);
+    }
+    const opened = await commerceAs(attachmentPath, 3);
+    assert.equal(opened.status, 200, await opened.clone().text());
+    assert.match(opened.headers.get("cache-control"), /no-store/i);
+    const file = await opened.json();
+    assert.equal(file.mime, mime);
+    assert.deepEqual(Buffer.from(file.base64, "base64"), bytes);
+    const [attachment] = await read("agentx_direct_payment_attachments", `?verification_id=eq.${proof.id}`);
+    assert.ok(attachment.storage_path.startsWith(`${owner}/`));
+    const publicDownload = await fetch(`${supabaseUrl}/storage/v1/object/public/agentx-direct-proofs/${attachment.storage_path}`);
+    assert.equal(publicDownload.status, 403);
+  }
+  const mediaHistory = await read("messages", "?msg_id=in.(direct-image-proof,direct-pdf-download-failed,direct-pdf-proof)");
+  assert.equal(mediaHistory.length, 3);
+  assert.ok(mediaHistory.every((row) => !row.media_url));
+  assert.equal((await read("products", `?id=eq.${notebook.id}`))[0].stock, 4);
+
+  const financeTasks = (await (await api(`${companyPath}/tasks`, 3)).json()).data;
+  assert.ok(financeTasks.some(({ kind, id, action }) => kind === "payment" && id === imageOrder.id && action === "review"));
+  assert.ok(financeTasks.some(({ kind, id, action }) => kind === "payment" && id === pdfOrder.id && action === "review"));
+  assert.ok(financeTasks.some(({ kind, id }) => kind === "private_proof" && id === intake.id));
+  const sellerTasks = (await (await api(`${companyPath}/tasks`, 2)).json()).data;
+  assert.ok(sellerTasks.some(({ kind, id, action }) => kind === "payment" && id === imageOrder.id && action === "orders"));
+  assert.ok(!sellerTasks.some(({ kind, action }) => kind === "private_proof" || action === "review"));
+  assert.equal((await api(`${companyPath}/tasks`, 1)).status, 403);
+  assert.equal((await commerceAs("/verifications", 2)).status, 403);
+
+  const [notice] = await read("agentx_seller_notices", `?proof_id=eq.${imageProof.id}`);
+  const beforeNotice = notifications();
+  await app.simulate("sellerNotices", { noticeId: notice.id, offline: true });
+  assert.equal(notifications(), beforeNotice);
+  assert.equal((await read("agentx_seller_notices", `?id=eq.${notice.id}`))[0].status, "retry");
+  const retryDue = await fetch(new URL(`/agentx_seller_notices?id=eq.${notice.id}`, rest), {
+    method: "PATCH", headers: storageAuth, body: JSON.stringify({ available_at: new Date(Date.now() - 1000).toISOString() })
+  });
+  assert.equal(retryDue.status, 204);
+  await app.simulate("sellerNotices", { noticeId: notice.id });
+  await app.simulate("sellerNotices", { noticeId: notice.id });
+  const [sentNotice] = await read("agentx_seller_notices", `?id=eq.${notice.id}`);
+  assert.equal(sentNotice.status, "sent");
+  assert.equal(sentNotice.attempts, 2);
+  assert.equal(notifications(), beforeNotice + 1);
+
+  const [pdfNotice] = await read("agentx_seller_notices", `?proof_id=eq.${pdfProof.id}`);
+  const retryNotice = `${companyPath}/notices/${pdfNotice.id}/retry`;
+  assert.equal((await api(retryNotice, 3, {})).status, 409);
+  // Start at the last attempt to exercise exhaustion and authorized retry without waiting for backoff.
+  const lastAttempt = await fetch(new URL(`/agentx_seller_notices?id=eq.${pdfNotice.id}`, rest), {
+    method: "PATCH", headers: storageAuth, body: JSON.stringify({ attempts: 5 })
+  });
+  assert.equal(lastAttempt.status, 204);
+  await app.simulate("sellerNotices", { noticeId: pdfNotice.id, offline: true });
+  assert.equal((await read("agentx_seller_notices", `?id=eq.${pdfNotice.id}`))[0].status, "failed");
+  assert.equal((await api(retryNotice, 2, {})).status, 403);
+  assert.equal((await api(retryNotice, 1, {})).status, 403);
+  assert.equal((await api(retryNotice, 3, {})).status, 200);
+  await app.simulate("sellerNotices", { noticeId: pdfNotice.id });
+  const [resumedNotice] = await read("agentx_seller_notices", `?id=eq.${pdfNotice.id}`);
+  assert.equal(resumedNotice.status, "sent");
+  assert.equal(resumedNotice.last_requeued_by, financeOperator);
+  assert.equal(notifications(), beforeNotice + 2);
+
+  const financeDecision = { settlementVerified: true, settlementMethod: "mpesa", settlementReference: "IMAGEM00001", settlementAmount: "90", proofId: imageProof.id };
+  const imageApprovalPath = `/orders/${imageOrder.id}/approve`;
+  assert.equal((await commerceAs(imageApprovalPath, 2, financeDecision)).status, 403);
+  assert.equal((await commerceAs(imageApprovalPath, 3, { ...financeDecision, settlementVerified: false })).status, 400);
+  const financeApproval = await commerceAs(imageApprovalPath, 3, financeDecision);
+  assert.equal(financeApproval.status, 200, await financeApproval.clone().text());
+  assert.equal((await commerceAs(imageApprovalPath, 3, financeDecision)).status, 200);
+  const [paidImageOrder] = await read("orders", `?id=eq.${imageOrder.id}`);
+  assert.equal(paidImageOrder.status, "paid");
+  assert.equal(paidImageOrder.user_id, owner);
+  assert.equal(paidImageOrder.approved_by, financeOperator);
+  assert.equal((await read("payment_verifications", `?id=eq.${imageProof.id}`))[0].reviewed_by, financeOperator);
+  const financeAudit = await read("agent_operations", `?order_id=eq.${imageOrder.id}&step=eq.admin_approved`);
+  assert.equal(financeAudit.length, 1);
+  assert.equal(financeAudit[0].metadata.actorId, financeOperator);
+  assert.equal((await read("products", `?id=eq.${notebook.id}`))[0].stock, 3);
+  assert.equal((await teamMember({ memberId: financeOperator, role: null })).status, 200);
+  assert.equal((await commerceAs(`/verifications/${pdfProof.id}/attachment`, 3)).status, 403);
+  console.log("Same-company finance reviewed private image/PDF receipts, recorded the actual actor, and recovered one disconnected WhatsApp notice without duplicate payment");
 
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);

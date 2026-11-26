@@ -3,12 +3,15 @@ CREATE ROLE authenticated;
 CREATE ROLE service_role BYPASSRLS;
 CREATE SCHEMA auth;
 CREATE SCHEMA storage;
-CREATE TABLE auth.users (id uuid PRIMARY KEY);
+CREATE TABLE auth.users (id uuid PRIMARY KEY, email text, email_confirmed_at timestamptz, deleted_at timestamptz);
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
   AS $$ SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid $$;
 GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
 CREATE TABLE storage.buckets (id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL, file_size_limit bigint);
 CREATE TABLE storage.objects (bucket_id text, name text);
+ALTER TABLE storage.buckets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+GRANT USAGE ON SCHEMA storage TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 
 CREATE TABLE public.users (id uuid PRIMARY KEY, email text, role text, plan text, phone text, admin_phones text);
@@ -58,8 +61,10 @@ GRANT SELECT ON public.users, public.contacts, public.leads TO authenticated;
 
 INSERT INTO public.users (id, email, role, plan) VALUES
   ('00000000-0000-4000-8000-000000000001', 'loja-a@example.invalid', 'admin', 'Admin'),
-  ('00000000-0000-4000-8000-000000000002', 'loja-b@example.invalid', 'admin', 'Admin');
-INSERT INTO auth.users SELECT id FROM public.users;
+  ('00000000-0000-4000-8000-000000000002', 'loja-b@example.invalid', 'admin', 'Admin'),
+  ('00000000-0000-4000-8000-000000000003', 'vendas@example.invalid', 'user', 'Free'),
+  ('00000000-0000-4000-8000-000000000004', 'financeiro@example.invalid', 'user', 'Free');
+INSERT INTO auth.users (id, email, email_confirmed_at) SELECT id, email, now() FROM public.users;
 INSERT INTO public.subscriptions (user_id) SELECT id FROM public.users;
 INSERT INTO public.leads (id, user_id, phone, name, stage, status, notes, created_at) VALUES
   ('00000000-0000-4000-8000-000000000031', '00000000-0000-4000-8000-000000000001',

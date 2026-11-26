@@ -51,6 +51,20 @@ export const guides: Guide[] = [
     keywords: "conectar qr code emparelhamento pareamento login número whatsapp business"
   },
   {
+    id: "first-test",
+    group: "Começar",
+    title: "Preparar o primeiro teste",
+    summary: "Escolhe um percurso e acompanha os passos de configuração e teste.",
+    icon: ListChecks,
+    action: { label: "Preparar primeiro teste", to: "/onboarding" },
+    steps: [
+      { title: "Loja", detail: "Prepara um produto, ativa o agente de vendas e verifica um pedido feito pelo WhatsApp." },
+      { title: "Clínica ou salão", detail: "Define um serviço e os horários da equipa, depois cria uma marcação pelo link público." },
+      { title: "Gestão de grupos", detail: "Configura uma regra num grupo de teste e verifica a ocorrência na fila de revisão." }
+    ],
+    keywords: "onboarding configuração primeiros passos loja clínica salão grupos tutorial teste"
+  },
+  {
     id: "messages-inbox",
     group: "Atendimento e vendas",
     title: "Conversas e atendimento",
