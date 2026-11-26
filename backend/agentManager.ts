@@ -8,7 +8,8 @@ import { submitPaymentProofTool } from "./tools/commerce/submitPaymentProof.ts";
 import { parseMozambicanReceiptSMS } from "./services/paymentProofSms.ts";
 import { normalizeContactPhone } from "../shared/contactPhone.ts";
 import { agentFallbackReply, asksAboutAcceptedMethods, catalogOrderFromMessage, containsPaymentInstructions,
-  isExplicitPurchase, isPaymentQuestion, requestedPaymentMethods, requestsHumanHandoff, suggestsHumanHandoff } from "./services/agentFallback.ts";
+  isExplicitPurchase, isPaymentQuestion, readCatalogReply, requestedCatalogQuantity, requestedPaymentMethods,
+  requestsHumanHandoff, suggestsHumanHandoff, type CatalogOffer } from "./services/agentFallback.ts";
 import { readAgentPaymentMethods, readAgentPaymentReply } from "./services/agentPaymentReply.ts";
 import { processHumanHandoffs, requestHumanHandoff } from "./services/humanHandoff.ts";
 import { recordCatalogInterest } from "./tools/commerce/getProductsCatalog.ts";
@@ -339,6 +340,21 @@ Você possui autonomia comercial: pode consultar o catálogo com 'getProductsCat
 
 // In-memory context cache
 const contextCache: Map<string, string[]> = new Map();
+const catalogOffers = new Map<string, CatalogOffer & { messageId: string; expiresAt: number }>();
+const catalogOfferLifetime = 10 * 60_000;
+
+export function forgetCatalogOffer(userId: string, contactId: string, outgoingMessageId?: string) {
+  const key = `${userId}:${contactId}`;
+  if (!outgoingMessageId || catalogOffers.get(key)?.messageId !== outgoingMessageId) catalogOffers.delete(key);
+}
+
+function rememberCatalogOffer(key: string, offer: CatalogOffer, messageId: string) {
+  const pending = { ...offer, messageId, expiresAt: Date.now() + catalogOfferLifetime };
+  catalogOffers.set(key, pending);
+  setTimeout(() => {
+    if (catalogOffers.get(key) === pending) catalogOffers.delete(key);
+  }, catalogOfferLifetime).unref();
+}
 
 export function robustParseAgentJSON(raw: string): { reply: string; tool: string | null; args: any; action?: string; intent?: string; data?: any } | null {
   if (!raw) return null;
@@ -589,6 +605,11 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
                     (Boolean(myPhone) && cleanSenderPhone === myPhone);
 
     const role: UserRole = isOwner ? "admin" : "lead";
+    const offerKey = role === "lead" && contactData?.id ? `${userId}:${contactData.id}` : undefined;
+    const lastOffer = offerKey ? catalogOffers.get(offerKey) : undefined;
+    const pendingOffer = lastOffer && lastOffer.expiresAt > Date.now() ? lastOffer : undefined;
+    // Only the next turn can accept a quote. Consume synchronously so simultaneous replies cannot start two orders.
+    if (offerKey) catalogOffers.delete(offerKey);
     const linkedPhone = normalizeContactPhone(contactData?.phone);
     const toolPhone = normalizeContactPhone(cleanSenderPhone) || (linkedPhone !== cleanSenderLid ? linkedPhone : "") || "";
 
@@ -706,9 +727,11 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
     let catalogContext = "";
     let localReply: string | null = null;
+    let offeredProduct: CatalogOffer | undefined;
     let liveProducts: Awaited<ReturnType<typeof commerceService.listAgentProducts>> | null = null;
     const explicitPurchase = role === "lead" && isExplicitPurchase(text);
-    const methods = role === "lead" ? requestedPaymentMethods(text, explicitPurchase) : [];
+    const shortQuantity = role === "lead" ? requestedCatalogQuantity(text) : null;
+    const methods = role === "lead" ? requestedPaymentMethods(text, explicitPurchase || shortQuantity !== null) : [];
     const orderNumber = role === "lead" ? text.match(/\bAGX-[A-Z0-9]+(?:-[A-Z0-9]+)*\b/i)?.[0] : undefined;
     const paymentQuestion = role === "lead" && isPaymentQuestion(text, context);
     const isCatalogAgent = !agent.specialization || ["vendas", "multifuncional"].includes(agent.specialization);
@@ -717,6 +740,8 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     if (role === "lead") {
       if (requestsHumanHandoff(text)) {
         localReply = await queueHumanReply(whatsappManager, userId, contactData?.id, sourceMessageId);
+      } else if (isCatalogAgent && shortQuantity !== null && (!pendingOffer || !sourceMessageId)) {
+        localReply = "Qual é o produto que queres encomendar? Envia o nome para eu indicar o preço e o stock.";
       } else if (paymentQuestion && orderNumber) {
         localReply = await paymentReply();
       }
@@ -732,12 +757,28 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         catalogContext = "\n\nO catálogo está temporariamente indisponível. Consulte getProductsCatalog antes de informar preços e não invente produtos.";
       }
       if (isCatalogAgent) {
-        localReply = agentFallbackReply(text, liveProducts, context);
+        const catalogReply = readCatalogReply(text, liveProducts, context);
+        localReply = catalogReply?.text ?? null;
+        offeredProduct = catalogReply?.offer;
         if (localReply && liveProducts) {
           await recordCatalogInterest(toolContext);
         }
       }
-      if (explicitPurchase && isCatalogAgent && liveProducts && sourceMessageId) {
+      if (isCatalogAgent && shortQuantity !== null && pendingOffer && sourceMessageId) {
+        const product = liveProducts?.find((item) => item.id === pendingOffer.productId);
+        if (!liveProducts) {
+          localReply = "Não consegui consultar o catálogo agora. Tenta novamente daqui a pouco.";
+        } else if (!product || !product.stock || product.stock < shortQuantity) {
+          localReply = "O produto indicado já não está disponível na quantidade pedida. Podes consultar o catálogo para escolher outra opção.";
+        } else if (Number(product.price) !== pendingOffer.unitPrice || (product.currency || "MT") !== pendingOffer.currency) {
+          localReply = `O preço de ${product.name} mudou para ${product.price} ${product.currency || "MT"}. Envia o nome do produto para confirmar o preço atual antes de encomendar.`;
+        } else {
+          const order = await executeToolByName("createOrder", {
+            productName: product.id, quantity: shortQuantity, paymentMethod: methods[0]
+          }, toolContext);
+          localReply = order.success ? `${shortQuantity} × ${product.name}\n${order.message}` : order.message;
+        }
+      } else if (explicitPurchase && isCatalogAgent && liveProducts && sourceMessageId) {
         const confirmed = catalogOrderFromMessage(text, liveProducts);
         if (confirmed) {
           localReply = methods.length > 1 ? "Escolhe um único método de pagamento para eu registar o pedido."
@@ -823,7 +864,10 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         finalReply = continueConversation;
       }
       if (finalReply) {
-        await whatsappManager.sendMessage(userId, jid, finalReply);
+        const sent = await whatsappManager.sendMessage(userId, jid, finalReply);
+        if (offerKey && offeredProduct && sent?.key?.id && sent?.savedMessage?.contact_id === contactData?.id) {
+          rememberCatalogOffer(offerKey, offeredProduct, sent.key.id);
+        }
       }
       
       // Increment usage if not admin

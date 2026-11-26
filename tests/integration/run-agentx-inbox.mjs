@@ -486,7 +486,9 @@ try {
   app = await start(port);
   await app.simulate("incoming"); // WhatsApp can replay the same event on reconnect.
   const { messages } = await (await call(`/chats/${contact.id}/messages`)).json();
-  assert.deepEqual(messages.map((message) => message.msg_id).sort(), ["fixture-inbound-1", "fixture-outbound-1"]);
+  assert.equal(messages.length, 2);
+  assert.ok(messages.some((message) => message.msg_id === "fixture-inbound-1"));
+  assert.ok(messages.some((message) => /^fixture-outbound-/.test(message.msg_id)));
   if (page) {
     await page.goto(app.base + "/messages");
     await page.getByRole("button", { name: /Cliente de teste/ }).click({ timeout: 15000 });
@@ -1310,6 +1312,84 @@ try {
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
   assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
 
+  const unacknowledgedBuyer = "258840000016";
+  const unacknowledgedJid = `${unacknowledgedBuyer}@s.whatsapp.net`;
+  await app.simulate("unconfirmed");
+  await app.simulate("ingress", { jid: unacknowledgedJid, text: "Livro do piloto", messageId: "outage-unacknowledged-quote" });
+  await app.simulate("confirmed");
+  await app.simulate("ingress", { jid: unacknowledgedJid, text: "peco 1", messageId: "outage-unacknowledged-purchase" });
+  assert.match(app.outbound.at(-1).content.text, /qual é o produto/i);
+  assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${unacknowledgedBuyer}`), []);
+
+  const secondProduct = await fetch(new URL("/products", rest), {
+    method: "POST", headers: storageAuth, body: JSON.stringify({
+      user_id: owner, name: "Caderno A5", price: 90, currency: "MT", stock: 4, type: "physical", is_active: true
+    })
+  });
+  assert.equal(secondProduct.status, 201);
+
+  const ambiguousBuyer = "258840000014";
+  const ambiguousJid = `${ambiguousBuyer}@s.whatsapp.net`;
+  await app.simulate("ingress", { jid: ambiguousJid, text: "quais os produtos que tem", messageId: "outage-ambiguous-catalogue" });
+  await app.simulate("ingress", { jid: ambiguousJid, text: "peco 1", messageId: "outage-ambiguous-purchase" });
+  assert.equal(app.outbound.at(-1).jid, ambiguousJid);
+  assert.match(app.outbound.at(-1).content.text, /produto|artigo/i);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /AGX-|258840000005/);
+  assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${ambiguousBuyer}`), []);
+
+  const conversationalBuyer = "258840000015";
+  const conversationalJid = `${conversationalBuyer}@s.whatsapp.net`;
+  const aiBeforeConversation = aiRequests;
+  for (const [text, messageId] of [["oque voces tem", "outage-conversation-first-catalogue"],
+    ["quais os produtos que tem", "outage-conversation-second-catalogue"]]) {
+    await app.simulate("ingress", { jid: conversationalJid, text, messageId });
+    const catalogue = app.outbound.at(-1);
+    assert.equal(catalogue.jid, conversationalJid);
+    assert.match(catalogue.content.text, /Livro do piloto.*250\s+MT/);
+    assert.match(catalogue.content.text, /Caderno A5.*90\s+MT/);
+  }
+  await app.simulate("ingress", { jid: conversationalJid, text: "Livro do piloto", messageId: "outage-conversation-quote" });
+  const quoteReply = app.outbound.at(-1);
+  assert.equal(quoteReply.jid, conversationalJid);
+  assert.match(quoteReply.content.text, /Livro do piloto.*250\s+MT.*2 em stock/);
+  assert.doesNotMatch(quoteReply.content.text, /Caderno A5|AGX-|258840000005/);
+  assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${conversationalBuyer}`), []);
+
+  const accepted = { jid: conversationalJid, text: "peco 1", messageId: "outage-conversation-purchase" };
+  await app.simulate("ingress", accepted);
+  const orderReply = app.outbound.at(-1);
+  assert.equal(orderReply.jid, conversationalJid);
+  const conversationalOrders = await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${conversationalBuyer}`);
+  assert.equal(conversationalOrders.length, 1, orderReply.content.text);
+  const [conversationalOrder] = conversationalOrders;
+  assert.equal(conversationalOrder.source_message_id, accepted.messageId);
+  assert.equal(conversationalOrder.status, "awaiting_payment");
+  assert.equal(conversationalOrder.total_amount, 250);
+  assert.ok(orderReply.content.text.includes(conversationalOrder.order_number));
+  assert.match(orderReply.content.text, /M-Pesa.*258840000005/);
+  const [conversationalItem] = await read("order_items", `?order_id=eq.${conversationalOrder.id}`);
+  assert.equal(conversationalItem.product_id, product.id);
+  assert.equal(conversationalItem.quantity, 1);
+  assert.equal(aiRequests, aiBeforeConversation);
+  await app.simulate("ingress", accepted);
+  await app.simulate("ingress", { ...accepted, messageId: "outage-conversation-purchase-again" });
+  assert.equal(app.outbound.at(-1).jid, conversationalJid);
+  assert.match(app.outbound.at(-1).content.text, /produto|artigo/i);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /AGX-|258840000005/);
+
+  await app.simulate("ingress", { jid: conversationalJid, text: "Livro do piloto", messageId: "outage-conversation-second-quote" });
+  const changedPrice = await fetch(new URL(`/products?id=eq.${product.id}`, rest), {
+    method: "PATCH", headers: storageAuth, body: JSON.stringify({ price: 275 })
+  });
+  assert.equal(changedPrice.status, 204);
+  await app.simulate("ingress", { ...accepted, messageId: "outage-conversation-price-changed" });
+  assert.equal(app.outbound.at(-1).jid, conversationalJid);
+  assert.match(app.outbound.at(-1).content.text, /preço.*mudou.*275\s+MT/i);
+  assert.doesNotMatch(app.outbound.at(-1).content.text, /AGX-|258840000005/);
+  assert.equal((await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${conversationalBuyer}`)).length, 1);
+  assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
+
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log(`Seller flow passed on the ${fresh ? "freshly installed" : "repaired legacy"} schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document`);
@@ -1317,6 +1397,7 @@ try {
   console.log("Seller replied during AI outage with live catalogue and configured payment methods; only the explicit request queued a human handoff");
   console.log("Payment instructions reused the matching buyer's saved order destination after the merchant changed settings");
   console.log("Explicit offline purchase created one unpaid order with stock and delivery unchanged");
+  console.log("Conversational offline purchase accepted one quote and rejected a vague selection, repeat request and changed price without creating more orders");
   console.log("Outgoing M-Pesa and e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {
   await browser?.close();

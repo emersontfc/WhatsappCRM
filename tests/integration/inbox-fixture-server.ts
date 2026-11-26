@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { whatsappManager } from "../../backend/whatsappManager.ts";
 import { handleAgentMessage } from "../../backend/agentManager.ts";
 import { handleIncomingMessage } from "../../backend/automationManager.ts";
@@ -9,7 +10,6 @@ const owner = "00000000-0000-4000-8000-000000000001";
 const other = "00000000-0000-4000-8000-000000000002";
 const sessions = (whatsappManager as unknown as { sessions: Map<string, unknown> }).sessions;
 let confirmSend = true;
-let sequence = 0;
 const contactsMap = new Map([
   ["258849998888:8@s.whatsapp.net", { id: "258849998888:8@s.whatsapp.net", name: "Contacto legado" }],
   ["849998888@s.whatsapp.net", { id: "849998888@s.whatsapp.net", name: "Outra variante" }],
@@ -30,7 +30,7 @@ function connectedSession(userId: string, phone: string, contacts = new Map()) {
     async groupMetadata(jid: string) { return jid === groupId && group ? group : { id: jid, participants: [] }; },
     async sendMessage(jid: string, content: unknown, options?: { statusJidList?: string[] }) {
       process.send?.({ event: "outbound", userId, jid, content, statusJidList: options?.statusJidList });
-      return confirmSend ? { key: { id: `fixture-outbound-${++sequence}` } } : undefined;
+      return confirmSend ? { key: { id: `fixture-outbound-${randomUUID()}` } } : undefined;
     }
   } };
 }

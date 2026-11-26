@@ -13,7 +13,7 @@ import { Boom } from "@hapi/boom";
 import pino from "pino";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { handleIncomingMessage } from "./automationManager.ts";
-import { handleAgentMessage } from "./agentManager.ts";
+import { forgetCatalogOffer, handleAgentMessage } from "./agentManager.ts";
 import { useSupabaseAuthState, clearSupabaseAuthCache } from "./lib/supabaseAuthState.ts";
 import fs from "fs";
 import path from "path";
@@ -399,7 +399,11 @@ export class WhatsAppManager implements IWhatsAppTransport {
         const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
         const isBroadcast = jid.includes("@broadcast") || jid.includes("@newsletter") || jid.startsWith("120363");
 
-        if (isBroadcast || (isMe && !isSelfMessage)) continue;
+        if (isBroadcast) continue;
+        if (isMe && !isSelfMessage) {
+          if (saved.contact_id && age < 5 * 60_000) forgetCatalogOffer(userId, saved.contact_id, msgKeyId);
+          continue;
+        }
         const alert = !isMe && saved.contact_id && age < 5 * 60_000;
         const runAssistant = Boolean(text) && (!isMe || !text.startsWith("AgentX:"));
         if (!alert && !runAssistant) continue;
@@ -427,7 +431,11 @@ export class WhatsAppManager implements IWhatsAppTransport {
             isMe ? null : saved?.contact_id);
           if (!handledByAutomation) {
             await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined, saved?.contact_id);
+          } else if (!isMe && saved.contact_id) {
+            forgetCatalogOffer(userId, saved.contact_id);
           }
+        } else if (!isMe && saved.contact_id) {
+          forgetCatalogOffer(userId, saved.contact_id);
         }
       } catch (err) {
         console.error("Error processing message:", err);
@@ -920,6 +928,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
         verifiedContactId,
         { replyToMessageId: quote?.messageId }
       );
+      if (savedMsg?.contact_id) forgetCatalogOffer(userId, savedMsg.contact_id, result.key.id);
     }
 
     return { ...result, savedMessage: savedMsg };

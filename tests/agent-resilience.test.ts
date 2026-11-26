@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encrypt, runAI, runCustom, runGemini } from "../backend/agentManager.ts";
 import { agentFallbackReply, catalogOrderFromMessage, containsPaymentInstructions, isExplicitPurchase,
-  isPaymentQuestion, requestedPaymentMethods, requestsHumanHandoff, suggestsHumanHandoff } from "../backend/services/agentFallback.ts";
+  isPaymentQuestion, readCatalogReply, requestedCatalogQuantity, requestedPaymentMethods, requestsHumanHandoff,
+  suggestsHumanHandoff } from "../backend/services/agentFallback.ts";
 
 const { geminiClient, generateContent } = vi.hoisted(() => ({ geminiClient: vi.fn(), generateContent: vi.fn() }));
 vi.mock("@google/genai", () => ({
@@ -92,6 +93,39 @@ describe("WhatsApp without a model", () => {
     expect(agentFallbackReply("Quanto custa o livro do piloto?", products)).toContain("Livro do piloto · 250 MT · 2 em stock");
     expect(agentFallbackReply("A camisa verde está disponível?", products)).toContain("Camisa verde · 500 MT · Esgotado");
     expect(agentFallbackReply("Quero ver o catálogo", products)).not.toContain("Camisa verde");
+  });
+
+  it.each(["oque voces tem", "quais os produtos que tem", "O que vocês vendem?", "Mostra os produtos"])(
+    "lists available products when the customer asks %s",
+    (question) => {
+      const reply = readCatalogReply(question, products);
+      expect(reply?.text).toContain("Produtos disponíveis");
+      expect(reply?.text).toContain("Livro do piloto");
+      expect(reply?.text).not.toContain("Camisa verde");
+      expect(reply?.offer).toBeUndefined();
+    }
+  );
+
+  it("only offers checkout for a single product described in the reply", () => {
+    const slides = { id: "slides", name: "Slides", price: "10", currency: "MT", stock: 999 };
+    const other = { id: "slides-v2", name: "Slides Avançados", price: "30", currency: "MT", stock: 2 };
+    const quote = readCatalogReply("slides", [...products, slides]);
+    expect(quote?.text).toContain("Slides · 10 MT · 999 em stock");
+    expect(quote?.text).toContain("«peço 1»");
+    expect(quote?.offer).toEqual({ productId: "slides", unitPrice: 10, currency: "MT" });
+    expect(readCatalogReply("Preço dos slides", products.concat(slides, other))?.offer)
+      .toEqual({ productId: "slides", unitPrice: 10, currency: "MT" });
+    expect(readCatalogReply("Preço dos slides", [other, { ...other, id: "other", name: "Slides Básicos" }])?.offer).toBeUndefined();
+    expect(readCatalogReply("A camisa verde está disponível?", products)?.offer).toBeUndefined();
+  });
+
+  it("parses a clear quantity and leaves questions, alternatives and signed quantities unconfirmed", () => {
+    expect(requestedCatalogQuantity("peco 1")).toBe(1);
+    expect(requestedCatalogQuantity("Peço 2 por e‑Mola, por favor.")).toBe(2);
+    for (const text of ["Peço 1?", "Quero 1 ou 2", "Peço -1", "Peço 1.5", "Peço 0", "Não quero 1", "Peço 1000"]) {
+      expect(requestedCatalogQuantity(text)).toBeNull();
+    }
+    expect(isExplicitPurchase("Fico com 1?")).toBe(false);
   });
 
   it("uses a previously named product for a short follow-up", () => {
