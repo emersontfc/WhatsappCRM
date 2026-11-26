@@ -32,11 +32,12 @@ interface CopilotMessage {
 }
 
 const QUICK_PROMPTS = [
-  { label: "Conversas pendentes", query: "Agentex, quantas conversas estão pendentes de resposta?" },
+  { label: "Conversas pendentes", query: "AgentX, quantas conversas estão pendentes de resposta?" },
   { label: "Métricas do Funil", query: "Qual é o resumo das oportunidades no funil de vendas?" },
   { label: "Buscar contacto", query: "Busca informações do contacto João" },
   { label: "Criar automação de preço", query: "Cria uma automação: quando o cliente mandar 'preço', responde com a tabela de serviços" },
 ];
+const greeting = "Olá! Sou o **AgentX Operador**. Posso consultar métricas, listar conversas pendentes no WhatsApp e ajudar a acompanhar leads. Como posso ajudar?";
 
 export function AgentexCopilot() {
   const { pathname } = useLocation();
@@ -44,13 +45,19 @@ export function AgentexCopilot() {
   const [messages, setMessages] = useState<CopilotMessage[]>(() => {
     try {
       const saved = sessionStorage.getItem("agentex_copilot_history");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const history = JSON.parse(saved) as CopilotMessage[];
+        if (Array.isArray(history) && history.length) {
+          return history.map((message) => message.id === "welcome" && message.text.includes("Agentex Operador")
+            ? { ...message, text: greeting } : message);
+        }
+      }
     } catch (e) {}
     return [
       {
         id: "welcome",
         sender: "agent",
-        text: "Olá, Administrador! 👋 Sou o **Agentex Operador**, o copiloto autônomo da sua empresa.\n\nPosso consultar métricas, listar pendências no WhatsApp, mover etapas de leads, enviar mensagens ou criar automações por comando de voz ou texto. Como posso ajudar agora?",
+        text: greeting,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ];
@@ -100,7 +107,7 @@ export function AgentexCopilot() {
     try {
       // Build context for LLM (last 6 messages)
       const context = messages.slice(-6).map(m => 
-        `${m.sender === "user" ? "Usuário" : "Agentex"}: ${m.text}`
+        `${m.sender === "user" ? "Usuário" : "AgentX"}: ${m.text}`
       );
 
       const response = await apiFetch("/api/agent/chat", {
@@ -112,7 +119,7 @@ export function AgentexCopilot() {
       });
 
       if (!response.success) {
-        throw new Error(response.error || "Erro ao consultar o Agentex");
+        throw new Error(response.error || "Erro ao consultar o AgentX");
       }
 
       const agentData = response.data;
@@ -134,7 +141,7 @@ export function AgentexCopilot() {
       if (isMissingKey) {
         toast.error("Chave de API de IA não configurada.");
       } else {
-        toast.error("Falha ao comunicar com o Agentex.");
+        toast.error("Falha ao comunicar com o AgentX.");
       }
       const errorMsg: CopilotMessage = {
         id: `err-${Date.now()}`,
@@ -184,7 +191,7 @@ export function AgentexCopilot() {
           "transition-all duration-300 cursor-pointer border border-emerald-400/40 backdrop-blur-sm group",
           isOpen && "hidden"
         )}
-        title="Abrir Copiloto Agentex Operador"
+        title="Abrir Copiloto AgentX"
       >
         <div className="relative">
           <div className="h-7 w-7 rounded-xl bg-white/20 flex items-center justify-center text-white group-hover:rotate-12 transition-transform">
@@ -197,7 +204,7 @@ export function AgentexCopilot() {
         </div>
         <div className="flex flex-col text-left">
           <span className="text-[10px] text-emerald-100 font-extrabold leading-none">Copiloto IA</span>
-          <span className="text-xs font-black tracking-tight text-white mt-0.5">Agentex</span>
+          <span className="text-xs font-black tracking-tight text-white mt-0.5">AgentX</span>
         </div>
       </button>
 
@@ -224,7 +231,7 @@ export function AgentexCopilot() {
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <h3 className="font-bold text-sm text-white tracking-tight">Agentex Operador</h3>
+                <h3 className="font-bold text-sm text-white tracking-tight">AgentX Operador</h3>
                 <span className="flex h-2 w-2 relative">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -328,7 +335,7 @@ export function AgentexCopilot() {
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-bounce [animation-delay:0.2s]"></span>
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-bounce [animation-delay:0.4s]"></span>
                 </div>
-                <span className="text-[11px] font-bold text-slate-500">Agentex está a consultar a base...</span>
+                <span className="text-[11px] font-bold text-slate-500">AgentX está a consultar a base...</span>
               </div>
             </div>
           )}
@@ -352,7 +359,7 @@ export function AgentexCopilot() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={loading}
-              placeholder="Pergunte ao Agentex (ex: 'Quem está sem resposta?')..."
+              placeholder="Pergunta ao AgentX. Ex.: Quem está sem resposta?"
               className="flex-1 h-10 px-3.5 text-xs font-medium rounded-xl border border-slate-200 bg-slate-50/50 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
             />
 

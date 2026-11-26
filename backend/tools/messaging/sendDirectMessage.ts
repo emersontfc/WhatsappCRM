@@ -107,7 +107,7 @@ export const sendDirectMessageTool: ToolDefinition = {
           .select("id", { count: "exact", head: true })
           .eq("user_id", ctx.userId);
 
-        textMessage = `📊 *Métricas do seu CRM*\n\n• Total de Contactos: ${contactsCount || 0}\n• Total de Leads: ${leads?.length || 0}\n\nEnviado automaticamente pelo seu Agentex.`;
+        textMessage = `📊 *Métricas do seu CRM*\n\n• Total de Contactos: ${contactsCount || 0}\n• Total de Leads: ${leads?.length || 0}\n\nEnviado automaticamente pelo AgentX.`;
       }
 
       // Resolve JID: LIDs (14+ digits starting with 1 or 3) vs standard phone

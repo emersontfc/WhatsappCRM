@@ -49,7 +49,7 @@ export const createKeywordAutomationTool: ToolDefinition = {
 
       return {
         success: true,
-        message: `Automação "${newRule.name}" criada com sucesso! Sempre que alguém enviar "${newRule.keyword}", o Agentex responderá automaticamente.`,
+        message: `Automação "${newRule.name}" criada com sucesso! Sempre que alguém enviar "${newRule.keyword}", o AgentX responderá automaticamente.`,
         data: {
           id: newRule.id,
           nome: newRule.name,

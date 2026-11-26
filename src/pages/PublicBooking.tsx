@@ -17,6 +17,7 @@ import {
   Loader2
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
+import AgentXLogo from "../components/AgentXLogo";
 import { apiFetch, ApiError } from "../lib/api";
 import { readContactPhone } from "../../shared/contactPhone";
 
@@ -714,10 +715,9 @@ export default function PublicBooking() {
           )}
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-[10px] text-slate-400 mt-6 font-medium">
-          Powered by <span className="font-bold text-slate-600">WhatsCRM</span> • Agendamentos Inteligentes via WhatsApp
-        </p>
+        <footer className="mt-6 flex justify-center">
+          <AgentXLogo size="sm" />
+        </footer>
       </main>
     </div>
   );

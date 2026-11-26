@@ -187,7 +187,7 @@ async function runChatProvider(provider: keyof typeof chatProviders, agent: any,
     max_tokens: 500
   }, signal, {
     Authorization: `Bearer ${apiKey}`,
-    ...(provider === "openrouter" ? { "HTTP-Referer": "https://agentex.com.br", "X-Title": "Agentex" } : {})
+    ...(provider === "openrouter" ? { "HTTP-Referer": "https://agentex.com.br", "X-Title": "AgentX" } : {})
   });
 }
 
@@ -287,7 +287,7 @@ Use 'createMarketingCampaign' quando solicitado para preparar disparos direciona
 Você possui autonomia comercial: pode consultar o catálogo com 'getProductsCatalog', criar pedidos com 'createOrder', receber comprovativos com 'submitPaymentProof', consultar status com 'getOrderStatus' e qualificar leads com 'qualifyLead'.`;
     }
 
-    roleHeader = `VOCÊ É O AGENTEX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Crie o pedido apenas após aceitação explícita da compra.\nAjude o cliente com cordialidade, precisão e integridade.`;
+    roleHeader = `VOCÊ É O AGENTX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Crie o pedido apenas após aceitação explícita da compra.\nAjude o cliente com cordialidade, precisão e integridade.`;
     baseInstruction = agent.instructions || "Você é um assistente útil, ágil e inteligente.";
   }
 

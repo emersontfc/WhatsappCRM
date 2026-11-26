@@ -7,6 +7,7 @@ import {
   Globe, Lock, Bolt
 } from "lucide-react";
 import { Button } from "../components/ui/Button";
+import AgentXLogo from "../components/AgentXLogo";
 import { cn } from "../lib/utils";
 import { apiFetch } from "../lib/api";
 import { motion } from "motion/react";
@@ -126,11 +127,8 @@ export default function Landing() {
       )}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16 sm:h-20">
-            <Link to="/" className="flex items-center gap-2.5 sm:gap-3 group">
-              <div className="bg-gradient-to-br from-emerald-400 to-teal-600 p-2 sm:p-2.5 rounded-lg sm:rounded-xl group-hover:scale-110 transition-transform shadow-lg shadow-emerald-600/30">
-                <Rocket className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-              </div>
-              <span className="font-black text-xl sm:text-2xl tracking-tighter uppercase italic">Agentex</span>
+            <Link to="/" aria-label="AgentX, página inicial">
+              <AgentXLogo size="md" inverted />
             </Link>
 
             {/* Desktop nav */}
@@ -138,7 +136,7 @@ export default function Landing() {
               {[["#features","Recursos"],["#ai-agent","Agente IA"],["#pricing","Planos"]].map(([href,label]) => (
                 <a key={href} href={href} className="text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-emerald-400 transition-colors">{label}</a>
               ))}
-              <Link to="/docs" className="text-xs font-bold uppercase tracking-widest text-emerald-400 hover:text-emerald-300 transition-colors">Docs</Link>
+              <Link to="/docs" className="text-xs font-bold uppercase tracking-widest text-emerald-400 hover:text-emerald-300 transition-colors">Documentação</Link>
             </div>
 
             <div className="hidden md:flex items-center gap-3">
@@ -166,7 +164,7 @@ export default function Landing() {
             {[["#features","Recursos"],["#ai-agent","Agente IA"],["#pricing","Planos"]].map(([href,label]) => (
               <a key={href} href={href} className="block text-sm font-black uppercase tracking-widest text-slate-300 hover:text-emerald-400 py-1" onClick={() => setIsMenuOpen(false)}>{label}</a>
             ))}
-            <Link to="/docs" className="block text-sm font-black uppercase tracking-widest text-emerald-400 hover:text-emerald-300 py-1" onClick={() => setIsMenuOpen(false)}>Documentação (Docs)</Link>
+            <Link to="/docs" className="block text-sm font-black uppercase tracking-widest text-emerald-400 hover:text-emerald-300 py-1" onClick={() => setIsMenuOpen(false)}>Documentação</Link>
             <Link to="/login" className="block text-sm font-black uppercase tracking-widest text-slate-300 hover:text-emerald-400 py-1" onClick={() => setIsMenuOpen(false)}>Entrar</Link>
             <Link to="/login" className="block pt-2" onClick={() => setIsMenuOpen(false)}>
               <Button className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-black py-3 rounded-xl shadow-lg shadow-emerald-600/30">
@@ -271,7 +269,7 @@ export default function Landing() {
               <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-amber-500/60" />
               <div className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-emerald-500/60" />
               <div className="ml-3 flex-1 bg-white/5 rounded px-3 py-1 text-[9px] sm:text-[10px] text-slate-500 font-mono truncate">
-                app.agentex.co.mz/mensagens
+                AgentX · Mensagens
               </div>
             </div>
             {/* Chat UI */}
@@ -433,7 +431,7 @@ export default function Landing() {
                     <Bot className="w-5 h-5 sm:w-7 sm:h-7 text-white" />
                   </div>
                   <div>
-                    <p className="font-black text-base sm:text-xl italic uppercase tracking-tight text-white">Agente Agentex</p>
+                    <p className="font-black text-base sm:text-xl italic uppercase tracking-tight text-white">Agente AgentX</p>
                     <p className="text-[10px] sm:text-xs text-emerald-400 font-black uppercase tracking-widest flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-emerald-400 rounded-full animate-pulse" />
                       Online agora
@@ -523,7 +521,7 @@ export default function Landing() {
             </motion.h2>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
-            <Testimonial name="Ana Machava"      role="Proprietária — Loja, Maputo"         text="Desde que instalei o Agentex as minhas vendas subiram 40%. O agente responde sozinho enquanto atendo presencialmente." delay={0} />
+            <Testimonial name="Ana Machava"      role="Proprietária — Loja, Maputo"         text="Desde que instalei o AgentX as minhas vendas subiram 40%. O agente responde sozinho enquanto atendo presencialmente." delay={0} />
             <Testimonial name="Carlos Nhantumbo" role="Diretor — Logística, Beira"          text="A facilidade de agendar mensagens e ver tudo no CRM mudou completamente a nossa operação. Recomendo a todos."        delay={0.15} />
             <Testimonial name="Fátima Cossa"     role="Gestora — Clínica Privada, Nampula"  text="Os pacientes adoram a rapidez nas respostas. A IA sabe quando responder e quando transferir para a equipa."          delay={0.3} />
           </div>
@@ -621,7 +619,7 @@ export default function Landing() {
               Pronto para <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">decolar</span>?
             </h2>
             <p className="text-base sm:text-xl text-slate-400 font-medium max-w-2xl mx-auto leading-relaxed px-2">
-              Junte-se a mais de 1.200 empresas moçambicanas que já vendem no automático com o Agentex.
+              Junte-se a mais de 1.200 empresas moçambicanas que já vendem no automático com o AgentX.
             </p>
             <Link to="/login" className="block sm:inline-block">
               <Button size="lg" className="w-full sm:w-auto bg-gradient-to-r from-emerald-500 to-teal-600 text-white h-14 sm:h-16 px-8 sm:px-16 text-sm sm:text-base font-black uppercase tracking-widest rounded-2xl shadow-2xl shadow-emerald-600/40 hover:shadow-emerald-600/60 hover:scale-105 active:scale-95 transition-all">
@@ -641,11 +639,8 @@ export default function Landing() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-8 sm:gap-12 mb-10 sm:mb-16">
             {/* Brand — full row on mobile */}
             <div className="col-span-2 space-y-4 sm:space-y-6">
-              <Link to="/" className="flex items-center gap-2.5">
-                <div className="bg-gradient-to-br from-emerald-400 to-teal-600 p-2 sm:p-2.5 rounded-lg sm:rounded-xl shadow-lg shadow-emerald-600/30 shrink-0">
-                  <Rocket className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                </div>
-                <span className="font-black text-xl sm:text-2xl tracking-tighter uppercase italic text-white">Agentex</span>
+              <Link to="/" aria-label="AgentX, página inicial" className="inline-flex">
+                <AgentXLogo size="md" inverted />
               </Link>
               <p className="text-slate-500 max-w-xs text-sm leading-relaxed font-medium">
                 A plataforma líder em automação e CRM para WhatsApp em Moçambique. Feito por moçambicanos, para moçambicanos.
@@ -668,7 +663,7 @@ export default function Landing() {
 
           <div className="border-t border-white/5 pt-6 sm:pt-8 flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4">
             <p className="text-slate-600 text-[10px] sm:text-xs font-bold uppercase tracking-widest text-center sm:text-left">
-              © {new Date().getFullYear()} Agentex. Todos os direitos reservados.
+              © {new Date().getFullYear()} AgentX. Todos os direitos reservados.
             </p>
             <div className="flex items-center gap-2 sm:gap-3">
               <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500/50" />

@@ -594,7 +594,7 @@ export default function Agent() {
             <CardContent>
               <textarea
                 className="w-full min-h-[200px] p-4 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none text-sm leading-relaxed text-slate-900"
-                placeholder="Ex: Você é um assistente de vendas da empresa Agentex. Seu objetivo é agendar reuniões..."
+                placeholder="Ex.: És o assistente de vendas da nossa empresa. Ajuda os clientes a marcar reuniões..."
                 value={config.instructions}
                 onChange={e => setConfig({ ...config, instructions: e.target.value })}
               />

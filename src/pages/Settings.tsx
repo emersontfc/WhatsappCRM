@@ -502,7 +502,7 @@ export default function Settings() {
                           placeholder="ex: +258 84 123 4567 ou 258841234567"
                         />
                         <p className="text-[11px] text-slate-500 leading-normal">
-                          Quando enviar mensagens para o WhatsApp da empresa a partir deste número, o <strong>Agentex</strong> o identificará como Administrador com acesso a relatórios e comandos operacionais.
+                          Quando enviar mensagens para o WhatsApp da empresa a partir deste número, o <strong>AgentX</strong> o identificará como Administrador com acesso a relatórios e comandos operacionais.
                         </p>
                       </div>
 
@@ -519,7 +519,7 @@ export default function Settings() {
                           placeholder="ex: +258 84 999 9999, +258 82 888 8888"
                         />
                         <p className="text-[11px] text-slate-500 leading-normal">
-                          Outros números autorizados a solicitar métricas e dar comandos ao Agentex pelo WhatsApp (separe por vírgula).
+                          Outros números autorizados a solicitar métricas e dar comandos ao AgentX pelo WhatsApp (separe por vírgula).
                         </p>
                       </div>
 

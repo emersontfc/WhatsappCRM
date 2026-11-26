@@ -79,7 +79,7 @@ export function getToolsPromptDescription(role: UserRole): string {
   Parâmetros aceitos: ${params}`;
   }).join("\n\n");
 
-  return `\n\n=== FERRAMENTAS DO AGENTEX DISPONÍVEIS ===\nVocê tem acesso direto para acionar as seguintes ferramentas do sistema quando necessário:\n\n${toolDescriptions}\n
+  return `\n\n=== FERRAMENTAS DO AGENTX DISPONÍVEIS ===\nVocê tem acesso direto para acionar as seguintes ferramentas do sistema quando necessário:\n\n${toolDescriptions}\n
 QUANDO VOCÊ DECIDIR USAR UMA FERRAMENTA:
 Responda em formato JSON estruturado com os seguintes campos:
 {

@@ -137,7 +137,7 @@ export default function Login() {
 
         {/* Decorative elements */}
         <div className="absolute bottom-10 left-10 text-[10px] uppercase tracking-[0.5em] text-slate-300 font-black italic">
-          Agentex // Next-Gen CRM
+          AgentX · CRM para WhatsApp
         </div>
       </div>
 

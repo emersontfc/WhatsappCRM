@@ -1,4 +1,3 @@
-import React from "react";
 import { cn } from "../lib/utils";
 
 interface AgentXLogoProps {
@@ -10,53 +9,14 @@ interface AgentXLogoProps {
 
 export const AgentXIcon = ({ size = 28, className }: { size?: number; className?: string }) => {
   return (
-    <svg
+    <img
+      src={`${import.meta.env.BASE_URL}agentx-mark-v2.svg`}
+      alt=""
+      aria-hidden="true"
       width={size}
       height={size}
-      viewBox="0 0 48 48"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
       className={cn("shrink-0", className)}
-    >
-      <defs>
-        <linearGradient id="kazixGrad1" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#10B981" />
-          <stop offset="50%" stopColor="#06B6D4" />
-          <stop offset="100%" stopColor="#6366F1" />
-        </linearGradient>
-        <linearGradient id="kazixGrad2" x1="44" y1="4" x2="4" y2="44" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#6366F1" />
-          <stop offset="50%" stopColor="#06B6D4" />
-          <stop offset="100%" stopColor="#10B981" />
-        </linearGradient>
-        <filter id="kazixGlow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="3" result="blur" />
-          <feComposite in="SourceGraphic" in2="blur" operator="over" />
-        </filter>
-      </defs>
-
-      {/* Outer rounded geometric container */}
-      <rect x="2" y="2" width="44" height="44" rx="14" fill="#0F172A" />
-      <rect x="2" y="2" width="44" height="44" rx="14" stroke="url(#kazixGrad1)" strokeWidth="1.5" strokeOpacity="0.4" />
-
-      {/* Dynamic diagonal X beams */}
-      <path
-        d="M13 13L35 35"
-        stroke="url(#kazixGrad1)"
-        strokeWidth="4"
-        strokeLinecap="round"
-      />
-      <path
-        d="M35 13L13 35"
-        stroke="url(#kazixGrad2)"
-        strokeWidth="4"
-        strokeLinecap="round"
-      />
-
-      {/* Core autonomous nexus node */}
-      <circle cx="24" cy="24" r="5" fill="#0F172A" stroke="#10B981" strokeWidth="2.5" />
-      <circle cx="24" cy="24" r="2.5" fill="#10B981" filter="url(#kazixGlow)" />
-    </svg>
+    />
   );
 };
 
@@ -116,7 +76,7 @@ export default function AgentXLogo({
             inverted ? "text-slate-400" : "text-slate-500"
           )}
         >
-          by <span className="font-bold text-slate-800 dark:text-slate-200">Kazix</span>
+          by <span className={cn("font-bold", inverted ? "text-slate-200" : "text-slate-800")}>Kazix</span>
         </span>
       </div>
     </div>

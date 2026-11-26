@@ -254,7 +254,7 @@ const toggleAgentHandler = async (req: AuthRequest, res: express.Response) => {
           is_active, 
           provider: defaultProvider, 
           model: 'gemini-3-flash-preview',
-          instructions: "Você é um assistente de vendas prestativo para o Agentex. Responda de forma educada e profissional." 
+          instructions: "Você é um assistente de vendas do AgentX. Responda de forma educada e profissional."
         })
         .select()
         .single();
@@ -374,7 +374,7 @@ router.post("/chat", async (req: AuthRequest, res) => {
     const agent = (agents && agents.length > 0) ? agents[0] : {
       provider: process.env.GEMINI_API_KEY ? "gemini" : "custom",
       model: "gemini-2.5-flash",
-      instructions: "Você é o Agentex Operador, assistente executivo e operador autônomo da plataforma de CRM e WhatsApp.",
+      instructions: "Você é o AgentX Operador, assistente executivo e operador autônomo da plataforma de CRM e WhatsApp.",
       is_active: true
     };
 
@@ -436,7 +436,7 @@ router.post("/chat", async (req: AuthRequest, res) => {
     });
   } catch (err: any) {
     console.error("[Agent Web Chat Error]:", err);
-    res.status(500).json({ success: false, error: err.message || "Erro ao processar mensagem com o Agentex." });
+    res.status(500).json({ success: false, error: err.message || "Erro ao processar a mensagem com o AgentX." });
   }
 });
 
