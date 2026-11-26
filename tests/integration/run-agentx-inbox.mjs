@@ -1080,6 +1080,84 @@ try {
   assert.equal(sentDocuments(app.outbound).length, documentsBeforeReview + 1);
   console.log("Delivery review passed after a missing gateway acknowledgement: owner confirmed, one audit event, no second send.");
 
+  if (fresh) {
+    await app.simulate("confirmed");
+    const stockForCampaign = await fetch(new URL(`/products?id=eq.${product.id}`, rest), {
+      method: "PATCH", headers: storageAuth, body: JSON.stringify({ stock: 5 })
+    });
+    assert.equal(stockForCampaign.status, 204);
+    const groupJid = "120363000000001@g.us";
+    const campaignPath = "/catalog-campaigns";
+    const cover = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/zXQAAAAASUVORK5CYII=", "base64");
+    const coverForm = new FormData();
+    coverForm.append("image", new Blob([cover], { type: "image/png" }), "catalogo.png");
+    const uploadCover = await fetch(`${app.base}/api${campaignPath}/products/${product.id}/cover`, {
+      method: "POST", headers: { authorization: `Bearer ${userTokens[0]}` }, body: coverForm
+    });
+    assert.equal(uploadCover.status, 200, await uploadCover.text());
+    const otherCover = await api(`${campaignPath}/products/${product.id}/cover`, 1);
+    assert.equal(otherCover.status, 404);
+    const catalog = await (await api(campaignPath)).json();
+    assert.ok(catalog.data.groups.some(({ id }) => id === groupJid));
+    assert.ok(catalog.data.products.some(({ id, hasCover }) => id === product.id && hasCover));
+    const campaignRequest = { productId: product.id, groupJid, requestKey: randomUUID(), publishNow: true, caption: "Oferta do grupo" };
+    const preview = await api(`${campaignPath}/preview`, 0, { productId: product.id, caption: campaignRequest.caption });
+    assert.equal(preview.status, 200);
+    assert.match((await preview.json()).preview, /Oferta do grupo[\s\S]*Stock disponível/);
+    assert.equal((await api(campaignPath, 1, campaignRequest)).status, 403);
+    const published = await api(campaignPath, 0, campaignRequest);
+    assert.equal(published.status, 201);
+    const campaign = await published.json();
+    assert.equal(campaign.status, "sent", JSON.stringify(campaign));
+    const groupSends = () => app.outbound.filter(({ jid }) => jid === groupJid);
+    assert.equal(groupSends().length, 1);
+    assert.deepEqual(Buffer.from(groupSends()[0].content.image.data), cover);
+    const invite = groupSends()[0].content.caption.match(/https:\/\/wa\.me\/[^\s]+/)?.[0];
+    assert.ok(invite);
+    const interestText = new URL(invite).searchParams.get("text");
+    assert.match(interestText, /AXC-[0-9A-F]{32}/);
+    await api(campaignPath, 0, campaignRequest);
+    assert.equal(groupSends().length, 1, "Campaign POST retry must not send a second promotion");
+    const campaignInterest = { jid: "258841110098@s.whatsapp.net", text: interestText, messageId: "fixture-campaign-interest" };
+    await app.simulate("ingress", campaignInterest);
+    await app.simulate("ingress", campaignInterest);
+    const interests = await read("agentx_catalog_campaign_interests", `?campaign_id=eq.${campaign.id}`);
+    assert.equal(interests.length, 1);
+    assert.ok(interests[0].lead_id);
+    const originsPath = `${campaignPath}/lead-origins/${interests[0].lead_id}`;
+    const origin = await (await api(originsPath, 0)).json();
+    assert.ok(JSON.stringify(origin).includes("Grupo de teste de campanhas"));
+    const otherOrigin = await (await api(originsPath, 1)).json();
+    assert.ok(!JSON.stringify(otherOrigin).includes("Grupo de teste de campanhas"));
+    console.log("Campaign pilot passed: private cover, authorized group, one acknowledged promotion and one scoped lead attribution.");
+
+    const text = "teste de receção idempotente";
+    const responseText = "Resposta única da automação";
+    const jid = "258841110099@s.whatsapp.net";
+    const createReply = await fetch(`${supabaseUrl}/rest/v1/quick_reply`, {
+      method: "POST", headers: { authorization: `Bearer ${serviceKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ user_id: owner, trigger: text, response_text: responseText })
+    });
+    assert.equal(createReply.status, 201);
+    const repeats = () => app.outbound.filter((record) => record.jid === jid && record.content.text === responseText).length;
+    const legacy = { jid, text, messageId: "fixture-historical-action" };
+    const live = { jid, text, messageId: "fixture-live-action" };
+    await app.simulate("ingress", { ...legacy, upsertType: "history" });
+    await app.simulate("ingress", legacy);
+    await app.simulate("ingress", { ...live, upsertType: "append" });
+    assert.equal(repeats(), 0);
+    assert.equal((await read("messages", "?msg_id=eq.fixture-live-action")).length, 1);
+    await Promise.all([app.simulate("ingress", live), app.simulate("ingress", live)]);
+    assert.equal(repeats(), 1);
+    assert.equal((await read("agentx_whatsapp_action_claims", "?message_id=eq.fixture-live-action")).length, 1);
+    const ingressPort = app.port;
+    await app.stop();
+    app = await start(ingressPort);
+    await app.simulate("ingress", live);
+    assert.equal(repeats(), 0, "A replay after a process restart must not trigger an automation again");
+    console.log("WhatsApp action deduplication passed: sync-only history, concurrent upserts and replay after restart.");
+  }
+
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log(`Seller flow passed on the ${fresh ? "freshly installed" : "repaired legacy"} schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document`);

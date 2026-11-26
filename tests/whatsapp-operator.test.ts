@@ -10,10 +10,11 @@ const user = "owner";
 const jid = "258841234567@s.whatsapp.net";
 const transport = { getMe: () => ({ id: "258841234567:2@s.whatsapp.net", lid: "13579@lid" }), sendMessage: mocks.send };
 
-function query(data: unknown) {
-  const result = { data, error: null };
+function query(data: unknown, error: unknown = null) {
+  const result = { data, error };
   const chain = {
-    upsert: vi.fn(() => chain), select: vi.fn(() => chain), eq: vi.fn(() => chain), update: vi.fn(() => chain),
+    upsert: vi.fn(() => chain), select: vi.fn((..._columns: unknown[]) => chain),
+    eq: vi.fn(() => chain), update: vi.fn(() => chain),
     lte: vi.fn(() => chain), order: vi.fn(() => chain), limit: vi.fn(() => chain),
     or: vi.fn(() => chain), abortSignal: vi.fn(() => chain),
     maybeSingle: vi.fn().mockResolvedValue(result),
@@ -50,6 +51,105 @@ describe("WhatsApp self-chat commands", () => {
     await handleOperatorCommand(transport, user, jid, true, "/agentx status Hoje temos novidades", "test-id");
     expect(mocks.execute).toHaveBeenCalledWith("post_whatsapp_status", { text: "Hoje temos novidades" },
       expect.objectContaining({ role: "admin", userId: user }));
+  });
+
+  it("lists recent orders and limits the query to the linked account", async () => {
+    const orders = query([{ order_number: "AGX-SALE1", status: "paid", total_amount: 250, currency: "MT" }]);
+    mocks.from.mockReturnValueOnce(query({ message_id: "orders" })).mockReturnValueOnce(orders);
+    await handleOperatorCommand(transport, user, jid, true, "/agentx pedidos", "orders");
+    expect(mocks.from).toHaveBeenLastCalledWith("orders");
+    expect(orders.eq).toHaveBeenCalledWith("user_id", user);
+    expect(orders.limit).toHaveBeenCalledWith(5);
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, expect.stringContaining("AGX-SALE1 · 250 MT · Pago, entrega pendente"));
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it("summarizes only pending owned proof references and directs review to the authenticated panel", async () => {
+    const proofs = query([
+      { orders: { user_id: user, order_number: "AGX-PEND1", total_amount: "250.00", currency: "MT" } },
+      { orders: { user_id: "another-account", order_number: "AGX-FOREIGN", total_amount: 300, currency: "MT" } },
+    ]);
+    mocks.from.mockReturnValueOnce(query({ message_id: "proofs" })).mockReturnValueOnce(proofs);
+    await handleOperatorCommand(transport, user, jid, true, "/agentx comprovativos", "proofs");
+    expect(proofs.eq).toHaveBeenCalledWith("user_id", user);
+    expect(proofs.eq).toHaveBeenCalledWith("orders.user_id", user);
+    expect(proofs.eq).toHaveBeenCalledWith("status", "pending");
+    expect(proofs.limit).toHaveBeenCalledWith(5);
+    const reply = mocks.send.mock.calls[0]?.[2];
+    expect(reply).toContain("AGX-PEND1 · 250 MT");
+    expect(reply).toContain("Vendedor → Comprovativos");
+    expect(reply).not.toContain("AGX-FOREIGN");
+    expect(proofs.select.mock.calls[0]?.[0]).not.toMatch(/proof_raw_text|storage|attachment|media/);
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the specified number and sends the owned contact and reason to the atomic handoff", async () => {
+    const destination = "258851234567";
+    mocks.rpc.mockResolvedValueOnce({ data: { id: "owned-contact", phone: destination, created: false } })
+      .mockReturnValueOnce(query("changed"));
+    mocks.from.mockReturnValueOnce(query({ message_id: "pause-message" }));
+    await handleOperatorCommand(transport, user, jid, true, "/agentx pausar +258 85 123 4567 | Consulta\nmanual", "pause-message");
+    expect(mocks.rpc).toHaveBeenCalledWith("agentx_save_contact", expect.objectContaining({
+      p_user_id: user, p_phone: destination, p_existing_only: true
+    }));
+    expect(mocks.rpc).toHaveBeenLastCalledWith("agentx_set_whatsapp_operator_handoff", {
+      p_user: user, p_contact: "owned-contact", p_phone: destination, p_paused: true,
+      p_message_id: "pause-message", p_reason: "Consulta manual"
+    });
+    expect(mocks.from).toHaveBeenCalledExactlyOnceWith("whatsapp_operator_commands");
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, expect.stringContaining("IA pausada para +258851234567"));
+  });
+
+  it("clears only the requested pause state and does not repeat the same command", async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: { id: "owned-contact", phone: "258851234567" } })
+      .mockReturnValueOnce(query("changed"));
+    mocks.from.mockReturnValueOnce(query({ message_id: "resume-message" })).mockReturnValueOnce(query(null));
+    const resume = () => handleOperatorCommand(transport, user, jid, true, "/agentx retomar 85 123 4567", "resume-message");
+    await resume();
+    await resume();
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+    expect(mocks.rpc).toHaveBeenLastCalledWith("agentx_set_whatsapp_operator_handoff", {
+      p_user: user, p_contact: "owned-contact", p_phone: "258851234567", p_paused: false,
+      p_message_id: "resume-message", p_reason: null
+    });
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(user, jid, expect.stringContaining("IA retomada para +258851234567"));
+  });
+
+  it("reports the existing state without issuing a second change", async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: { id: "owned-contact", phone: "258851234567" } })
+      .mockReturnValueOnce(query("already"));
+    mocks.from.mockReturnValueOnce(query({ message_id: "already-paused" }));
+    await handleOperatorCommand(transport, user, jid, true, "/agentx pausar 258851234567", "already-paused");
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, expect.stringContaining("A IA já estava pausada"));
+  });
+
+  it("does not fall back to the operator's number, another account or a group", async () => {
+    const missing = query({ message_id: "missing" });
+    mocks.from.mockReturnValueOnce(missing).mockReturnValueOnce(query({ message_id: "foreign-phone" }));
+    expect(await handleOperatorCommand(transport, user, "123456789@g.us", true,
+      "/agentx pausar 258851234567", "group")).toBe(false);
+    expect(await handleOperatorCommand(transport, user, "258851234567@s.whatsapp.net", true,
+      "/agentx retomar 258851234567", "other-jid")).toBe(false);
+    await handleOperatorCommand(transport, user, jid, true, "/agentx pausar", "missing");
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, expect.stringContaining("Indica o número do cliente"));
+
+    mocks.rpc.mockResolvedValue({ data: null });
+    await handleOperatorCommand(transport, user, jid, true, "/agentx pausar 258851234567", "foreign-phone");
+    expect(mocks.rpc).toHaveBeenCalledWith("agentx_save_contact", expect.objectContaining({ p_user_id: user, p_existing_only: true }));
+    expect(mocks.from).not.toHaveBeenCalledWith("contacts");
+    expect(mocks.from).not.toHaveBeenCalledWith("agent_logs");
+    expect(mocks.send).toHaveBeenLastCalledWith(user, jid, expect.stringContaining("Contacto não encontrado na tua conta"));
+  });
+
+  it("does not report a successful change when the atomic handoff fails", async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: { id: "owned-contact", phone: "258851234567" } })
+      .mockReturnValueOnce(query(null, { code: "23514" }));
+    mocks.from.mockReturnValueOnce(query({ message_id: "audit-error" }));
+    await handleOperatorCommand(transport, user, jid, true, "/agentx pausar 258851234567", "audit-error");
+    expect(mocks.send).toHaveBeenCalledWith(user, jid, expect.stringContaining("Não foi possível concluir o comando"));
+    expect(mocks.send.mock.calls[0]?.[2]).not.toContain("IA pausada");
   });
 
   it("does not repeat side effects for a command already claimed", async () => {

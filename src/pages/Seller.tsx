@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight, CheckCircle2, Circle, FileText, Package, RefreshCw, Wallet } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { SellerCampaigns } from "../components/SellerCampaigns";
 import { apiFetch } from "../lib/api";
 import { sellerMethodKeys, sellerMethods, type PaymentDestinations, type SellerOverview, type SellerSettings } from "../../shared/seller";
 
@@ -135,6 +136,7 @@ export default function Seller() {
         </div>
       </div>
     </div>}
+    <SellerCampaigns />
   </div>;
 }
 

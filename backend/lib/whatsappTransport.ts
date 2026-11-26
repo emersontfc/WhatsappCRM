@@ -1,3 +1,5 @@
+import type { WAMessage } from "@whiskeysockets/baileys";
+
 /**
  * WhatsApp Transport Abstraction Layer
  * Provides a standardized contract for WhatsApp providers (Baileys, Meta Cloud API, etc.)
@@ -21,6 +23,8 @@ export interface SendMessageOptions {
   quotedMessageId?: string;
 }
 
+export type StoredWhatsAppQuote = { messageId: string; message: WAMessage };
+
 export interface IWhatsAppTransport {
   createSession(
     userId: string,
@@ -37,7 +41,9 @@ export interface IWhatsAppTransport {
     mediaType?: string,
     duration?: number,
     mimetype?: string,
-    fileName?: string
+    fileName?: string,
+    verifiedContactId?: string,
+    quote?: StoredWhatsAppQuote
   ): Promise<any>;
 
   requestPairingCode(userId: string, phoneNumber: string): Promise<string>;
@@ -52,4 +58,3 @@ export interface IWhatsAppTransport {
     presence: "composing" | "recording" | "paused"
   ): Promise<void>;
 }
-

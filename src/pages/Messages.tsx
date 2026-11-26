@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Send,
@@ -28,7 +28,9 @@ import {
   Pause,
   Download,
   Paperclip,
-  ChevronDown
+  ChevronDown,
+  Reply,
+  CalendarClock
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId } from "../supabase";
@@ -41,8 +43,10 @@ import { ApiError, apiFetch } from "../lib/api";
 import { makeChatRefresh, mergeMessage } from "../lib/chatMessages";
 import { useActivation } from "../lib/useActivation";
 import { VoiceRecorder, type VoiceSendOutcome } from "../components/VoiceRecorder";
+import { ChatScheduleDialog } from "../components/ChatScheduleDialog";
 import { uploadVoiceAudio, useVoicePlayback } from "../lib/voiceAudio";
 import { isAudioAttachment } from "../../shared/voiceAudio";
+import { isQuotableChatText } from "../../shared/chatQuote";
 import { Contact, Message, Lead, LeadStage, LEAD_STAGES } from "../types";
 import { getContactDisplay, formatPhoneNumber } from "./Contacts";
 
@@ -54,6 +58,8 @@ interface QuickReply {
 }
 
 type ConversationFilter = "all" | "unread" | "ai" | "human" | "leads";
+type ConversationDraft = { userId: string; contactId: string; text: string };
+type DraftQuote = Pick<Message, "id" | "text" | "type">;
 
 async function loadConversations(signal?: AbortSignal): Promise<Contact[]> {
   const result = await apiFetch("/api/whatsapp/chats", { signal, timeout: 12000 });
@@ -250,6 +256,7 @@ export default function Messages() {
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const contactId = selectedContact?.id;
   const [messages, setMessages] = useState<Message[]>([]);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -257,11 +264,26 @@ export default function Messages() {
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState(false);
-  const [newMessage, setNewMessage] = useState("");
+  const [draft, setDraft] = useState<ConversationDraft>();
+  const [quoteDraft, setQuoteDraft] = useState<(ConversationDraft & DraftQuote)>();
+  const [scheduleDraft, setScheduleDraft] = useState<(ConversationDraft & { quote?: DraftQuote })>();
   const [search, setSearch] = useState("");
   const [activeFilter, setActiveFilter] = useState<ConversationFilter>("all");
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const inConversation = (item?: ConversationDraft) => item?.userId === userId && item?.contactId === contactId;
+  const newMessage = inConversation(draft) ? draft!.text : "";
+  const activeQuote = inConversation(quoteDraft) ? quoteDraft : undefined;
+  const activeSchedule = inConversation(scheduleDraft) ? scheduleDraft : undefined;
+  const visibleMessages = useMemo(() => messages.filter((message) => message.contact_id === contactId && message.user_id === userId),
+    [messages, contactId, userId]);
+  const messageById = useMemo(() => new Map(visibleMessages.map((message) => [message.id, message])), [visibleMessages]);
+
+  const setNewMessage = (value: React.SetStateAction<string>) => {
+    if (!contactId || !userId) return;
+    setDraft((previous) => ({ userId, contactId, text: typeof value === "function"
+      ? value(inConversation(previous) ? previous!.text : "") : value }));
+  };
   const [showChatOnMobile, setShowChatOnMobile] = useState(false);
   const [showCrmPanel, setShowCrmPanel] = useState(false);
 
@@ -284,6 +306,7 @@ export default function Messages() {
   const previousMessageAnchor = useRef<{ row: HTMLElement; offset: number } | null>(null);
   const olderPageRequest = useRef<(() => void) | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLInputElement>(null);
 
   const [previewMedia, setPreviewMedia] = useState<{ url: string; type: 'image' | 'video'; title?: string } | null>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -363,7 +386,6 @@ export default function Messages() {
   }, [userId]);
 
   // Keep the open conversation independent from optional lead and pack requests.
-  const contactId = selectedContact?.id;
   const currentChat = useRef<string | undefined>(undefined);
   useEffect(() => {
     currentChat.current = contactId;
@@ -527,6 +549,13 @@ export default function Messages() {
         if (signal.aborted || incoming.user_id !== userId || incoming.contact_id !== contactId) return;
         setMessages(current => mergeMessage(current, incoming));
       })
+      .on("postgres_changes", {
+        event: "UPDATE", schema: "public", table: "messages", filter: `contact_id=eq.${contactId}`
+      }, ({ new: row }) => {
+        const incoming = row as Message;
+        if (signal.aborted || incoming.user_id !== userId || incoming.contact_id !== contactId || !incoming.reply_to_message_id) return;
+        setMessages(current => current.some((message) => message.id === incoming.id) ? mergeMessage(current, incoming) : current);
+      })
       .subscribe(status => sync.connection(status === "SUBSCRIBED"));
     const visibility = () => { if (document.hidden) sync.suspend(); else sync.recover(); };
     sync.recover();
@@ -583,6 +612,8 @@ export default function Messages() {
       currentChat.current = contact.id;
       setMessages([]);
       setIsRecording(false);
+      setQuoteDraft(undefined);
+      setScheduleDraft(undefined);
     }
     setSelectedContact(contact);
     setShowCrmPanel(false);
@@ -668,6 +699,7 @@ export default function Messages() {
       toast.error("Ative seu plano para enviar mensagens.");
       return "failed";
     }
+    const replyToMessageId = mediaUrl ? undefined : activeQuote?.id;
 
     const tempId = `temp-${crypto.randomUUID()}`;
     const optimisticMsg: any = {
@@ -681,6 +713,7 @@ export default function Messages() {
       media_type: mediaType,
       media_mimetype: mimetype,
       media_filename: fileName,
+      reply_to_message_id: replyToMessageId,
       is_automated: false,
       is_sending: true,
     };
@@ -700,7 +733,8 @@ export default function Messages() {
           mediaType,
           duration,
           fileName,
-          mimetype
+          mimetype,
+          replyToMessageId
         }),
       });
 
@@ -710,6 +744,7 @@ export default function Messages() {
       if (response.historySaved === false) {
         toast.warning("O WhatsApp aceitou a mensagem. A confirmação no histórico ainda está pendente.");
       }
+      if (replyToMessageId) setQuoteDraft((current) => current?.id === replyToMessageId && inConversation(current) ? undefined : current);
 
       setContacts(prev => {
         const updated = prev.map(c => {
@@ -729,7 +764,7 @@ export default function Messages() {
 
       // Mark optimistic message as sent or replace with backend saved message
       if (response.message) {
-        setMessages((current) => current.some((message) => message.id === tempId)
+        setMessages((current) => currentChat.current === selectedContact.id
           ? mergeMessage(current.filter((message) => message.id !== tempId), response.message)
           : current);
       } else {
@@ -763,10 +798,10 @@ export default function Messages() {
   };
 
   const getAiSuggestion = async () => {
-    if (!selectedContact || messages.length === 0) return;
+    if (!selectedContact || visibleMessages.length === 0) return;
     setLoading(true);
     try {
-      const lastMessage = messages[messages.length - 1];
+      const lastMessage = visibleMessages[visibleMessages.length - 1];
       const response = await apiFetch("/api/ai/chat", {
         method: "POST",
         body: JSON.stringify({
@@ -775,7 +810,7 @@ export default function Messages() {
         }),
       });
 
-      if (response.reply) {
+      if (response.reply && currentChat.current === selectedContact.id) {
         setNewMessage(response.reply);
         toast.info("Sugestão pronta para rever.");
       }
@@ -1186,7 +1221,7 @@ export default function Messages() {
                   size="icon"
                   className="h-8 w-8 sm:h-9 sm:w-9 text-amber-500 hover:text-amber-600 hover:bg-amber-50 rounded-xl shrink-0"
                   onClick={getAiSuggestion}
-                  disabled={loading || messages.length === 0 || !isActivated}
+                  disabled={loading || visibleMessages.length === 0 || !isActivated}
                   title="Sugerir resposta profissional com IA"
                 >
                   <Sparkles size={16} />
@@ -1226,10 +1261,11 @@ export default function Messages() {
                   {olderError && <p className="text-xs text-rose-700" role="status">Não foi possível carregar esta página. Tenta novamente.</p>}
                 </div>
               )}
-              {messages.length > 0 ? (
-                messages.map((msg) => {
+              {visibleMessages.length > 0 ? (
+                visibleMessages.map((msg) => {
                   const isOut = msg.type === "outbound";
                   const isSticker = msg.media_type === "sticker";
+                  const quoted = msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined;
 
                   if (isSticker && msg.media_url) {
                     return (
@@ -1276,6 +1312,13 @@ export default function Messages() {
                             : "bg-white text-slate-900 border border-slate-100 rounded-tl-none"
                         )}
                       >
+                        {msg.reply_to_message_id && (
+                          <p className={cn("mb-1.5 rounded border-l-2 px-2 py-1 text-xs", isOut
+                            ? "border-emerald-200 bg-white/10" : "border-emerald-600 bg-emerald-50")}>
+                            <span className="block font-semibold">Mensagem citada</span>
+                            {quoted && <span className="line-clamp-2 break-words">{quoted.text}</span>}
+                          </p>
+                        )}
                         {/* Rich Media Renderers */}
                         {msg.media_url && (
                           <div className="mb-2 rounded-xl overflow-hidden">
@@ -1342,6 +1385,16 @@ export default function Messages() {
                             <CheckCheck size={13} className="text-emerald-500 ml-0.5" />
                           )
                         )}
+                        {isActivated && userId && isDirectConversation(selectedContact) && !msg.id.startsWith("temp-") && isQuotableChatText(msg) && (
+                          <button type="button" className="flex min-h-6 items-center gap-1 px-1 text-slate-600 hover:text-emerald-700"
+                            title="Responder com citação" disabled={isRecording || isUploadingAttachment}
+                            onClick={() => {
+                              setQuoteDraft({ userId, contactId: selectedContact.id, id: msg.id, text: msg.text, type: msg.type });
+                              composerRef.current?.focus();
+                            }}>
+                            <Reply size={13} /> Responder
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1399,6 +1452,17 @@ export default function Messages() {
 
             {/* Input Bar */}
             <div className="p-2 sm:p-3 bg-white border-t border-slate-100 shrink-0">
+              {activeQuote && (
+                <div className="mb-2 flex items-start justify-between gap-2 rounded-xl border-l-2 border-emerald-500 bg-emerald-50 p-2 text-xs text-slate-700">
+                  <div className="min-w-0">
+                    <p className="font-semibold">A responder com citação</p>
+                    <p className="line-clamp-2 break-words">{activeQuote.text}</p>
+                  </div>
+                  <button type="button" aria-label="Retirar citação" onClick={() => setQuoteDraft(undefined)} className="shrink-0 rounded p-1 hover:bg-emerald-100">
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
               <input
                 type="file"
                 ref={fileInputRef}
@@ -1438,8 +1502,8 @@ export default function Messages() {
                     size="icon"
                     className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 text-slate-400 hover:text-emerald-600 rounded-xl"
                     onClick={handleAttachmentClick}
-                    disabled={!isActivated || isUploadingAttachment}
-                    title="Anexar áudio, foto, vídeo ou documento"
+                    disabled={!isActivated || isUploadingAttachment || Boolean(activeQuote)}
+                    title={activeQuote ? "Retira a citação para anexar um ficheiro" : "Anexar áudio, foto, vídeo ou documento"}
                   >
                     <Paperclip size={18} />
                   </Button>
@@ -1449,18 +1513,27 @@ export default function Messages() {
                     size="icon"
                     className="h-8 w-8 sm:h-10 sm:w-10 shrink-0 text-slate-400 hover:text-emerald-600 rounded-xl"
                     onClick={() => setIsRecording(true)}
-                    disabled={!isActivated}
-                    title="Gravar Áudio de Voz"
+                    disabled={!isActivated || Boolean(activeQuote)}
+                    title={activeQuote ? "Retira a citação para gravar áudio" : "Gravar Áudio de Voz"}
                   >
                     <Mic size={18} />
                   </Button>
                   <Input
+                    ref={composerRef}
                     placeholder={selectedContact.ai_paused ? "Modo Humano ativo..." : "Digite uma mensagem..."}
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
                     className="min-w-0 flex-1 h-9 sm:h-10 text-base sm:text-sm rounded-xl border-slate-200 focus:ring-emerald-500/20"
                     disabled={loading || !isActivated}
                   />
+                  {isDirectConversation(selectedContact) && (
+                    <Button type="button" variant="ghost" size="icon" aria-label="Agendar mensagem" title="Agendar mensagem"
+                      className="h-8 w-8 shrink-0 rounded-xl text-slate-500 hover:text-emerald-600 sm:h-10 sm:w-10"
+                      disabled={loading || isUploadingAttachment || !newMessage.trim() || !isActivated || !userId}
+                      onClick={() => userId && setScheduleDraft({ userId, contactId: selectedContact.id, text: newMessage.trim(), quote: activeQuote })}>
+                      <CalendarClock size={17} />
+                    </Button>
+                  )}
                   <Button
                     type="submit"
                     aria-label="Enviar mensagem"
@@ -1473,6 +1546,19 @@ export default function Messages() {
                 </form>
               )}
             </div>
+            {activeSchedule && (
+              <ChatScheduleDialog key={activeSchedule.contactId} contactId={activeSchedule.contactId}
+                recipient={[getContactDisplay(selectedContact).title, getContactDisplay(selectedContact).subtitle].filter(Boolean).join(" · ")}
+                message={activeSchedule.text} quote={activeSchedule.quote}
+                onClose={() => setScheduleDraft(undefined)}
+                onSaved={() => {
+                  if (currentChat.current !== activeSchedule.contactId) return;
+                  setNewMessage((value) => value.trim() === activeSchedule.text ? "" : value);
+                  if (activeSchedule.quote) setQuoteDraft((current) => current?.id === activeSchedule.quote?.id && inConversation(current) ? undefined : current);
+                  setScheduleDraft(undefined);
+                  toast.success("Mensagem guardada na Agenda.", { action: { label: "Abrir Agenda", onClick: () => navigate("/schedule") } });
+                }} />
+            )}
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-slate-400 space-y-4 p-8 text-center">

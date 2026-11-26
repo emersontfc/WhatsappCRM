@@ -46,6 +46,8 @@ interface ScheduledMessage {
   media_type?: string;
   media_mimetype?: string;
   media_filename?: string;
+  reply_to_message_id?: string | null;
+  campaign_id?: string | null;
   scheduled_at: string;
   retry_at?: string | null;
   attempts?: number;
@@ -389,6 +391,10 @@ export default function Schedule() {
       toast.error("Apenas agendamentos pendentes podem ser editados.");
       return;
     }
+    if (msg.campaign_id) {
+      navigate("/seller#campanhas");
+      return;
+    }
 
     setNewMessage({
       contact_id: msg.contact_id === "status" ? "" : msg.contact_id,
@@ -398,6 +404,7 @@ export default function Schedule() {
       media_type: msg.media_type,
       media_filename: msg.media_filename,
       media_mimetype: msg.media_mimetype,
+      reply_to_message_id: msg.reply_to_message_id,
       repeat_days: msg.repeat_days,
       repeat_zone: msg.repeat_zone,
       source_table: msg.source_table,
@@ -584,6 +591,7 @@ export default function Schedule() {
                       <select 
                         className="flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                         value={newMessage.contact_id}
+                        disabled={Boolean(newMessage.reply_to_message_id)}
                         onChange={e => setNewMessage({...newMessage, contact_id: e.target.value})}
                       >
                         <option value="">Selecione um contato...</option>
@@ -612,6 +620,14 @@ export default function Schedule() {
                     />
                   </div>
                 </div>
+
+                {newMessage.reply_to_message_id && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-900">
+                    <span>Esta resposta inclui uma citação. Retira-a para mudar o contacto ou anexar um ficheiro.</span>
+                    <Button type="button" variant="outline" size="sm" onClick={() =>
+                      setNewMessage((current) => ({ ...current, reply_to_message_id: null }))}>Retirar citação</Button>
+                  </div>
+                )}
 
                 {newMessage.target_type !== "contact" && (
                   <label className="grid gap-1 text-sm">
@@ -668,7 +684,7 @@ export default function Schedule() {
                       variant="outline" 
                       className="gap-2"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadingMedia || isRecording}
+                      disabled={uploadingMedia || isRecording || Boolean(newMessage.reply_to_message_id)}
                     >
                       {uploadingMedia ? (
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent"></div>
@@ -684,7 +700,7 @@ export default function Schedule() {
                         variant="outline" 
                         className="gap-2"
                         onClick={() => setIsRecording(!isRecording)}
-                        disabled={uploadingMedia}
+                        disabled={uploadingMedia || Boolean(newMessage.reply_to_message_id)}
                       >
                         <Mic size={16} />
                         {isRecording ? "Cancelar Áudio" : "Gravar Áudio"}
@@ -816,6 +832,8 @@ export default function Schedule() {
                           </span>
                         </div>
                         {Boolean(msg.repeat_days) && <p className="text-sm text-slate-600">{msg.repeat_days === 1 ? "Diário" : "Semanal"}</p>}
+                        {msg.reply_to_message_id && <p className="text-xs text-slate-600">Resposta citada</p>}
+                        {msg.campaign_id && <p className="text-xs text-slate-600">Campanha do catálogo</p>}
                         {msg.error && <p className="text-sm text-slate-600">{msg.error}</p>}
                         {msg.status === "pending" && msg.retry_at && <p className="text-xs text-slate-600">
                           Próxima tentativa {new Date(msg.retry_at).toLocaleString("pt-MZ")}
@@ -841,7 +859,7 @@ export default function Schedule() {
                       className="h-8 w-8 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
                       onClick={() => handleEdit(msg)}
                       disabled={msg.status !== "pending"}
-                      title="Editar"
+                      title={msg.campaign_id ? "Editar no Vendedor" : "Editar"}
                     >
                       <Settings2 size={14} />
                     </Button>

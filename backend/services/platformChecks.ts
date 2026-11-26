@@ -1,7 +1,7 @@
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 
 const requirements = {
-  crm: [["users", "id"], ["contacts", "id,user_id,phone,lid"], ["messages", "id,user_id,contact_id,msg_id"]],
+  crm: [["users", "id"], ["contacts", "id,user_id,phone,lid"], ["messages", "id,user_id,contact_id,msg_id,agentx_live_ingress"]],
   agent: [["agents", "id,user_id,provider,is_active"]],
   agenda: [["scheduled_messages", "id,user_id,target_type,group_jid,attempts,repeat_days,error"],
     ["scheduled_status", "id,user_id,caption,attempts,repeat_days,error"]],

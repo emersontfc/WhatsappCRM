@@ -19,6 +19,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { apiFetch } from '../lib/api';
 import { GroupControls, type EditableGroup, type GroupPermissions } from '../components/GroupControls';
+import { GroupPolicyPanel } from '../components/GroupPolicyPanel';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 
@@ -45,10 +46,10 @@ type GroupEvent = { id: number; rule: string; outcome: string; created_at: strin
 const memberActions = { add: "Adicionar membro", remove: "Remover do grupo", promote: "Promover a administrador", demote: "Remover função de administrador" };
 const memberLabel = (member: Member) => member.name || member.notify || (member.phoneNumber ?? member.id).split("@")[0];
 const defaultRules = { anti_link: false, anti_spam: false, anti_flood: false, welcome_msg: "", active: true };
-const ruleNames: Record<string, string> = { link: "Link", spam: "Spam", flood: "Flood", welcome: "Boas-vindas" };
+const ruleNames: Record<string, string> = { link: "Link", word: "Palavra bloqueada", spam: "Spam", flood: "Flood", welcome: "Boas-vindas" };
 const outcomes: Record<string, string> = {
   accepted: "Ação aceite pelo WhatsApp", no_permission: "Conta sem permissão",
-  unverified_sender: "Remetente não identificado", failed: "Falha no WhatsApp"
+  unverified_sender: "Remetente não identificado", failed: "Falha no WhatsApp", pending: "Ação por confirmar"
 };
 
 export default function Groups() {
@@ -550,6 +551,7 @@ export default function Groups() {
                           </p>
                         </div>
                       </div>
+                      <GroupPolicyPanel key={selectedGroup.id} jid={selectedGroup.id} canManage={selectedGroup.permissions.manage} />
                       <section className="border-t pt-3">
                         <h4 className="font-semibold">Atividade recente</h4>
                         {eventsUnavailable && <p className="text-sm">Histórico indisponível.</p>}

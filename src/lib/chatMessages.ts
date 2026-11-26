@@ -3,7 +3,12 @@ import type { Message } from "../types";
 export function mergeMessage(current: Message[], incoming: Message): Message[] {
   const existing = current.findIndex((message) =>
     message.id === incoming.id || Boolean(incoming.msg_id && message.msg_id === incoming.msg_id));
-  if (existing >= 0 && current[existing].id === incoming.id) return current;
+  if (existing >= 0 && current[existing].id === incoming.id) {
+    if (incoming.reply_to_message_id && incoming.reply_to_message_id !== current[existing].reply_to_message_id) {
+      return current.map((message, index) => index === existing ? { ...message, reply_to_message_id: incoming.reply_to_message_id } : message);
+    }
+    return current;
+  }
   const next = current.filter((_, index) => index !== existing);
   const position = next.findIndex((message) => message.id.startsWith("temp-") || compareMessagePosition(message, incoming) > 0);
   next.splice(position < 0 ? next.length : position, 0, incoming);

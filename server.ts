@@ -21,6 +21,7 @@ import appointmentRoutes from "./backend/routes/appointments.ts";
 import scheduleRoutes from "./backend/routes/schedule.ts";
 import groupProofRoutes, { downloadGroupProofAttachment } from "./backend/routes/groupProofs.ts";
 import commerceRoutes from "./backend/routes/commerce.ts";
+import catalogCampaignRoutes from "./backend/routes/catalogCampaigns.ts";
 import v2CommerceRoutes from "./backend/routes/v2Commerce.ts";
 import companyRoutes from "./backend/routes/company.ts";
 import { startScheduler } from "./backend/scheduler.ts";
@@ -131,6 +132,7 @@ async function startServer() {
   app.use("/api/schedule", authenticate, scheduleRoutes);
   app.get("/api/commerce/verifications/:id/attachment", authenticate, downloadGroupProofAttachment);
   app.use("/api/commerce", authenticate, commerceRoutes);
+  app.use("/api/catalog-campaigns", authenticate, catalogCampaignRoutes);
   app.use("/api/v2/commerce", authenticate, v2CommerceRoutes);
   app.use("/api/company", authenticate, companyRoutes);
 

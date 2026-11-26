@@ -77,6 +77,7 @@ export interface Message {
   text: string;
   type: 'inbound' | 'outbound';
   msg_id?: string;
+  reply_to_message_id?: string | null;
   media_url?: string;
   media_type?: string;
   media_mimetype?: string;

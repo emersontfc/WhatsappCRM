@@ -5,16 +5,19 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { authenticate } from "../backend/middleware/auth.ts";
 import groups from "../backend/routes/groups.ts";
 
-const { gateway, catalog } = vi.hoisted(() => ({ gateway: {
+const { gateway, catalog, policyRead, policyWrite } = vi.hoisted(() => ({ gateway: {
   getGroupMetadata: vi.fn(), getMe: vi.fn(), updateGroupSubject: vi.fn(), updateGroupDescription: vi.fn(),
   updateGroupAccess: vi.fn(), getGroupInvite: vi.fn(), getGroupJoinRequests: vi.fn(), reviewGroupJoinRequest: vi.fn(),
   updateGroupParticipants: vi.fn(), sendMessage: vi.fn(), leaveGroup: vi.fn()
-}, catalog: { select: vi.fn(), eq: vi.fn(), gt: vi.fn(), order: vi.fn(), limit: vi.fn(), maybeSingle: vi.fn() } }));
+}, catalog: { select: vi.fn(), eq: vi.fn(), gt: vi.fn(), order: vi.fn(), limit: vi.fn(), maybeSingle: vi.fn() },
+policyRead: vi.fn(), policyWrite: vi.fn() }));
 vi.mock("../backend/whatsappManager.ts", () => ({ whatsappManager: gateway }));
 vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: {
   auth: { getUser: async () => ({ data: { user: { id: "account-a" } }, error: null }) },
   from: (table: string) => table === "products" ? catalog
-    : ({ select: () => ({ eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: { role: "user" } }) }) }) }) })
+    : table === "users" ? ({ select: () => ({ eq: () => ({ limit: () => ({ maybeSingle: async () => ({ data: { role: "user" } }) }) }) }) })
+      : policyRead(table),
+  rpc: policyWrite,
 } }));
 
 const jid = "12036312345@g.us";
@@ -61,6 +64,7 @@ beforeEach(() => {
   catalog.order.mockReturnValue(catalog);
   catalog.limit.mockResolvedValue({ data: [product], error: null });
   catalog.maybeSingle.mockResolvedValue({ data: product, error: null });
+  policyWrite.mockReturnValue({ abortSignal: async () => ({ data: null, error: null }) });
 });
 
 function request(path = "", method = "GET", body?: unknown, authorized = true) {
@@ -183,6 +187,40 @@ describe("WhatsApp group administration API", () => {
     const result = await request("/announce", "POST", { text: " Olá " });
     expect(await result.json()).toEqual({ success: true, status: "sent" });
     expect(gateway.sendMessage).toHaveBeenLastCalledWith("account-a", jid, "Olá");
+  });
+
+  it("reads scoped policy and warns of busy group settings instead of changing them", async () => {
+    const scope = vi.fn();
+    const reads: Record<string, unknown> = { group_rules: null, agentx_group_hours: null, agentx_group_warnings: [] };
+    policyRead.mockImplementation((table: string) => {
+      const result = { data: reads[table], error: null };
+      const chain = {
+        select: () => chain, eq: (column: string, value: string) => { scope(table, column, value); return chain; },
+        order: () => chain, limit: () => chain,
+        abortSignal: () => table === "agentx_group_warnings" ? Promise.resolve(result) : chain,
+        maybeSingle: async () => result,
+      };
+      return chain;
+    });
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata(false));
+    expect(await (await request("/policy")).json()).toEqual({ success: true, schedule: null, warnings: [], announce: false,
+      rules: { allowed_link_hosts: [], blocked_words: [], warning_limit: 0 } });
+    expect(scope.mock.calls).toEqual(Object.keys(reads).flatMap((table) =>
+      [[table, "user_id", "account-a"], [table, "group_jid", jid]]));
+
+    const body = { userId: "untrusted", rules: { allowed_link_hosts: ["Example.COM"], blocked_words: ["AVISO FALSO"], warning_limit: 2 },
+      schedule: { enabled: true, timezone: "Africa/Maputo", days: [7, 1], opens_at: "21:00", closes_at: "05:00" } };
+    gateway.getGroupMetadata.mockResolvedValueOnce(metadata(false));
+    expect((await request("/policy", "PUT", body)).status).toBe(403);
+    expect((await request("/policy", "PUT", { ...body, schedule: { ...body.schedule, opens_at: "24:00" } })).status).toBe(400);
+    expect(policyWrite).not.toHaveBeenCalled();
+    expect((await request("/policy", "PUT", body)).status).toBe(200);
+    expect(policyWrite).toHaveBeenCalledWith("agentx_set_group_policy", {
+      p_user: "account-a", p_group: jid, p_rules: { allowed_link_hosts: ["example.com"], blocked_words: ["aviso falso"], warning_limit: 2 },
+      p_schedule: { ...body.schedule, days: [1, 7] },
+    });
+    policyWrite.mockReturnValueOnce({ abortSignal: async () => ({ error: { code: "55P03" } }) });
+    expect((await request("/policy", "PUT", body)).status).toBe(409);
   });
 
   it("posts a selected group's promotion using the current product from the authenticated account", async () => {

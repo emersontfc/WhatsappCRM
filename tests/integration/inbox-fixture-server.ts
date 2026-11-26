@@ -1,6 +1,7 @@
 import { whatsappManager } from "../../backend/whatsappManager.ts";
 import { handleAgentMessage } from "../../backend/agentManager.ts";
 import { handleIncomingMessage } from "../../backend/automationManager.ts";
+import type { WASocket } from "@whiskeysockets/baileys";
 
 // Only the WhatsApp transport is simulated. The app and its database client are unchanged.
 const owner = "00000000-0000-4000-8000-000000000001";
@@ -14,24 +15,48 @@ const contactsMap = new Map([
   ["109876543211123@lid", { id: "109876543211123@lid", phoneNumber: "258831234567@s.whatsapp.net", name: "Número resolvido" }],
 ]);
 function connectedSession(phone: string, contacts = new Map()) {
+  const groupId = "120363000000001@g.us";
+  const group = phone === "258860000001" ? {
+    id: groupId, subject: "Grupo de teste de campanhas", announce: true,
+    participants: [{ id: `${phone}@s.whatsapp.net`, admin: "admin" }]
+  } : null;
   return { status: "connected", contactsMap: contacts, socket: {
     user: { id: `${phone}:1@s.whatsapp.net`, name: "Loja de teste" },
     end() {},
     async sendPresenceUpdate() {},
+    async groupFetchAllParticipating() { return group ? { [groupId]: group } : {}; },
+    async groupMetadata(jid: string) { return jid === groupId && group ? group : { id: jid, participants: [] }; },
     async sendMessage(jid: string, content: unknown) {
       process.send?.({ event: "outbound", jid, content });
       return confirmSend ? { key: { id: `fixture-outbound-${++sequence}` } } : undefined;
     }
   } };
 }
-sessions.set(owner, connectedSession("258860000001", contactsMap));
+const ownerSession = connectedSession("258860000001", contactsMap);
+sessions.set(owner, ownerSession);
 sessions.set("00000000-0000-4000-8000-000000000002", connectedSession("258860000002"));
 
 process.on("message", async (message: {
   event: string; requestId: string; text?: string; messageId?: string; jid?: string; altJid?: string;
+  upsertType?: "notify" | "append" | "history";
 }) => {
   if (message.event === "unconfirmed") confirmSend = false;
+  if (message.event === "confirmed") confirmSend = true;
   let ok = true;
+  if (message.event === "ingress" && message.text && message.messageId && message.jid) {
+    const incoming = {
+      key: { id: message.messageId, remoteJid: message.jid, fromMe: false },
+      message: { conversation: message.text },
+      messageTimestamp: Math.floor(Date.now() / 1000),
+      pushName: "Cliente do teste de receção"
+    };
+    if (message.upsertType === "history") {
+      ok = Boolean(await whatsappManager.syncMessage(owner, incoming));
+    } else {
+      await whatsappManager.handleMessageUpsert(owner, ownerSession.socket as unknown as WASocket,
+        { messages: [incoming], type: message.upsertType ?? "notify" });
+    }
+  }
   if (message.event === "incoming") {
     const saved = await whatsappManager.syncMessage(owner, {
       key: { id: "fixture-inbound-1", remoteJid: "258840000001@s.whatsapp.net", fromMe: false },

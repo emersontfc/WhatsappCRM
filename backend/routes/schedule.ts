@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import type { AuthRequest } from "../middleware/auth.ts";
 import { dispatchScheduled, scheduledContactJid } from "../services/scheduledDispatch.ts";
+import { loadWhatsAppQuote } from "../services/whatsappQuote.ts";
 import { disconnectedSchedule, scheduleAttachment, scheduleTableFor, scheduleUuid, writableScheduleGroup,
   type ScheduleTable, type ScheduleTarget } from "../services/schedulePolicy.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
@@ -15,7 +16,7 @@ const isoInstant = /^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,3})?)?(?:Z|[+-]\
 
 function databaseError(error: unknown) {
   const code = (error as { code?: string } | null)?.code;
-  if (["42P01", "42703", "PGRST204", "PGRST205"].includes(code ?? "")) return "Faltam campos da Agenda. Verifica se as migrações 13, 16, 17 e 23 foram aplicadas.";
+  if (["42P01", "42703", "PGRST204", "PGRST205"].includes(code ?? "")) return "Faltam campos da Agenda. Verifica se as migrações 13, 16, 17, 23 e 30 foram aplicadas.";
   if (code === "42501") return "A API não tem permissão para consultar a Agenda.";
   return null;
 }
@@ -25,12 +26,11 @@ function fail(res: Response, operation: string, error: unknown, fallback: string
   return res.status(503).json({ error: databaseError(error) ?? fallback });
 }
 
-async function isMatchingSchedule(table: ScheduleTable, id: string, userId: string, target: ScheduleTarget, signal: AbortSignal) {
-  const columns = table === "scheduled_messages" ? "id,target_type" : "id";
-  const { data, error } = await supabaseAdmin.from(table).select(columns).eq("id", id).eq("user_id", userId)
+async function matchingSchedule(table: ScheduleTable, id: string, userId: string, target: ScheduleTarget, signal: AbortSignal) {
+  const { data, error } = await supabaseAdmin.from(table).select("*").eq("id", id).eq("user_id", userId)
     .abortSignal(signal).maybeSingle();
   if (error) throw error;
-  return !!data && (table === "scheduled_status" || ((data as { target_type?: string }).target_type ?? "contact") === target);
+  return data && (table === "scheduled_status" || (data.target_type ?? "contact") === target) ? data : null;
 }
 
 router.get("/", async (req: AuthRequest, res) => {
@@ -82,6 +82,12 @@ async function save(req: AuthRequest, res: Response) {
   const mediaType = text(body.media_type);
   const mediaUrl = submittedMedia ? scheduleAttachment(submittedMedia, userId, mediaType) : null;
   const repeatDays = body.repeat_days ?? 0;
+  const quoteSubmitted = Object.hasOwn(body, "reply_to_message_id");
+  const submittedQuote = body.reply_to_message_id;
+  if (quoteSubmitted && (type !== "contact" || submittedQuote !== null &&
+      (typeof submittedQuote !== "string" || !scheduleUuid.test(submittedQuote)))) {
+    return res.status(400).json({ error: "Seleciona uma mensagem de texto da conversa para citar." });
+  }
   let repeatZone = text(body.repeat_zone) || "Africa/Maputo";
   if (![0, 1, 7].includes(repeatDays) || (type === "contact" && repeatDays !== 0)) {
     return res.status(400).json({ error: "Frequência de publicação inválida." });
@@ -109,8 +115,16 @@ async function save(req: AuthRequest, res: Response) {
       if (error) throw error;
       if (data) return res.json({ success: true, id: data.id });
     }
-    if (id && !await isMatchingSchedule(table, id, userId, type, signal)) {
+    const existing = id ? await matchingSchedule(table, id, userId, type, signal) : null;
+    if (id && !existing) {
       return res.status(404).json({ error: "Agendamento não encontrado." });
+    }
+    if (existing?.campaign_id) {
+      return res.status(409).json({ error: "Edita os anúncios de campanha em Vendedor → Campanhas. Podes cancelar este envio pela Agenda." });
+    }
+    const quoteId = quoteSubmitted ? submittedQuote : existing?.reply_to_message_id;
+    if (quoteId && (!message || submittedMedia || mediaType)) {
+      return res.status(400).json({ error: "Uma resposta citada aceita apenas texto. Retira a citação para incluir um ficheiro." });
     }
     const contactId = text(body.contact_id);
     const groupJid = text(body.group_jid);
@@ -120,7 +134,11 @@ async function save(req: AuthRequest, res: Response) {
       const { data, error } = await supabaseAdmin.from("contacts").select("phone,lid")
         .eq("id", contactId).eq("user_id", userId).abortSignal(signal).maybeSingle();
       if (error) throw error;
-      if (!scheduledContactJid(data)) return res.status(400).json({ error: "O contacto selecionado não está disponível para envio." });
+      const jid = scheduledContactJid(data);
+      if (!jid) return res.status(400).json({ error: "O contacto selecionado não está disponível para envio." });
+      if (quoteId && !await loadWhatsAppQuote(userId, contactId, jid, quoteId, signal)) {
+        return res.status(404).json({ error: "A mensagem citada não está disponível nesta conversa. Retira a citação para continuar." });
+      }
     } else if (type === "group") {
       try {
         const group = await writableScheduleGroup(userId, groupJid);
@@ -148,6 +166,7 @@ async function save(req: AuthRequest, res: Response) {
       ...(table === "scheduled_status" ? { caption: message } : {
         message, target_type: type, contact_id: type === "contact" ? contactId : null, phone: null,
         group_jid: type === "group" ? groupJid : null, group_name: groupName,
+        ...(quoteSubmitted ? { reply_to_message_id: submittedQuote } : {}),
         media_mimetype: mediaUrl ? text(body.media_mimetype).slice(0, 120) || null : null,
         media_filename: mediaUrl ? text(body.media_filename).replace(/[\r\n]/g, "").slice(0, 180) || null : null
       })
@@ -182,7 +201,7 @@ router.delete("/:id", async (req: AuthRequest, res) => {
   if (!table || !scheduleUuid.test(id)) return res.status(400).json({ error: "Agendamento inválido." });
   try {
     const signal = AbortSignal.timeout(8_000);
-    if (!await isMatchingSchedule(table, id, userId, target, signal)) return res.status(404).json({ error: "Agendamento não encontrado." });
+    if (!await matchingSchedule(table, id, userId, target, signal)) return res.status(404).json({ error: "Agendamento não encontrado." });
     const { data, error } = await supabaseAdmin.from(table).delete().eq("id", id).eq("user_id", userId)
       .neq("status", "processing").select("id").abortSignal(signal).maybeSingle();
     if (error) throw error;
@@ -201,7 +220,7 @@ router.post("/:id/send", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Inicia sessão para enviar o agendamento." });
   if (!table || !scheduleUuid.test(id)) return res.status(400).json({ error: "Agendamento inválido." });
   try {
-    if (!await isMatchingSchedule(table, id, userId, target, AbortSignal.timeout(8_000))) {
+    if (!await matchingSchedule(table, id, userId, target, AbortSignal.timeout(8_000))) {
       return res.status(404).json({ error: "Agendamento não encontrado." });
     }
     const result = await dispatchScheduled(table, id, userId);

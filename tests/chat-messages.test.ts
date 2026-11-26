@@ -16,6 +16,14 @@ describe("chat message synchronization", () => {
     expect(mergeMessage(observed, { ...sent })).toBe(observed);
   });
 
+  it("adds a persisted quote when the initial echo was stored before the reply metadata", () => {
+    const sent = message("saved", 1000);
+    const updated = { ...sent, reply_to_message_id: "original" };
+    const merged = mergeMessage([sent], updated);
+    expect(merged).toEqual([updated]);
+    expect(mergeMessage(merged, sent)).toBe(merged);
+  });
+
   it("replaces an optimistic row only if the WhatsApp ID matches", () => {
     const one = message("temp-1", 2000, "wa-first");
     const two = message("temp-2", 2000, "wa-second");

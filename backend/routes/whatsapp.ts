@@ -2,6 +2,7 @@ import { VoicePreparationError } from "../utils/whatsappVoice.ts";
 import groupAdministrationRoutes from "./groups.ts";
 import { invalidateGroupRules, isGroupJid, readGroupRulePatch } from "../services/groupModeration.ts";
 import { dispatchScheduled, scheduledContactJid } from "../services/scheduledDispatch.ts";
+import { loadWhatsAppQuote } from "../services/whatsappQuote.ts";
 import express from "express";
 import { whatsappManager } from "../whatsappManager.ts";
 import { AuthRequest } from "../middleware/auth.ts";
@@ -419,7 +420,7 @@ router.get("/me", (req: AuthRequest, res) => {
 
 router.post("/send", async (req: AuthRequest, res) => {
   const userId = req.user?.id;
-  const { jid, text, to, mediaUrl, mediaType, duration, contactId, mimetype, fileName } = req.body ?? {};
+  const { jid, text, to, mediaUrl, mediaType, duration, contactId, mimetype, fileName, replyToMessageId } = req.body ?? {};
   
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -427,6 +428,11 @@ router.post("/send", async (req: AuthRequest, res) => {
   if (!plan) return res.status(403).json({ success: false, error: "Plan not found" });
 
   const messageText = typeof text === "string" ? text : "";
+  const hasQuote = replyToMessageId !== undefined && replyToMessageId !== null;
+  if (hasQuote && (typeof replyToMessageId !== "string" || !contactUuid.test(replyToMessageId) ||
+    !contactId || !messageText.trim() || messageText.length > 4096 || mediaUrl || mediaType)) {
+    return res.status(400).json({ success: false, error: "Para citar uma mensagem, envia texto numa conversa direta." });
+  }
   let formattedJid = jid || to;
   if ((!formattedJid && !contactId) || (!messageText.trim() && !mediaUrl)) {
     return res.status(400).json({ success: false, error: "Seleciona um destino e escreve uma mensagem ou anexa um ficheiro." });
@@ -445,6 +451,17 @@ router.post("/send", async (req: AuthRequest, res) => {
     const groupJid = `${contact.phone?.replace(/\D/g, "") ?? ""}@g.us`;
     formattedJid = groupJid.startsWith("120363") && isGroupJid(groupJid) ? groupJid : scheduledContactJid(contact);
     if (!formattedJid) return res.status(400).json({ success: false, error: "O contacto ainda não tem um destino válido no WhatsApp." });
+  }
+
+  let quote;
+  if (hasQuote) {
+    try {
+      quote = await loadWhatsAppQuote(userId, contactId, formattedJid, replyToMessageId);
+    } catch (error) {
+      console.warn("[WhatsApp] Could not validate a quotation", (error as { code?: string })?.code);
+      return res.status(503).json({ success: false, error: "Não foi possível confirmar a mensagem citada. Tenta novamente." });
+    }
+    if (!quote) return res.status(404).json({ success: false, error: "A mensagem citada não está disponível nesta conversa." });
   }
 
   // Enforce max messages per day
@@ -467,9 +484,10 @@ router.post("/send", async (req: AuthRequest, res) => {
   }
 
   try {
-    const result = await whatsappManager.sendMessage(
-      userId, formattedJid, messageText, mediaUrl, mediaType, duration, mimetype, fileName, contactId
-    );
+    const sendArgs: Parameters<typeof whatsappManager.sendMessage> =
+      [userId, formattedJid, messageText, mediaUrl, mediaType, duration, mimetype, fileName, contactId];
+    if (quote) sendArgs.push(quote);
+    const result = await whatsappManager.sendMessage(...sendArgs);
     if (!result?.key?.id) {
       return res.status(502).json({ success: false, error: "Envio por confirmar. Verifica no WhatsApp antes de repetir." });
     }

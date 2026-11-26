@@ -9,6 +9,14 @@ const messages = {
   frontend_missing: "A compilação do painel está em falta na imagem."
 } as const;
 
+const workflowContracts = [
+  ["agentx_whatsapp_action_ready", "27_whatsapp_action_claims.sql"],
+  ["agentx_group_policy_ready", "28_group_policy_schedule.sql"],
+  ["agentx_catalog_campaigns_ready", "29_catalog_campaigns.sql"],
+  ["agentx_whatsapp_quote_ready", "30_whatsapp_quoted_agenda.sql"],
+  ["agentx_whatsapp_operator_audit_ready", "31_whatsapp_operator_audit.sql"]
+] as const;
+
 async function check() {
   const problem = frontendProblem(process.env, path.join(process.cwd(), "dist", "index.html"));
   if (problem) return messages[problem];
@@ -17,9 +25,11 @@ async function check() {
   if (!supabaseAdminConfigured) return "Configura SUPABASE_SERVICE_ROLE_KEY com a chave privada do backend.";
   const { makePlatformChecks } = await import("../backend/services/platformChecks.ts");
   const checks = makePlatformChecks(true);
-  const [crm, sales, agenda, bookings, groups, sellerDelivery] = await Promise.all([
+  const [crm, sales, agenda, bookings, groups, sellerDelivery, workflows] = await Promise.all([
     checks.check("crm"), checks.check("sales"), checks.check("agenda"), checks.check("bookings"), checks.check("groups"),
-    supabaseAdmin.rpc("agentx_seller_delivery_recovery_ready", {}, { get: true }).abortSignal(AbortSignal.timeout(5_000))
+    supabaseAdmin.rpc("agentx_seller_delivery_recovery_ready", {}, { get: true }).abortSignal(AbortSignal.timeout(5_000)),
+    Promise.all(workflowContracts.map(([rpc]) =>
+      supabaseAdmin.rpc(rpc, {}, { get: true }).abortSignal(AbortSignal.timeout(5_000))))
   ]);
   if (crm === "migration_required") return "O Supabase respondeu, mas o esquema principal do CRM precisa de atualização.";
   if (crm !== "ready") return "O contentor não conseguiu consultar o CRM. Verifica a chave privada e a ligação ao Supabase.";
@@ -37,6 +47,13 @@ async function check() {
   if (sellerDelivery.error || sellerDelivery.data !== true) {
     return "Não foi possível validar a migração 26 para a recuperação de entregas. Verifica a ligação e a chave privada do Supabase.";
   }
+  for (const [index, { data, error }] of workflows.entries()) {
+    const [, migration] = workflowContracts[index];
+    if (data === false || ["PGRST202", "42883", "42501"].includes(error?.code ?? "")) {
+      return `Aplica supabase/migrations/${migration} no projeto Supabase ligado à VPS.`;
+    }
+    if (error || data !== true) return `Não foi possível validar ${migration}. Verifica a ligação ao Supabase.`;
+  }
   return null;
 }
 
@@ -46,5 +63,5 @@ if (message) {
   console.error(`Pré-verificação falhou. ${message}`);
   process.exitCode = 1;
 } else {
-  console.log("Pré-verificação concluída. CRM, vendas, recuperação de entregas, agenda, marcações e grupos verificados.");
+  console.log("Pré-verificação concluída. CRM, vendas, entregas, agenda, marcações, grupos e campanhas verificados.");
 }

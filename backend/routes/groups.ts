@@ -1,7 +1,8 @@
 import express, { type Response } from "express";
 import type { GroupMetadata, GroupParticipant } from "@whiskeysockets/baileys";
 import type { AuthRequest } from "../middleware/auth.ts";
-import { groupParticipant, isGroupAdmin, isGroupJid, normalizedGroupIdentity } from "../services/groupModeration.ts";
+import { groupParticipant, invalidateGroupRules, isGroupAdmin, isGroupJid, normalizedGroupIdentity } from "../services/groupModeration.ts";
+import { defaultGroupPolicy, readGroupPolicy } from "../services/groupPolicy.ts";
 import { readContactPhone } from "../../shared/contactPhone.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
@@ -43,6 +44,41 @@ groups.get("/:jid", forGroup(false, async (_req, res, { group, self }) => {
   const { id, subject, desc, announce, restrict, joinApprovalMode, participants } = group;
   return res.json({ success: true, metadata: { id, subject, desc, announce, restrict, joinApprovalMode, participants },
     permissions: { manage: isGroupAdmin(self), post: !announce || isGroupAdmin(self), selfId: self.id } });
+}));
+
+async function showGroupPolicy(res: Response, userId: string, jid: string, announce: boolean | undefined) {
+  const signal = AbortSignal.timeout(8_000);
+  const [rules, schedule, warnings] = await Promise.all([
+    supabaseAdmin.from("group_rules").select("allowed_link_hosts,blocked_words,warning_limit")
+      .eq("user_id", userId).eq("group_jid", jid).abortSignal(signal).maybeSingle(),
+    supabaseAdmin.from("agentx_group_hours").select("enabled,timezone,days,opens_at,closes_at,next_run_at,last_run_at,last_outcome")
+      .eq("user_id", userId).eq("group_jid", jid).abortSignal(signal).maybeSingle(),
+    supabaseAdmin.from("agentx_group_warnings").select("id,participant_jid,rule,warning_number,warning_limit,status,created_at")
+      .eq("user_id", userId).eq("group_jid", jid).order("created_at", { ascending: false }).order("id", { ascending: false })
+      .limit(30).abortSignal(signal),
+  ]);
+  const error = rules.error || schedule.error || warnings.error;
+  if (error) {
+    const missing = ["42P01", "42703", "PGRST202", "PGRST204", "PGRST205"].includes(error.code);
+    return res.status(503).json({ error: missing ? "Aplica a migração 28 para usar estas regras e horários." : "As regras e os horários estão indisponíveis." });
+  }
+  return res.json({ success: true, rules: rules.data ?? defaultGroupPolicy, schedule: schedule.data,
+    warnings: warnings.data ?? [], announce: announce ?? null });
+}
+
+groups.get("/:jid/policy", forGroup(false, async (_req, res, { userId, jid, group }) => showGroupPolicy(res, userId, jid, group.announce)));
+
+groups.put("/:jid/policy", forGroup(true, async (req, res, { userId, jid, group }) => {
+  const policy = readGroupPolicy(req.body);
+  if (!policy) return res.status(400).json({ error: "Verifica os domínios, palavras, avisos e horários do grupo." });
+  const { error } = await supabaseAdmin.rpc("agentx_set_group_policy", {
+    p_user: userId, p_group: jid, p_rules: policy.rules, p_schedule: policy.schedule,
+  }).abortSignal(AbortSignal.timeout(8_000));
+  if (error?.code === "55P03") return res.status(409).json({ error: "O WhatsApp está a aplicar o horário atual. Tenta novamente daqui a pouco." });
+  if (error?.code === "22023") return res.status(400).json({ error: "As regras ou o horário do grupo não são válidos." });
+  if (error) return res.status(503).json({ error: "A base não confirmou a gravação destas regras e horários." });
+  invalidateGroupRules(userId, jid);
+  return showGroupPolicy(res, userId, jid, group.announce);
 }));
 
 groups.post("/:jid/subject", forGroup(true, async (req, res, { userId, jid }) => {

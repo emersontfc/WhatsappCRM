@@ -3,6 +3,8 @@ import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { normalizeContactPhone } from "../../shared/contactPhone.ts";
 import { disconnectedSchedule, scheduleAttachment, scheduleDeadline, writableScheduleGroup, type ScheduleTable } from "./schedulePolicy.ts";
+import { loadWhatsAppQuote } from "./whatsappQuote.ts";
+import { prepareCatalogCampaignDispatch } from "./catalogCampaigns.ts";
 
 export function scheduledContactJid(contact: { phone?: string | null; lid?: string | null } | null): string | null {
   const phone = normalizeContactPhone(contact?.phone);
@@ -42,11 +44,18 @@ export async function dispatchScheduled(table: ScheduleTable, id: string, userId
     : finish("failed", message + " O limite de tentativas foi atingido.", { attempts });
 
   const statusPost = table === "scheduled_status" || item.target_type === "status";
-  const message = item.caption || item.message || "";
-  const mediaType = item.media_type;
-  const media = item.media_url ? scheduleAttachment(item.media_url, userId, mediaType, true) : (item.media_url ?? undefined);
-  if ((!message.trim() && !media) || (item.media_url && (!media || !["image", "video", "audio", "document"].includes(mediaType))) ||
-    (statusPost && media && !["image", "video"].includes(mediaType)) || (mediaType === "audio" && message.trim())) {
+  const campaignId = item.campaign_id;
+  let message = item.caption || item.message || "";
+  let mediaType = item.media_type;
+  let mimetype = item.media_mimetype;
+  let filename = item.media_filename;
+  let media: string | Buffer | null | undefined = item.media_url
+    ? scheduleAttachment(item.media_url, userId, mediaType, true) : undefined;
+  if (campaignId && (statusPost || item.target_type !== "group" || item.reply_to_message_id)) {
+    return finish("failed", "O destino desta campanha já não é válido.", { attempts });
+  }
+  if (!campaignId && ((!message.trim() && !media) || (item.media_url && (!media || !["image", "video", "audio", "document"].includes(mediaType))) ||
+    (statusPost && media && !["image", "video"].includes(mediaType)) || (mediaType === "audio" && message.trim()))) {
     return finish("failed", "O conteúdo do agendamento não é válido. Verifica o anexo ou volta a guardar o texto.", { attempts });
   }
 
@@ -74,10 +83,39 @@ export async function dispatchScheduled(table: ScheduleTable, id: string, userId
   }
   if (!jid) return finish("failed", "Contacto inválido para a conta.", { attempts });
 
+  if (campaignId) {
+    try {
+      const prepared = await prepareCatalogCampaignDispatch(userId, campaignId, item.id, jid);
+      if (!prepared) return finish("failed", "A campanha, o produto ou a imagem deixaram de estar disponíveis. Revê a campanha no Vendedor.", { attempts });
+      message = prepared.message;
+      media = prepared.image;
+      mediaType = "image";
+      mimetype = prepared.mimetype;
+      filename = prepared.filename;
+    } catch {
+      return retry("Não foi possível preparar os dados e a imagem da campanha.");
+    }
+  }
+
+  let quote;
+  if (item.reply_to_message_id) {
+    if (statusPost || item.target_type !== "contact" || !contactId || media || !message.trim()) {
+      return finish("failed", "Uma resposta citada aceita apenas texto para um contacto.", { attempts });
+    }
+    try {
+      quote = await loadWhatsAppQuote(userId, contactId, jid, item.reply_to_message_id);
+    } catch {
+      return retry("Não foi possível consultar a mensagem citada.");
+    }
+    if (!quote) return finish("failed", "A mensagem citada já não está disponível nesta conversa.", { attempts });
+  }
+
   let receipt: string;
   try {
-    const result = await scheduleDeadline(whatsappManager.sendMessage(userId, jid, message,
-      media ?? undefined, mediaType ?? undefined, undefined, item.media_mimetype, item.media_filename, contactId), 45_000);
+    const sendArgs: Parameters<typeof whatsappManager.sendMessage> = [userId, jid, message,
+      media ?? undefined, mediaType ?? undefined, undefined, mimetype, filename, contactId];
+    if (quote) sendArgs.push(quote);
+    const result = await scheduleDeadline(whatsappManager.sendMessage(...sendArgs), 45_000);
     if (!result?.key?.id) throw new Error("O WhatsApp não devolveu um identificador.");
     receipt = result.key.id;
   } catch (failure) {

@@ -217,6 +217,12 @@ SELECT
 
 Depois de aplicar as migrações, publique o commit da versão com `scripts/release-agentx-vps.sh`. Confirme em **Estado da operação** os três módulos, a ligação WhatsApp e o processamento de agendamentos. O processamento no servidor exige `DISABLE_SCHEDULER=false`.
 
+### Atualizar os fluxos de WhatsApp, Grupos e Campanhas
+
+Numa base que já recebeu a migração 26, aplique `psql -X -f migrations/apply_agentx_whatsapp_workflows.sql` usando a ligação de migração. Para o SQL Editor do Supabase, gere o ficheiro com `node scripts/render-agentx-fresh-sql.mjs --whatsapp-upgrade > AgentX-migracoes-27-a-31.sql` e execute o conteúdo inteiro. Esta variante aplica as cinco migrações numa única transação. Depois, publique o commit e confirme `/api/ready`.
+
+Teste num grupo de piloto com a conta ligada como administradora. Confirme o horário de escrita, uma publicação do catálogo, a origem do lead depois de o cliente escrever em privado e um envio citado pela Agenda. O script de publicação valida as migrações e mantém uma imagem para reversão. As migrações acrescentam estruturas e deixam os registos disponíveis para uma nova publicação após uma reversão da imagem.
+
 | Ação | Comando Docker | Comando PM2 |
 | :--- | :--- | :--- |
 | **Ver logs ao vivo** | `docker compose logs -f agentx` | `pm2 logs agentx-crm` |

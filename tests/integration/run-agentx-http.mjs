@@ -29,6 +29,9 @@ let paymentContractReady = true;
 let missingModuleContract = "";
 let sellerDeliveryState = "ready";
 let sellerDeliveryChecks = 0;
+let missingWorkflowContract = "";
+const workflowContracts = ["agentx_whatsapp_action_ready", "agentx_group_policy_ready", "agentx_catalog_campaigns_ready",
+  "agentx_whatsapp_quote_ready", "agentx_whatsapp_operator_audit_ready"];
 const sellerMigrations = /migraç(?:ão|ões).*22/;
 
 const supabase = createServer((req, res) => {
@@ -48,6 +51,10 @@ const supabase = createServer((req, res) => {
     return res.end("0");
   }
   const moduleContract = url.pathname.split("/").at(-1);
+  if (workflowContracts.includes(moduleContract)) {
+    assert.equal(req.method, "GET");
+    return res.end(JSON.stringify(moduleContract !== missingWorkflowContract));
+  }
   if (["agentx_schedule_dispatch_ready", "agentx_appointment_contract_ready", "agentx_group_proof_contract_ready"].includes(moduleContract)) {
     return res.end(JSON.stringify(moduleContract !== missingModuleContract));
   }
@@ -270,6 +277,12 @@ try {
     sellerDeliveryState = state;
     await assert.rejects(preflight(), { code: 1, stderr: /migração 26.*26_seller_delivery_recovery\.sql/ });
   }
+  sellerDeliveryState = "ready";
+  for (const [index, contract] of workflowContracts.entries()) {
+    missingWorkflowContract = contract;
+    await assert.rejects(preflight(), { code: 1, stderr: new RegExp(`supabase/migrations/${index + 27}_`) });
+  }
+  missingWorkflowContract = "";
   const checksBeforeRuntime = sellerDeliveryChecks;
   const compatible = await startApp();
   try {

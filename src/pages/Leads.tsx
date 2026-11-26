@@ -27,6 +27,7 @@ import { supabase, getUserId } from "../supabase";
 import { Card, CardContent } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
+import { LeadCampaignOrigin } from "../components/LeadCampaignOrigin";
 import { useActivation } from "../lib/useActivation";
 import { apiFetch } from "../lib/api";
 import { cn } from "../lib/utils";
@@ -896,6 +897,7 @@ export default function Leads() {
                 </div>
               )}
 
+              <LeadCampaignOrigin key={selectedLead.id} leadId={selectedLead.id} />
               {selectedLead.last_action && <p className="text-sm text-slate-700">
                 Última ação · {selectedLead.last_action}
               </p>}

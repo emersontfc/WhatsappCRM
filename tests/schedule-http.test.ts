@@ -1,12 +1,16 @@
 import { once } from "node:events";
 import type { Server } from "node:http";
 import express from "express";
+import { generateWAMessage } from "@whiskeysockets/baileys";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import scheduleRoutes from "../backend/routes/schedule.ts";
+import whatsappRoutes from "../backend/routes/whatsapp.ts";
 import type { AuthRequest } from "../backend/middleware/auth.ts";
 
-const mocks = vi.hoisted(() => ({ from: vi.fn(), group: vi.fn(), send: vi.fn(), identity: vi.fn() }));
+const mocks = vi.hoisted(() => ({ from: vi.fn(), group: vi.fn(), send: vi.fn(), identity: vi.fn(), campaign: vi.fn() }));
 vi.mock("../backend/supabaseAdmin.ts", () => ({ supabaseAdmin: { from: mocks.from } }));
+vi.mock("../backend/lib/plan.ts", () => ({ getPlan: async () => ({ max_messages_per_day: 100 }) }));
+vi.mock("../backend/services/catalogCampaigns.ts", () => ({ prepareCatalogCampaignDispatch: mocks.campaign }));
 vi.mock("../backend/whatsappManager.ts", () => ({
   whatsappManager: { getGroupMetadata: mocks.group, getMe: mocks.identity, sendMessage: mocks.send }
 }));
@@ -14,14 +18,20 @@ vi.mock("../backend/whatsappManager.ts", () => ({
 const owner = "00000000-0000-4000-8000-000000000001";
 const other = "00000000-0000-4000-8000-000000000002";
 const contact = "00000000-0000-4000-8000-000000000011";
+const secondContact = "00000000-0000-4000-8000-000000000012";
 const foreignContact = "00000000-0000-4000-8000-000000000022";
+const source = "00000000-0000-4000-8000-000000000111";
+const foreignSource = "00000000-0000-4000-8000-000000000122";
 const person = "258840000111@s.whatsapp.net";
 const groupJid = "12345@g.us";
 
 type Row = Record<string, unknown>;
 const storage: Record<string, Row[]> = {
   contacts: [{ id: contact, user_id: owner, name: "Cliente", phone: "258841234567" },
+    { id: secondContact, user_id: owner, name: "Segundo cliente", phone: "258841234568" },
     { id: foreignContact, user_id: other, name: "Contacto externo", phone: "258849876543" }],
+  messages: [],
+  subscriptions: [],
   scheduled_messages: [],
   scheduled_status: []
 };
@@ -44,6 +54,7 @@ function from(table: string) {
   const chain = {
     select: () => chain,
     order: () => chain,
+    limit: () => chain,
     abortSignal: () => chain,
     eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return chain; },
     neq: (key: string, value: unknown) => { filters.push((row) => row[key] !== value); return chain; },
@@ -68,6 +79,7 @@ beforeAll(async () => {
     next();
   });
   app.use("/api/schedule", scheduleRoutes);
+  app.use("/api/whatsapp", whatsappRoutes);
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/schedule`;
@@ -79,6 +91,11 @@ beforeEach(() => {
   vi.resetAllMocks();
   storage.scheduled_messages = [];
   storage.scheduled_status = [];
+  storage.subscriptions = [{ user_id: owner, messages_used: 0 }];
+  storage.messages = [
+    { id: source, user_id: owner, contact_id: contact, type: "inbound", msg_id: "WA-TEXTO-1", text: "Pergunta do cliente" },
+    { id: foreignSource, user_id: other, contact_id: foreignContact, type: "inbound", msg_id: "WA-OUTRA-CONTA", text: "Privada" }
+  ];
   mocks.from.mockImplementation(from);
   mocks.identity.mockReturnValue({ id: person });
   mocks.group.mockResolvedValue({ id: groupJid, subject: "Grupo confirmado", participants: [{ id: person, admin: null }] });
@@ -96,6 +113,62 @@ function draft(overrides: Row = {}) {
   return { target_type: "contact", contact_id: contact, message: "Consulta amanhã",
     scheduled_at: new Date(Date.now() + 600_000).toISOString(), request_key: crypto.randomUUID(), ...overrides };
 }
+
+const quotation = { messageId: source, message: { key: { id: "WA-TEXTO-1", remoteJid: "258841234567@s.whatsapp.net", fromMe: false },
+  message: { conversation: "Pergunta do cliente" } } };
+
+describe("WhatsApp quoted text", () => {
+  function send(body: Row) {
+    return fetch(base.replace(/\/schedule$/, "/whatsapp/send"), { method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer owner" }, body: JSON.stringify(body) });
+  }
+
+  it("uses the saved WhatsApp text and key and rejects quotes from other conversations or accounts", async () => {
+    const body = { contactId: contact, replyToMessageId: source, text: "Sim, confirmo" };
+    expect((await send({ ...body, contactId: secondContact })).status).toBe(404);
+    expect((await send({ ...body, replyToMessageId: foreignSource })).status).toBe(404);
+    expect((await send({ ...body, mediaType: "image", mediaUrl: "https://example.invalid/photo.png" })).status).toBe(400);
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect((await send({ ...body, quote: { text: "Citação adulterada" }, jid: "258849876543@s.whatsapp.net" })).status).toBe(200);
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(owner, "258841234567@s.whatsapp.net", "Sim, confirmo",
+      undefined, undefined, undefined, undefined, undefined, contact, quotation);
+    const protocolMessage = await generateWAMessage("258841234567@s.whatsapp.net", { text: "Sim, confirmo" }, {
+      userJid: person, quoted: quotation.message, messageId: "WA-RESPOSTA-1",
+      upload: async () => { throw new Error("Quoted text must not upload media"); }
+    });
+    expect(protocolMessage.message?.extendedTextMessage?.contextInfo).toMatchObject({
+      stanzaId: "WA-TEXTO-1", quotedMessage: { conversation: "Pergunta do cliente" }
+    });
+  });
+
+  it("stores the quote once, preserves it when rescheduled and reconstructs it at dispatch", async () => {
+    const body = draft({ reply_to_message_id: source });
+    expect((await request("", "POST", { ...body, contact_id: secondContact })).status).toBe(404);
+    expect((await request("", "POST", { ...body, reply_to_message_id: foreignSource })).status).toBe(404);
+    const saved = await request("", "POST", body);
+    expect(saved.status).toBe(201);
+    const { id } = await saved.json();
+    expect(await (await request("", "POST", body)).json()).toEqual({ success: true, id });
+    expect(storage.scheduled_messages).toHaveLength(1);
+    const revision = draft({ message: "Resposta revista" });
+    expect((await request(`/${id}`, "PATCH", { ...revision, contact_id: secondContact })).status).toBe(404);
+    expect((await request(`/${id}`, "PATCH", revision)).status).toBe(200);
+    expect(storage.scheduled_messages[0].reply_to_message_id).toBe(source);
+    expect((await request(`/${id}/send`, "POST", { target_type: "contact" })).status).toBe(200);
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(owner, "258841234567@s.whatsapp.net", "Resposta revista",
+      undefined, undefined, undefined, null, null, contact, quotation);
+  });
+
+  it("never dispatches an unquoted message if its original disappears", async () => {
+    const response = await request("", "POST", draft({ reply_to_message_id: source }));
+    expect(response.status).toBe(201);
+    const { id } = await response.json();
+    storage.messages = [];
+    expect((await request(`/${id}/send`, "POST", { target_type: "contact" })).status).toBe(409);
+    expect(storage.scheduled_messages[0]).toMatchObject({ status: "failed", reply_to_message_id: source });
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});
 
 describe("owner-scoped Agenda API", () => {
   it("saves once, scopes the contact and reads the saved agenda by authenticated owner", async () => {
@@ -161,5 +234,20 @@ describe("owner-scoped Agenda API", () => {
     storage.scheduled_status[0].status = "pending";
     expect((await remove()).status).toBe(200);
     expect(storage.scheduled_status).toEqual([]);
+  });
+
+  it("uses only the verified campaign content once a group job is claimed", async () => {
+    const initial = await request("", "POST", draft({ target_type: "group", group_jid: groupJid }));
+    expect(initial.status).toBe(201);
+    const { id } = await initial.json();
+    const campaignId = crypto.randomUUID();
+    storage.scheduled_messages[0].campaign_id = campaignId;
+    const image = Buffer.from("campaign fixture");
+    mocks.campaign.mockResolvedValue({ message: "Produto ABC · 800 MT", image, mimetype: "image/png", filename: "capa.png" });
+    expect((await request(`/${id}`, "PATCH", draft({ target_type: "group", group_jid: groupJid, message: "Alterado na Agenda" }))).status).toBe(409);
+    expect((await request(`/${id}/send`, "POST", { target_type: "group" })).status).toBe(200);
+    expect(mocks.campaign).toHaveBeenCalledExactlyOnceWith(owner, campaignId, id, groupJid);
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(owner, groupJid, "Produto ABC · 800 MT",
+      image, "image", undefined, "image/png", "capa.png", undefined);
   });
 });

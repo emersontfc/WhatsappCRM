@@ -1,5 +1,6 @@
 import { processAppointmentReminders } from "./services/appointmentDelivery.ts";
 import { dispatchScheduled } from "./services/scheduledDispatch.ts";
+import { processGroupAccessSchedules } from "./services/groupAccessSchedule.ts";
 import { supabaseAdmin } from "./supabaseAdmin.ts";
 import { whatsappManager } from "./whatsappManager.ts";
 
@@ -30,6 +31,21 @@ export function startScheduler() {
   };
   const appointmentTimer = setInterval(processAppointments, 60_000);
   void processAppointments();
+
+  let groupAccessRunning = false;
+  const processGroupAccess = async () => {
+    if (groupAccessRunning) return;
+    groupAccessRunning = true;
+    try {
+      await processGroupAccessSchedules();
+    } catch (error) {
+      if (!isSchemaError(error)) console.warn("[Scheduler] Group opening hours unavailable:", (error as { code?: string })?.code);
+    } finally {
+      groupAccessRunning = false;
+    }
+  };
+  const groupAccessTimer = setInterval(processGroupAccess, 60_000);
+  void processGroupAccess();
 
   async function dispatchDue(table: "scheduled_messages" | "scheduled_status", now: string) {
     const { data, error } = await supabaseAdmin.from(table).select("id,user_id")
@@ -115,5 +131,6 @@ export function startScheduler() {
   return { stop: () => {
     clearInterval(timer);
     clearInterval(appointmentTimer);
+    clearInterval(groupAccessTimer);
   } };
 }

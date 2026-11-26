@@ -2,11 +2,10 @@ import { isGroupJid, moderateGroupMessage, welcomeGroupParticipants } from "./se
 import { GROUP_PROOF_LIMIT, groupProofOrderNumber, processGroupPaymentProof } from "./services/groupPaymentProofs.ts";
 import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "./services/whatsappOperator.ts";
 import makeWASocket, {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
   Contact as BaileysContact,
   downloadMediaMessage,
   extractMessageContent,
+  type BaileysEventMap,
   type WASocket,
   type WAMessage,
 } from "@whiskeysockets/baileys";
@@ -20,9 +19,12 @@ import fs from "fs";
 import path from "path";
 import { prepareWhatsAppVoice } from "./utils/whatsappVoice.ts";
 import { WHATSAPP_VOICE_MIME, ownedVoiceFilename } from "../shared/voiceAudio.ts";
-import { IWhatsAppTransport } from "./lib/whatsappTransport.ts";
+import type { IWhatsAppTransport, StoredWhatsAppQuote } from "./lib/whatsappTransport.ts";
 import { normalizeContactPhone } from "../shared/contactPhone.ts";
 import { saveContactIdentity } from "./services/contactIdentity.ts";
+import { claimWhatsAppAction } from "./services/whatsappActionClaims.ts";
+import { captureCatalogCampaignInterest, readCatalogCampaignCode } from "./services/catalogCampaignAttribution.ts";
+import { whatsappDisconnectAction, whatsappWebVersion } from "./services/whatsappConnectionPolicy.ts";
 
 const logger = pino({ level: "silent" });
 const lidFrom = (jid?: string | null) => /^(\d{5,20})(?::\d+)?@lid$/i.exec(jid ?? "")?.[1] ?? null;
@@ -50,25 +52,23 @@ export class WhatsAppManager implements IWhatsAppTransport {
   private sessions: Map<string, { socket: any; status: string; qr?: string; pairingCode?: string; createdAt?: number }> = new Map();
   private reconnectAttempts: Map<string, number> = new Map();
   private restartRequiredAttempts: Map<string, number> = new Map();
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private manualReconnect = new Set<string>();
   private maxReconnectAttempts = 5;
-  private recentMessageIds: Map<string, number> = new Map();
 
-  private isDuplicateMessage(msgId: string): boolean {
-    if (!msgId) return false;
-    const now = Date.now();
-    const seenAt = this.recentMessageIds.get(msgId);
-    if (seenAt && (now - seenAt) < 600000) { // 10 minutes dedup window
-      return true;
-    }
-    this.recentMessageIds.set(msgId, now);
-    if (this.recentMessageIds.size > 5000) {
-      for (const [k, v] of this.recentMessageIds.entries()) {
-        if (now - v > 600000) this.recentMessageIds.delete(k);
-      }
-    }
-    return false;
+  private cancelReconnect(userId: string) {
+    const timer = this.reconnectTimers.get(userId);
+    if (timer) clearTimeout(timer);
+    this.reconnectTimers.delete(userId);
   }
 
+  private queueReconnect(userId: string, onUpdate: ((status: string, data?: string) => void) | undefined, delay: number) {
+    this.cancelReconnect(userId);
+    this.reconnectTimers.set(userId, setTimeout(() => {
+      this.reconnectTimers.delete(userId);
+      void this.createSession(userId, onUpdate);
+    }, delay));
+  }
   private async log(userId: string, type: "info" | "success" | "error" | "warn", message: string, metadata?: any) {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -101,27 +101,25 @@ export class WhatsAppManager implements IWhatsAppTransport {
           console.log(`[WhatsApp] Session already connected for ${userId}`);
           return existingSession.socket;
         }
-        
+
         // If it's stuck in connecting/qr for more than 2 minutes, force a new one
         const sessionAge = Date.now() - ((existingSession as any).createdAt || 0);
         if (sessionAge > 120000) {
           console.log(`[WhatsApp] Forcing new session for ${userId} (stuck for ${Math.round(sessionAge/1000)}s)`);
-          try { existingSession.socket.end(undefined); } catch (e) {}
           this.sessions.delete(userId);
+          try { existingSession.socket.end(undefined); } catch (e) {}
         } else {
           console.log(`[WhatsApp] Session already exists for ${userId} with status: ${existingSession.status}`);
           return existingSession.socket;
         }
       }
 
-      const attempts = this.reconnectAttempts.get(userId) || 0;
-      if (attempts >= this.maxReconnectAttempts) {
-        console.warn(`[WhatsApp] Max reconnection attempts reached for ${userId}. Resetting...`);
+      this.cancelReconnect(userId);
+      if (this.manualReconnect.delete(userId)) {
         this.reconnectAttempts.delete(userId);
-        await this.log(userId, "error", "Máximo de tentativas de reconexão atingido. Por favor, tente novamente.");
-        onUpdate?.("disconnected");
-        return;
+        this.restartRequiredAttempts.delete(userId);
       }
+      const attempts = this.reconnectAttempts.get(userId) || 0;
 
       console.log(`[WhatsApp] Creating new session for ${userId} (Attempt ${attempts + 1})`);
       await this.log(userId, "info", `Iniciando conexão WhatsApp (Tentativa ${attempts + 1})...`);
@@ -129,21 +127,10 @@ export class WhatsAppManager implements IWhatsAppTransport {
       const { state, saveCreds } = await useSupabaseAuthState(userId);
       console.log(`[WhatsApp] Auth state loaded for ${userId}`);
       
-      let version;
-      try {
-        console.log(`[WhatsApp] Fetching latest Baileys version...`);
-        const versionPromise = fetchLatestBaileysVersion();
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout fetching version")), 5000));
-        const v = await Promise.race([versionPromise, timeoutPromise]) as any;
-        version = v.version;
-        console.log(`[WhatsApp] Using Baileys version: ${version.join('.')}`);
-      } catch (err) {
-        console.warn(`[WhatsApp] Failed to fetch Baileys version, using fallback:`, err);
-        version = [2, 3000, 1017531287];
-      }
+      const version = await whatsappWebVersion();
 
       const socket = makeWASocket({
-        version,
+        ...(version && { version }),
         printQRInTerminal: false,
         browser: ["Ubuntu", "Chrome", "120.0.6099.129"],
         auth: state,
@@ -168,16 +155,16 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
       const watchdog = setTimeout(async () => {
         const session = this.sessions.get(userId);
-        if (session && session.status === "connecting") {
-          console.warn(`[WhatsApp] Session for ${userId} stuck in connecting for 45s. Resetting...`);
-          await this.log(userId, "warn", "A conexão está demorando mais que o esperado. Reiniciando...");
-          try { socket.end(undefined); } catch (e) {}
+        if (session?.socket === socket && session.status === "connecting") {
           this.sessions.delete(userId);
+          try { socket.end(undefined); } catch (e) {}
+          await this.log(userId, "warn", "O WhatsApp demorou a estabelecer a conexão. Tenta novamente.");
           onUpdate?.("disconnected");
         }
-      }, 45000);
+      }, 65000);
 
       socket.ev.on("creds.update", async () => {
+        if (this.sessions.get(userId)?.socket !== socket) return;
         console.log(`[WhatsApp] Creds updated for ${userId}`);
         await saveCreds();
       });
@@ -185,7 +172,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
       socket.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
         const session = this.sessions.get(userId);
-        if (!session) return;
+        if (session?.socket !== socket) return;
 
         console.log(`[WhatsApp] Connection update for ${userId}: ${connection || "no-connection-change"}, status=${session.status}, hasQR: ${!!qr}`);
 
@@ -210,54 +197,42 @@ export class WhatsAppManager implements IWhatsAppTransport {
         }
 
         if (connection === "close") {
+          clearTimeout(watchdog);
+          if (this.sessions.get(userId)?.socket !== socket) return;
           const boomErr = lastDisconnect?.error as Boom | undefined;
           const statusCode = boomErr?.output?.statusCode;
           const reason = boomErr?.message || "Unknown reason";
-          
-          console.log(`[WhatsApp] Connection closed for ${userId}. Status: ${statusCode}, Reason: ${reason}`);
-          
-          // Clean up current socket
-          try { socket.end(undefined); } catch (e) {}
           this.sessions.delete(userId);
-          
-          // Reconnect if not logged out
-          const isConflict = String(reason).toLowerCase().includes("conflict") || statusCode === 440;
-          const isLoggedOut = (statusCode === DisconnectReason.loggedOut || (statusCode === 401 && !isConflict && String(reason).toLowerCase().includes("logged out")));
-          const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515 || isConflict;
-          
-          if (isRestartRequired) {
+          try { socket.end(undefined); } catch (e) {}
+
+          const action = whatsappDisconnectAction(statusCode, reason);
+          if (action === "restart") {
             const restartAttempts = (this.restartRequiredAttempts.get(userId) || 0) + 1;
             this.restartRequiredAttempts.set(userId, restartAttempts);
-            
-            console.log(`[WhatsApp] Restart required for ${userId} (Attempt ${restartAttempts}). Reconnecting in 3s...`);
-            
-            if (restartAttempts > 5) {
-                console.log(`[WhatsApp] Too many 515 errors for ${userId}. Clearing session.`);
-                await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
-                clearSupabaseAuthCache(userId);
-                this.restartRequiredAttempts.delete(userId);
-                await this.log(userId, "error", "Sessão corrompida. Por favor, leia o QR Code novamente.");
-                onUpdate?.("disconnected");
-            } else {
-                setTimeout(() => this.createSession(userId, onUpdate), 3000);
+            if (restartAttempts <= this.maxReconnectAttempts) {
+              this.queueReconnect(userId, onUpdate, Math.min(3_000 * 2 ** (restartAttempts - 1), 30_000));
+              return;
             }
-          } else if (!isLoggedOut && attempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts.set(userId, attempts + 1);
-            const delayTime = Math.min(5000 * (attempts + 1), 30000);
-            console.log(`[WhatsApp] Reconnecting session for ${userId} in ${delayTime/1000}s...`);
-            setTimeout(() => this.createSession(userId, onUpdate), delayTime);
-          } else {
-            if (isLoggedOut) {
-              console.log(`[WhatsApp] Logged out for ${userId}. Clearing session.`);
-              await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
-              clearSupabaseAuthCache(userId);
-              await this.log(userId, "warn", "Sessão encerrada ou expirada.");
-            } else {
-              console.log(`[WhatsApp] Max attempts reached or fatal error for ${userId}.`);
-              await this.log(userId, "error", "Falha na conexão. Por favor, tente reconectar manualmente.");
+          } else if (action === "retry") {
+            const previousFailures = this.reconnectAttempts.get(userId) ?? 0;
+            if (previousFailures < this.maxReconnectAttempts) {
+              this.reconnectAttempts.set(userId, previousFailures + 1);
+              this.queueReconnect(userId, onUpdate, Math.min(5_000 * 2 ** previousFailures, 30_000));
+              return;
             }
-            onUpdate?.("disconnected");
           }
+
+          this.manualReconnect.add(userId);
+          if (action === "logged_out") {
+            await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
+            clearSupabaseAuthCache(userId);
+            await this.log(userId, "warn", "Sessão encerrada ou expirada. Volta a ligar o WhatsApp.");
+          } else {
+            const message = action === "replaced" ? "O WhatsApp informou que a sessão foi substituída. Verifica os dispositivos ligados."
+              : "As tentativas automáticas de ligação terminaram. Verifica a ligação ao WhatsApp.";
+            await this.log(userId, "warn", message, { code: statusCode ?? null });
+          }
+          onUpdate?.("disconnected");
         }
       });
 
@@ -334,96 +309,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
           .catch(() => console.warn("[WhatsApp] Group welcome could not be processed"));
       });
 
-      socket.ev.on("messages.upsert", async ({ messages, type }) => {
-        console.log(`[WhatsApp] messages.upsert triggered for ${userId}, type: ${type}, count: ${messages.length}`);
-        if (type !== "notify" && type !== "append") return;
-        for (const msg of messages) {
-          try {
-            const msgKeyId = msg.key?.id;
-            if (msgKeyId && this.isDuplicateMessage(`${userId}:${msgKeyId}`)) {
-              console.log(`[WhatsApp] Duplicate message ignored (in-memory dedup): ${msgKeyId}`);
-              continue;
-            }
-
-            let text = "";
-            if (msg.message?.conversation) text = msg.message.conversation;
-            else if (msg.message?.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;
-            else if (msg.message?.imageMessage?.caption) text = msg.message.imageMessage.caption;
-            else if (msg.message?.videoMessage?.caption) text = msg.message.videoMessage.caption;
-            else if (msg.message?.buttonsResponseMessage?.selectedButtonId) text = msg.message.buttonsResponseMessage.selectedButtonId;
-            else if (msg.message?.templateButtonReplyMessage?.selectedId) text = msg.message.templateButtonReplyMessage.selectedId;
-            else if (msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
-              try {
-                const params = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
-                text = params.id || params.selectedId || "";
-              } catch (e) {}
-            } else if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
-
-            const jid = msg.key.remoteJid;
-            if (!jid) continue;
-            const isMe = msg.key.fromMe;
-            if (isGroupJid(jid)) {
-              const content = extractMessageContent(msg.message);
-              const media = content?.imageMessage ?? content?.documentMessage;
-              const proofText = content?.conversation || content?.extendedTextMessage?.text ||
-                content?.imageMessage?.caption || content?.documentMessage?.caption || "";
-              if (!isMe && groupProofOrderNumber(proofText, Boolean(media))) {
-                if (type === "notify") {
-                  void processGroupPaymentProof({ userId, jid, key: msg.key, text: proofText, linked: socket.user,
-                    loadGroup: () => socket.groupMetadata(jid), attachment: media ? {
-                      filename: content?.documentMessage?.fileName ?? undefined,
-                      load: () => loadGroupProofMedia(msg, Number(media.fileLength ?? 0))
-                    } : undefined }).catch(() => console.warn("[GroupProofs] Could not process a group proof"));
-                }
-              } else {
-                await this.syncMessage(userId, msg);
-              }
-              if (type === "notify") await moderateGroupMessage(socket, userId, jid, msg.key, proofText || text);
-              continue;
-            }
-            
-            // Ignora status de outras pessoas para não poluir o log nem ativar a automação/IA
-            if (jid === "status@broadcast" && !isMe) {
-              continue;
-            }
-
-            const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
-            const saved = await this.syncMessage(userId, msg, altJid);
-
-            // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
-            const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
-            const isGroupOrBroadcast = jid.includes("@g.us") || 
-                                       jid.includes("@broadcast") || 
-                                       jid.includes("@newsletter") || 
-                                       jid.startsWith("120363");
-
-            if (type === "notify" && !isGroupOrBroadcast) {
-              if (!isMe && saved?.contact_id && Date.now() - Date.parse(saved.timestamp) < 5 * 60_000) {
-                void alertOperator(this, userId, saved.contact_id)
-                  .catch((error) => console.warn("[WhatsApp] Could not send contact alert:", error?.code || "delivery_failed"));
-              }
-            }
-            if (text && parseOperatorCommand(text)) {
-              if (isSelfMessage && msgKeyId && saved &&
-                  Date.now() - Date.parse(saved.timestamp) < 2 * 60_000) {
-                await handleOperatorCommand(this, userId, jid, true, text, msgKeyId);
-              }
-              continue;
-            }
-            if ((!isMe || (isSelfMessage && !text.startsWith("AgentX:"))) && text && !isGroupOrBroadcast) {
-              const isButton = Boolean(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage);
-              const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, isButton,
-                isMe ? null : saved?.contact_id);
-              if (!handledByAutomation) {
-                await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined, saved?.contact_id);
-              }
-            } else if (isGroupOrBroadcast) {
-              console.log(`[WhatsApp] Skipping group/broadcast message for ${userId} (jid: ${jid})`);
-            }
-          } catch (err) {
-            console.error("Error processing message:", err);
-          }
-        }
+      socket.ev.on("messages.upsert", (update) => {
+        if (this.sessions.get(userId)?.socket === socket) void this.handleMessageUpsert(userId, socket, update);
       });
 
       return socket;
@@ -431,6 +318,106 @@ export class WhatsAppManager implements IWhatsAppTransport {
       console.error(`[WhatsApp] Failed to create session for ${userId}:`, err);
       await this.log(userId, "error", `Erro ao iniciar sessão: ${err.message}`);
       onUpdate?.("disconnected");
+    }
+  }
+
+  async handleMessageUpsert(userId: string, socket: WASocket, { messages, type }: BaileysEventMap["messages.upsert"]) {
+    console.log(`[WhatsApp] messages.upsert triggered for ${userId}, type: ${type}, count: ${messages.length}`);
+    if (type !== "notify" && type !== "append") return;
+    for (const msg of messages) {
+      try {
+        const msgKeyId = msg.key?.id;
+        let text = "";
+        if (msg.message?.conversation) text = msg.message.conversation;
+        else if (msg.message?.extendedTextMessage?.text) text = msg.message.extendedTextMessage.text;
+        else if (msg.message?.imageMessage?.caption) text = msg.message.imageMessage.caption;
+        else if (msg.message?.videoMessage?.caption) text = msg.message.videoMessage.caption;
+        else if (msg.message?.buttonsResponseMessage?.selectedButtonId) text = msg.message.buttonsResponseMessage.selectedButtonId;
+        else if (msg.message?.templateButtonReplyMessage?.selectedId) text = msg.message.templateButtonReplyMessage.selectedId;
+        else if (msg.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+          try {
+            const params = JSON.parse(msg.message.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+            text = params.id || params.selectedId || "";
+          } catch (e) {}
+        } else if (msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+
+        const jid = msg.key.remoteJid;
+        if (!jid) continue;
+        const isMe = msg.key.fromMe;
+        if (isGroupJid(jid)) {
+          const content = extractMessageContent(msg.message);
+          const media = content?.imageMessage ?? content?.documentMessage;
+          const proofText = content?.conversation || content?.extendedTextMessage?.text ||
+            content?.imageMessage?.caption || content?.documentMessage?.caption || "";
+          if (!isMe && groupProofOrderNumber(proofText, Boolean(media))) {
+            if (type === "notify") {
+              void processGroupPaymentProof({ userId, jid, key: msg.key, text: proofText, linked: socket.user,
+                loadGroup: () => socket.groupMetadata(jid), attachment: media ? {
+                  filename: content?.documentMessage?.fileName ?? undefined,
+                  load: () => loadGroupProofMedia(msg, Number(media.fileLength ?? 0))
+                } : undefined }).catch(() => console.warn("[GroupProofs] Could not process a group proof"));
+            }
+          } else {
+            await this.syncMessage(userId, msg);
+          }
+          if (type === "notify") await moderateGroupMessage(socket, userId, jid, msg.key, proofText || text);
+          continue;
+        }
+
+        // Ignora status de outras pessoas para não poluir o log nem ativar a automação/IA
+        if (jid === "status@broadcast" && !isMe) {
+          continue;
+        }
+
+        const altJid = msg.key?.remoteJidAlt || (msg as any).remoteJidAlt || msg.key?.participantAlt || (msg as any).participantAlt;
+        const saved = await this.syncMessage(userId, msg, altJid, undefined, undefined, undefined, undefined, undefined,
+          { liveIngress: true });
+        if (type !== "notify" || saved?.agentx_live_ingress !== true || !msgKeyId) continue;
+
+        // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
+        const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
+        const isBroadcast = jid.includes("@broadcast") || jid.includes("@newsletter") || jid.startsWith("120363");
+
+        if (isBroadcast || (isMe && !isSelfMessage)) continue;
+        const age = Date.now() - Date.parse(saved.timestamp);
+        const alert = !isMe && saved.contact_id && age < 5 * 60_000;
+        const command = Boolean(text && parseOperatorCommand(text));
+        const runCommand = command && isSelfMessage && age < 2 * 60_000;
+        const runAssistant = !command && Boolean(text) && (!isMe || !text.startsWith("AgentX:"));
+        if (!alert && !runCommand && !runAssistant) continue;
+
+        // The independent, idempotent CRM write may be recovered by a replay even
+        // when delivery of an automated response is already reserved.
+        const campaignCode = runAssistant && !isMe && saved.contact_id && /@(?:s\.whatsapp\.net|c\.us|lid)$/.test(jid)
+          ? readCatalogCampaignCode(text) : null;
+        if (campaignCode) {
+          await captureCatalogCampaignInterest(userId, saved.contact_id, text, msgKeyId).catch((error) => {
+            console.warn("[CatalogCampaigns] Could not capture incoming interest", error?.code);
+          });
+          text = text.replace(new RegExp(`\\b${campaignCode}\\b`, "gi"), "").trim() || "Tenho interesse na campanha.";
+        }
+
+        if (!await claimWhatsAppAction(userId, msgKeyId)) continue;
+
+        if (alert) {
+          void alertOperator(this, userId, saved.contact_id)
+            .catch((error) => console.warn("[WhatsApp] Could not send contact alert:", error?.code || "delivery_failed"));
+        }
+        if (runCommand) {
+          await handleOperatorCommand(this, userId, jid, true, text, msgKeyId);
+          continue;
+        }
+        if (runAssistant) {
+          const isButton = Boolean(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage);
+          const handledByAutomation = await handleIncomingMessage(this, userId, jid, text, isButton,
+            isMe ? null : saved?.contact_id);
+          if (!handledByAutomation) {
+            await handleAgentMessage(this, userId, jid, text, isSelfMessage, msgKeyId ?? undefined, saved?.contact_id);
+          }
+        }
+      } catch (err) {
+        console.error("Error processing message:", err);
+      }
     }
   }
 
@@ -442,7 +429,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
     explicitMediaType?: string, 
     explicitMimetype?: string, 
     explicitFilename?: string,
-    verifiedContactId?: string
+    verifiedContactId?: string,
+    options: { liveIngress?: boolean; replyToMessageId?: string } = {}
   ): Promise<any> {
     try {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -504,9 +492,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
         }
       }
       
-      // Strict deduplication: check if message with (user_id, msg_id) already exists
       const msgId = msg.key?.id;
-      if (msgId) {
+      const findExisting = async () => {
         const { data: existingMsg } = await supabaseAdmin
           .from("messages")
           .select("*")
@@ -514,9 +501,19 @@ export class WhatsAppManager implements IWhatsAppTransport {
           .eq("msg_id", msgId)
           .maybeSingle();
 
-        if (existingMsg) {
-          return existingMsg;
-        }
+        // A WhatsApp echo can arrive before the direct sender saves the quoted reply.
+        if (!existingMsg || !options.replyToMessageId || !msg.key.fromMe || !contactId ||
+            existingMsg.contact_id !== contactId || existingMsg.reply_to_message_id) return existingMsg;
+        const { data: updated, error } = await supabaseAdmin.from("messages")
+          .update({ reply_to_message_id: options.replyToMessageId })
+          .eq("id", existingMsg.id).eq("user_id", userId).eq("contact_id", contactId)
+          .is("reply_to_message_id", null).select().maybeSingle();
+        if (error) console.warn("[WhatsApp] Could not record quoted reply", error.code);
+        return updated ?? existingMsg;
+      };
+      if (msgId) {
+        const existingMsg = await findExisting();
+        if (existingMsg) return existingMsg;
       }
 
       let mediaUrl = explicitMediaUrl || "";
@@ -605,13 +602,14 @@ export class WhatsAppManager implements IWhatsAppTransport {
           media_type: mediaType || null,
           media_mimetype: mediaMimetype || null,
           media_filename: mediaFilename || null,
+          ...(options.liveIngress && { agentx_live_ingress: true }),
+          ...(options.replyToMessageId && { reply_to_message_id: options.replyToMessageId }),
           is_read: msg.key.fromMe ? true : false
         }).select().maybeSingle();
 
         if (insertError) {
           if (insertError.code === "23505" && msgId) {
-            const { data: existing } = await supabaseAdmin.from("messages").select("*")
-              .eq("user_id", userId).eq("msg_id", msgId).maybeSingle();
+            const existing = await findExisting();
             if (existing) return existing;
           }
           console.error(`[WhatsApp] Error persisting message for user ${userId}, msg_id ${msgId}:`, insertError.message);
@@ -796,6 +794,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
   async ensureConnection(userId: string) {
     let session = this.sessions.get(userId);
     if (!session || session.status !== "connected") {
+      if (this.manualReconnect.has(userId) || this.reconnectTimers.has(userId)) return session;
       await this.createSession(userId);
       let attempts = 0;
       while (attempts < 20) {
@@ -808,7 +807,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
     return this.sessions.get(userId);
   }
 
-  async sendMessage(userId: string, jid: string, text: string, media?: string | Buffer, mediaType?: string, duration?: number, mimetype?: string, fileName?: string, verifiedContactId?: string) {
+  async sendMessage(userId: string, jid: string, text: string, media?: string | Buffer, mediaType?: string, duration?: number, mimetype?: string, fileName?: string, verifiedContactId?: string, quote?: StoredWhatsAppQuote) {
     const session = await this.ensureConnection(userId);
     if (!session || session.status !== "connected") {
       throw new Error("WhatsApp session not connected.");
@@ -818,6 +817,7 @@ export class WhatsAppManager implements IWhatsAppTransport {
     const mediaUrl = typeof media === "string" ? media : undefined;
     let result;
     const options: any = {};
+    if (quote) options.quoted = quote.message;
 
     if (isStatus) {
       options.backgroundColor = options.backgroundColor || "#075E54";
@@ -856,13 +856,14 @@ export class WhatsAppManager implements IWhatsAppTransport {
           document: typeof media === "string" ? { url: media } : media,
           mimetype: mimetype || "application/pdf", fileName: fileName || "documento", caption: text
         }, options);
-      } else if (!mediaUrl) {
-        throw new Error("Conteúdo de multimédia inválido.");
       } else if (mediaType === 'image') {
         result = await session.socket.sendMessage(jid, { 
-          image: { url: mediaUrl }, 
+          image: typeof media === "string" ? { url: media } : media,
+          mimetype,
           caption: text,
         }, options);
+      } else if (!mediaUrl) {
+        throw new Error("Conteúdo de multimédia inválido.");
       } else if (mediaType === 'video') {
         result = await session.socket.sendMessage(jid, { 
           video: { url: mediaUrl }, 
@@ -902,7 +903,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
         mediaType,
         mediaType === "audio" && ownedVoiceFilename(mediaUrl ?? "") ? WHATSAPP_VOICE_MIME : mimetype,
         fileName,
-        verifiedContactId
+        verifiedContactId,
+        { replyToMessageId: quote?.messageId }
       );
     }
 
@@ -1078,12 +1080,16 @@ export class WhatsAppManager implements IWhatsAppTransport {
   }
 
   async deleteSession(userId: string) {
+    this.cancelReconnect(userId);
+    this.manualReconnect.delete(userId);
+    this.reconnectAttempts.delete(userId);
+    this.restartRequiredAttempts.delete(userId);
     const session = this.sessions.get(userId);
     if (session) {
+      this.sessions.delete(userId);
       try {
         session.socket.end(undefined);
       } catch (e) {}
-      this.sessions.delete(userId);
     }
     await supabaseAdmin.from("whatsapp_sessions").delete().eq("user_id", userId);
     clearSupabaseAuthCache(userId);
@@ -1096,7 +1102,10 @@ export class WhatsAppManager implements IWhatsAppTransport {
 
   closeAllSessions() {
     console.log(`[WhatsApp] Gracefully closing all active sessions (${this.sessions.size} sessions)...`);
-    for (const [userId, session] of this.sessions.entries()) {
+    for (const userId of this.reconnectTimers.keys()) this.cancelReconnect(userId);
+    const active = [...this.sessions];
+    this.sessions.clear();
+    for (const [userId, session] of active) {
       try {
         if (session.socket) {
           session.socket.end(undefined);
@@ -1105,7 +1114,6 @@ export class WhatsAppManager implements IWhatsAppTransport {
         console.warn(`[WhatsApp] Error closing session for user ${userId}:`, e);
       }
     }
-    this.sessions.clear();
   }
 }
 
