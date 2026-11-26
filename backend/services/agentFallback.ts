@@ -1,9 +1,11 @@
 import type { SellerMethod } from "../../shared/seller.ts";
+import { discoverCatalog } from "./catalogDiscovery.ts";
 
 type CatalogItem = {
   id?: string | null;
   name?: string | null;
   description?: string | null;
+  category?: string | null;
   price?: number | string | null;
   currency?: string | null;
   stock?: number | string | null;
@@ -12,12 +14,13 @@ type CatalogItem = {
 const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 const words = (value: string) => fold(value).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
-const productQuestion = /\b(?:precos?|valores?|cust[ao]|custam|quanto (?:e|fica|sai)|stock|estoque|disponiveis?|disponivel|disponibilidade|catalogo|produtos?|artigos?|detalhes|descricao|sobre o|sobre a)\b/;
+const productQuestion = /\b(?:precos?|valores?|cust[ao]|custam|quanto (?:e|fica|sai)|stock|estoque|disponiveis?|disponivel|disponibilidade|catalogo|produtos?|artigos?|detalhes|descricao|vantagens?|beneficios?|utilidade|como funciona|serve para|sobre o|sobre a)\b/;
 const catalogQuestion = /\b(?:catalogo|(?:quais|que) (?:sao )?(?:os )?(?:produtos|artigos)|o ?que (?:(?:voces|voce|a loja) )?(?:tem|tens|vendem|vende|ha)|(?:ver|mostra|mostre|lista|listar) (?:os )?(?:produtos|artigos))\b/;
 const paymentQuestion = /\b(?:pagar|pagamento|pagamentos|mpesa|m pesa|emola|e mola|transferencia bancaria|conta bancaria|nib|iban)\b/;
 const afterPayment = /\b(?:ja paguei|paguei|transferi|comprovativos?|recibos?|reembolsos?|devolucoes?)\b/;
 const purchase = /\b(?:(?:quero|queria|gostaria de|pretendo|vou) (?:comprar|encomendar|levar)|(?:confirmo|pode registar|pode registrar) (?:a compra|o pedido)|fico com)\b/;
 const uncertainPurchase = /\b(?:nao|se|talvez|so queria saber|como|quanto|qual|quais|tem|tens|aceitam|aceita|voces|posso|podem|precos?|valores?)\b/;
+const exploratoryPurchase = /\b(?:comprar|encomendar|levar)(?:$| (?:algo|alguma coisa|uma coisa|qualquer coisa|um presente|uma lembranca|um produto|algum produto|para)\b)/;
 const humanRequest = /(?:(?:^|\b(?:quero|queria|gostaria de|preciso de|posso|podemos|por favor) )(?:falar|conversar) com|\b(?:transfere|transfiram|encaminha|encaminhe|passa|passe)(?: me)? (?:para|a)) (?:um |uma |a |o )?(?:equipa|equipe|pessoa|atendente|humano|responsavel|administrador|gerente|atendimento humano)\b/;
 const stopWords = new Set(["com", "dos", "das", "para", "por", "que", "uma", "uns", "tem", "tens", "mais"]);
 
@@ -29,7 +32,8 @@ export function requestsHumanHandoff(message: string) {
 
 export function isExplicitPurchase(message: string) {
   const text = words(message);
-  return !message.includes("?") && purchase.test(text) && !uncertainPurchase.test(text) && !afterPayment.test(text);
+  return !message.includes("?") && purchase.test(text) && !uncertainPurchase.test(text) &&
+    !exploratoryPurchase.test(text) && !afterPayment.test(text);
 }
 
 export function requestedCatalogQuantity(message: string): number | null {
@@ -80,7 +84,7 @@ export function suggestsHumanHandoff(reply: string) {
 }
 
 export type CatalogOffer = { productId: string; unitPrice: number; currency: string };
-type CatalogReply = { text: string; offer?: CatalogOffer };
+type CatalogReply = { text: string; offer?: CatalogOffer; askProvider?: true };
 
 export function readCatalogReply(message: string, catalog: CatalogItem[] | null, context: string[] = []): CatalogReply | null {
   const text = words(message);
@@ -89,6 +93,8 @@ export function readCatalogReply(message: string, catalog: CatalogItem[] | null,
     return /^(?:ola|oi|bom dia|boa tarde|boa noite|boas|hello)(?: tudo bem)?$/.test(text)
       ? { text: "Olá! Diz-me qual é o produto que procuras ou pede para ver o catálogo." } : null;
   }
+  const discovery = discoverCatalog(message, catalog);
+  if (discovery) return discovery;
 
   const products = catalog.filter((item) => typeof item.name === "string" && words(item.name) &&
     item.price != null && String(item.price).trim() && Number.isFinite(Number(item.price)) && Number(item.price) >= 0 &&

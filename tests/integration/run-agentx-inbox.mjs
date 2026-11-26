@@ -63,6 +63,7 @@ function testAudio() {
 
 let aiEndpointAvailable = true;
 let aiRequests = 0;
+let aiRecommendationProductId;
 
 const supabase = createServer(async (req, res) => {
   if (req.headers.origin) res.setHeader("access-control-allow-origin", req.headers.origin);
@@ -91,7 +92,10 @@ const supabase = createServer(async (req, res) => {
     const buying = message.includes("comprar");
     const paymentMethod = /e-Mola/i.test(message) ? "emola" : /transferência bancária/i.test(message) ? "bank_transfer" : undefined;
     let toolAnswer = { tool: "getProductsCatalog", args: { search: "Livro do piloto" } };
-    if (message.includes("Comprovativo")) {
+    if (message === "A rotina do meu escritório anda caótica.") {
+      toolAnswer = { tool: "getProductsCatalog", reply: "Garantia vitalícia e oferta da Caixa Premium.",
+        args: { recommendationIds: [aiRecommendationProductId, "00000000-0000-4000-8000-000000000099"] } };
+    } else if (message.includes("Comprovativo")) {
       toolAnswer = { tool: "submitPaymentProof", reply: "O pagamento já foi confirmado.", args: {} };
     } else if (message.includes("interesse")) {
       toolAnswer = { tool: "qualifyLEAD", args: { phone: "258870000001", interestLevel: "alto", tag: "Interessado no livro",
@@ -1322,11 +1326,13 @@ try {
   assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${unacknowledgedBuyer}`), []);
 
   const secondProduct = await fetch(new URL("/products", rest), {
-    method: "POST", headers: storageAuth, body: JSON.stringify({
-      user_id: owner, name: "Caderno A5", price: 90, currency: "MT", stock: 4, type: "physical", is_active: true
+    method: "POST", headers: { ...storageAuth, prefer: "return=representation" }, body: JSON.stringify({
+      user_id: owner, name: "Caderno A5", description: "Pautado para organizar tarefas e anotar ideias.",
+      category: "Papelaria", price: 90, currency: "MT", stock: 4, type: "physical", is_active: true
     })
   });
   assert.equal(secondProduct.status, 201);
+  const [notebook] = await secondProduct.json();
 
   const ambiguousBuyer = "258840000014";
   const ambiguousJid = `${ambiguousBuyer}@s.whatsapp.net`;
@@ -1390,6 +1396,65 @@ try {
   assert.equal((await read("products", `?id=eq.${product.id}`))[0].stock, 2);
   assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
 
+  const advisedBuyer = "258840000017";
+  const advisedJid = `${advisedBuyer}@s.whatsapp.net`;
+  const aiBeforeAdvice = aiRequests;
+  const paymentDetails = /AGX-|258840000005|258870000006|000111222333|258850000004/;
+  async function askForAdvice(text, messageId) {
+    await app.simulate("ingress", { jid: advisedJid, text, messageId });
+    const response = app.outbound.at(-1);
+    assert.equal(response.jid, advisedJid);
+    assert.doesNotMatch(response.content.text, paymentDetails);
+    return response.content.text;
+  }
+
+  const recommendation = await askForAdvice("O que têm para me recomendar?", "outage-advisor-recommendation");
+  assert.match(recommendation, /Caderno A5/i);
+  assert.match(recommendation, /90\s+MT/);
+  assert.match(recommendation, /organizar tarefas e anotar ideias/i);
+  assert.match(recommendation, /orçamento|quanto pretendes gastar|para que|procuras/i);
+  const budgetAdvice = await askForAdvice("Têm algo por até 100 MT?", "outage-advisor-budget");
+  assert.match(budgetAdvice, /Caderno A5/i);
+  assert.match(budgetAdvice, /90\s+MT/);
+  assert.match(budgetAdvice, /organizar tarefas e anotar ideias/i);
+  assert.doesNotMatch(budgetAdvice, /Livro do piloto|275\s+MT/);
+
+  const chosenAdvice = await askForAdvice("Que vantagem tem o Caderno A5 para organizar tarefas?", "outage-advisor-selected");
+  assert.match(chosenAdvice, /Caderno A5/i);
+  assert.match(chosenAdvice, /90\s+MT/);
+  assert.match(chosenAdvice, /organizar tarefas e anotar ideias/i);
+  assert.match(chosenAdvice, /peço 1/i);
+  assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${advisedBuyer}`), []);
+
+  await app.simulate("ingress", { jid: advisedJid, text: "peço 1", messageId: "outage-advisor-purchase" });
+  const [advisedOrder] = await read("orders", "?source_message_id=eq.outage-advisor-purchase");
+  assert.equal(advisedOrder.status, "awaiting_payment");
+  assert.equal(advisedOrder.total_amount, 90);
+  const [advisedItem] = await read("order_items", `?order_id=eq.${advisedOrder.id}`);
+  assert.equal(advisedItem.product_id, notebook.id);
+  assert.equal(advisedItem.quantity, 1);
+  assert.equal(app.outbound.at(-1).jid, advisedJid);
+  assert.ok(app.outbound.at(-1).content.text.includes(advisedOrder.order_number));
+  assert.match(app.outbound.at(-1).content.text, /M-Pesa.*258840000005/i);
+  assert.equal(aiRequests, aiBeforeAdvice);
+  assert.equal((await read("products", `?id=eq.${notebook.id}`))[0].stock, 4);
+  assert.equal(sentDocuments(app.outbound).length, documentsBeforeOfflinePurchase);
+
+  aiEndpointAvailable = true;
+  aiRecommendationProductId = notebook.id;
+  const semanticBuyer = "258840000018";
+  const semanticJid = `${semanticBuyer}@s.whatsapp.net`;
+  const aiBeforeSemantic = aiRequests;
+  await app.simulate("ingress", { jid: semanticJid, text: "A rotina do meu escritório anda caótica.", messageId: "advisor-semantic" });
+  assert.equal(aiRequests, aiBeforeSemantic + 1);
+  const semanticReply = app.outbound.at(-1);
+  assert.equal(semanticReply.jid, semanticJid);
+  assert.match(semanticReply.content.text, /Caderno A5.*90\s+MT/i);
+  assert.match(semanticReply.content.text, /organizar tarefas e anotar ideias/i);
+  assert.doesNotMatch(semanticReply.content.text, /vitalícia|Caixa Premium|Livro do piloto|000000000099/i);
+  assert.doesNotMatch(semanticReply.content.text, paymentDetails);
+  assert.deepEqual(await read("orders", `?user_id=eq.${owner}&customer_phone=eq.${semanticBuyer}`), []);
+
   console.log("Audio upload, Opus playback, account isolation and PTT payload passed" + (page ? " (Chromium microphone and acknowledgement verified)" : ""));
   console.log(`AgentX contacts and inbox passed using PostgreSQL, PostgREST, simulated WhatsApp and a real server restart${page ? " (Chromium UI verified)" : ""}`);
   console.log(`Seller flow passed on the ${fresh ? "freshly installed" : "repaired legacy"} schema: multiple payment methods, recipient review, approval without retyping a reference, duplicate settlement blocked and PDF bytes sent as a WhatsApp document`);
@@ -1398,6 +1463,8 @@ try {
   console.log("Payment instructions reused the matching buyer's saved order destination after the merchant changed settings");
   console.log("Explicit offline purchase created one unpaid order with stock and delivery unchanged");
   console.log("Conversational offline purchase accepted one quote and rejected a vague selection, repeat request and changed price without creating more orders");
+  console.log("Catalogue advice matched budget and recorded product benefits, with an order only after the buyer selected and accepted the product");
+  console.log("AI product recommendations used owned catalogue details and discarded fabricated claims and product IDs");
   console.log("Outgoing M-Pesa and e-Mola SMS recognized without AI: recipient and reference persisted, manual approval required before delivery");
 } finally {
   await browser?.close();

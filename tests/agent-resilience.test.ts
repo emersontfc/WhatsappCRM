@@ -150,6 +150,10 @@ describe("WhatsApp without a model", () => {
     expect(catalogOrderFromMessage(order, products)).toEqual({ productName: "book", quantity: 2 });
     expect(catalogOrderFromMessage("Quero comprar 2 livros", products)).toBeNull();
     expect(isExplicitPurchase("Não quero comprar o livro")).toBe(false);
+    expect(isExplicitPurchase("Quero comprar algo para oferecer")).toBe(false);
+    expect(isExplicitPurchase("Quero comprar um presente")).toBe(false);
+    expect(isExplicitPurchase("Quero comprar para a minha irmã")).toBe(false);
+    expect(isExplicitPurchase("Quero comprar")).toBe(false);
   });
 
   it("recognises an explicit request for a person without assuming handoff for catalogue questions", () => {

@@ -18,7 +18,7 @@ export async function recordCatalogInterest(ctx: ToolContext) {
 
 export const getProductsCatalogTool: ToolDefinition = {
   name: "getProductsCatalog",
-  description: "Consulta o catálogo de produtos e serviços disponíveis com preços reais, estoque e categorias.",
+  description: "Consulta o catálogo real. Para recomendar produtos da lista atual, selecione os IDs adequados à necessidade do cliente.",
   category: "commerce",
   allowedRoles: ["admin", "lead"],
   riskLevel: "low",
@@ -30,16 +30,25 @@ export const getProductsCatalogTool: ToolDefinition = {
       category: {
         type: "string",
         description: "Categoria opcional para filtrar produtos (ex: 'Pacotes', 'Cursos', 'Serviços')"
+      },
+      recommendationIds: {
+        type: "array",
+        description: "IDs de até cinco produtos sugeridos, por ordem de relevância. Use apenas IDs do catálogo atual. Omita ao fazer uma pesquisa geral por nome ou categoria."
       }
     }
   },
-  execute: async (args: { category?: string; search?: string }, ctx: ToolContext): Promise<ToolResult> => {
+  execute: async (args: { category?: string; search?: string; recommendationIds?: string[] }, ctx: ToolContext): Promise<ToolResult> => {
     try {
       const category = typeof args.category === "string" ? normalizeCatalogText(args.category) : "";
       const search = typeof args.search === "string" ? normalizeCatalogText(args.search) : "";
-      const products = (await commerceService.listAgentProducts(ctx.userId))
+      const matches = (await commerceService.listAgentProducts(ctx.userId))
         .filter((product) => normalizeCatalogText(product.category || "").includes(category) &&
           normalizeCatalogText(product.name).includes(search));
+      const recommendationIds = Array.isArray(args.recommendationIds)
+        ? [...new Set(args.recommendationIds.filter((id) => typeof id === "string").slice(0, 5))] : null;
+      const products = recommendationIds && ctx.role === "lead"
+        ? recommendationIds.flatMap((id) => matches.filter((product) => product.id === id && product.stock > 0))
+        : matches;
 
       await recordCatalogInterest(ctx);
       if (products.length === 0) {
@@ -50,6 +59,8 @@ export const getProductsCatalogTool: ToolDefinition = {
         id: p.id,
         name: p.name,
         price: `${p.price} ${p.currency || "MT"}`,
+        unitPrice: p.price,
+        currency: p.currency || "MT",
         category: p.category,
         description: String(p.description ?? "").slice(0, 180),
         stock: p.stock

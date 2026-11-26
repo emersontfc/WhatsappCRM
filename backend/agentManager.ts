@@ -11,6 +11,7 @@ import { agentFallbackReply, asksAboutAcceptedMethods, catalogOrderFromMessage, 
   isExplicitPurchase, isPaymentQuestion, readCatalogReply, requestedCatalogQuantity, requestedPaymentMethods,
   requestsHumanHandoff, suggestsHumanHandoff, type CatalogOffer } from "./services/agentFallback.ts";
 import { readAgentPaymentMethods, readAgentPaymentReply } from "./services/agentPaymentReply.ts";
+import { presentCatalogSuggestions } from "./services/catalogDiscovery.ts";
 import { processHumanHandoffs, requestHumanHandoff } from "./services/humanHandoff.ts";
 import { recordCatalogInterest } from "./tools/commerce/getProductsCatalog.ts";
 
@@ -292,7 +293,9 @@ Use 'createMarketingCampaign' quando solicitado para preparar disparos direciona
 Você possui autonomia comercial: pode consultar o catálogo com 'getProductsCatalog', criar pedidos com 'createOrder', receber comprovativos com 'submitPaymentProof', consultar status com 'getOrderStatus' e qualificar leads com 'qualifyLead'.`;
     }
 
-    roleHeader = `VOCÊ É O AGENTX AUTÓNOMO 2.0 (by Kazix).${specGuide}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Continue a conversar quando houver dúvidas sobre o catálogo. Crie o pedido apenas se a mensagem atual expressar aceitação da compra. As instruções de pagamento devem vir do sistema. Nunca escreva contas, números de pagamento ou promessas de encaminhamento na sua resposta. Se não conseguir esclarecer algo, faça uma pergunta curta ou diga que o cliente pode escrever "quero falar com a equipa".`;
+    const selling = ["vendas", "multifuncional"].includes(specialization) ? `
+Ajude o cliente a escolher. Entenda pedidos informais como "queria algo para oferecer" e "o que me aconselhas?". Se houver opções que respondam à necessidade, recomende até cinco com getProductsCatalog e os respetivos IDs em recommendationIds, começando pela mais relevante. Use a descrição, a categoria, o preço e o stock como evidência. Se faltar o objetivo ou o orçamento necessário para decidir, faça uma pergunta curta. Use um tom natural de WhatsApp e uma ação clara para avançar. Não invente características, descontos, urgência, garantias ou disponibilidade.` : "";
+    roleHeader = `VOCÊ É O AGENTX AUTÓNOMO 2.0 (by Kazix).${specGuide}${selling}\nUse getProductsCatalog em consultas de produto para registar o interesse no CRM. Continue a conversar quando houver dúvidas sobre o catálogo. Crie o pedido apenas se a mensagem atual expressar aceitação da compra. As instruções de pagamento devem vir do sistema. Nunca escreva contas, números de pagamento ou promessas de encaminhamento na sua resposta. Se não conseguir esclarecer algo, faça uma pergunta curta ou diga que o cliente pode escrever "quero falar com a equipa".`;
     baseInstruction = agent.instructions || "Você é um assistente útil, ágil e inteligente.";
   }
 
@@ -501,6 +504,13 @@ async function queueHumanReply(whatsappManager: any, userId: string, contactId?:
 
 const continueConversation = 'Diz-me o que procuras para eu ajudar. Se preferires atendimento humano, escreve "quero falar com a equipa".';
 const confirmPurchase = 'Para registar o pedido, indica o nome do produto, a quantidade e o meio de pagamento. Por exemplo: "Quero comprar 1 Livro por M-Pesa".';
+
+function formatSalesCatalogue(result: ToolResult): string {
+  if (!result.success || !Array.isArray(result.data)) return result.message;
+  return presentCatalogSuggestions(result.data.map((product) => ({
+    ...product, price: product.unitPrice
+  })));
+}
 
 export async function handleAgentMessage(whatsappManager: any, userId: string, jid: string, text: string, isSelfMessage: boolean = false, sourceMessageId?: string, contactId?: string) {
   try {
@@ -727,6 +737,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
 
     let catalogContext = "";
     let localReply: string | null = null;
+    let catalogueFallback: string | undefined;
     let offeredProduct: CatalogOffer | undefined;
     let liveProducts: Awaited<ReturnType<typeof commerceService.listAgentProducts>> | null = null;
     const explicitPurchase = role === "lead" && isExplicitPurchase(text);
@@ -758,8 +769,12 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
       }
       if (isCatalogAgent) {
         const catalogReply = readCatalogReply(text, liveProducts, context);
-        localReply = catalogReply?.text ?? null;
-        offeredProduct = catalogReply?.offer;
+        if (catalogReply?.askProvider && !paymentQuestion) {
+          catalogueFallback = catalogReply.text;
+        } else {
+          localReply = catalogReply?.text ?? null;
+          offeredProduct = catalogReply?.offer;
+        }
         if (localReply && liveProducts) {
           await recordCatalogInterest(toolContext);
         }
@@ -795,7 +810,7 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
     const providerReply = localReply ? null : await requestAgentReply(agent, text, context, role, catalogContext);
     await whatsappManager.sendPresenceUpdate(userId, jid, "paused");
     const responseText = localReply ?? providerReply ?? (role === "lead"
-      ? explicitPurchase ? confirmPurchase : agentFallbackReply(text, null) ?? continueConversation
+      ? explicitPurchase ? confirmPurchase : catalogueFallback ?? agentFallbackReply(text, null) ?? continueConversation
       : "O provedor de IA está indisponível. Usa a opção Testar agente em Agente IA para verificar a ligação.");
 
     if (responseText) {
@@ -826,7 +841,9 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
             const isSalesWrite = ["createorder", "submitpaymentproof", "qualifylead", "create_lead"].includes(String(parsed.tool).trim().toLowerCase());
             const formatted = role === "lead" && isSalesWrite
               ? toolResult.message : formatToolOutputForWhatsApp(parsed.tool, toolResult);
-            if ((role === "lead" && isSalesWrite) ||
+            if (role === "lead" && isCatalogAgent && tool === "getproductscatalog") {
+              finalReply = formatSalesCatalogue(toolResult);
+            } else if ((role === "lead" && isSalesWrite) ||
                 ["getProductsCatalog", "createOrder", "submitPaymentProof", "get_booking_link"].includes(parsed.tool) || !finalReply.trim()) {
               finalReply = formatted;
             } else {
@@ -836,7 +853,8 @@ export async function handleAgentMessage(whatsappManager: any, userId: string, j
         } else if (parsed.action === "trigger_price_flow") {
           const result = await executeToolByName("getProductsCatalog", {}, toolContext);
           actionResult = result;
-          finalReply = formatToolOutputForWhatsApp("getProductsCatalog", result);
+          finalReply = role === "lead" && isCatalogAgent
+            ? formatSalesCatalogue(result) : formatToolOutputForWhatsApp("getProductsCatalog", result);
         } else if (parsed.action) {
           // 2. Legacy action execution fallback
           console.log(`[AI Engine] AI suggested legacy action: ${parsed.action} with intent: ${parsed.intent}`);
