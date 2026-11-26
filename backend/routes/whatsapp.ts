@@ -617,7 +617,7 @@ router.get("/groups/:jid/events", async (req: AuthRequest, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   if (!isGroupJid(jid)) return res.status(400).json({ error: "Grupo inválido." });
   try {
-    const { data, error } = await supabaseAdmin.from("agentx_group_events").select("id,rule,outcome,created_at")
+    const { data, error } = await supabaseAdmin.from("agentx_group_events").select("id,rule,action,outcome,review_status,created_at")
       .eq("user_id", userId).eq("group_jid", jid).order("id", { ascending: false }).limit(20);
     if (error) throw error;
     return res.json({ success: true, data });

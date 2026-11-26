@@ -1,6 +1,7 @@
-import type { GroupMetadata, WAMessageKey, WASocket } from "@whiskeysockets/baileys";
+import type { GroupMetadata, WAMessageKey, WASocket, proto } from "@whiskeysockets/baileys";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
-import { hasDisallowedGroupLink, normalizeGroupPolicyText, type GroupPolicy } from "./groupPolicy.ts";
+import { hasDisallowedGroupLink, normalizeGroupPolicyText, type GroupPolicy, type ContentRule,
+  type ModerationAction, type ModerationPolicy, type ModerationRule } from "./groupPolicy.ts";
 
 export type GroupRules = {
   active: boolean;
@@ -8,10 +9,32 @@ export type GroupRules = {
   anti_spam: boolean;
   anti_flood: boolean;
   welcome_msg: string;
-} & Partial<GroupPolicy>;
-type Violation = "link" | "word" | "spam" | "flood";
-type Outcome = "accepted" | "no_permission" | "unverified_sender" | "failed";
-const violationReason: Record<Violation, string> = { link: "link que não consta das exceções", word: "palavra bloqueada", spam: "mensagens repetidas", flood: "mensagens muito frequentes" };
+} & Partial<GroupPolicy & ModerationPolicy>;
+type Outcome = "accepted" | "no_permission" | "unverified_sender" | "failed" | "uncertain";
+const violationReason: Record<ModerationRule, string> = {
+  link: "links que não estão na lista permitida", word: "certas palavras ou expressões", spam: "mensagens repetidas",
+  flood: "várias mensagens seguidas em pouco tempo", image: "imagens", video: "vídeos", audio: "ficheiros de áudio",
+  voice: "notas de voz", document: "documentos", sticker: "figurinhas", gif: "GIFs", poll: "sondagens",
+  contact: "contactos", location: "localizações", reaction: "reações", invite: "convites de outros grupos", event: "eventos",
+};
+
+export function groupContentRule(content?: proto.IMessage | null): ContentRule | undefined {
+  if (!content) return undefined;
+  if (content.imageMessage) return "image";
+  if (content.videoMessage?.gifPlayback) return "gif";
+  if (content.videoMessage || content.ptvMessage) return "video";
+  if (content.audioMessage) return content.audioMessage.ptt ? "voice" : "audio";
+  if (content.documentMessage || content.documentWithCaptionMessage) return "document";
+  if (content.stickerMessage || content.stickerPackMessage) return "sticker";
+  if (content.pollCreationMessage || content.pollCreationMessageV2 || content.pollCreationMessageV3 ||
+      content.pollCreationMessageV4 || content.pollCreationMessageV5) return "poll";
+  if (content.contactMessage || content.contactsArrayMessage) return "contact";
+  if (content.locationMessage || content.liveLocationMessage) return "location";
+  if (content.reactionMessage || content.encReactionMessage) return "reaction";
+  if (content.groupInviteMessage) return "invite";
+  if (content.eventMessage) return "event";
+  return undefined;
+}
 
 export const isGroupJid = (jid: string) => /^\d+(?:-\d+)?@g\.us$/.test(jid);
 
@@ -48,8 +71,7 @@ async function rulesFor(userId: string, jid: string): Promise<GroupRules | null>
   const fields = "active,anti_link,anti_spam,anti_flood,welcome_msg";
   const read = (columns: string) => supabaseAdmin.from("group_rules").select(columns)
     .eq("user_id", userId).eq("group_jid", jid).abortSignal(AbortSignal.timeout(8_000)).maybeSingle<GroupRules>();
-  let result = await read(fields + ",allowed_link_hosts,blocked_words,warning_limit");
-  if (["42703", "PGRST204"].includes(result.error?.code ?? "")) result = await read(fields);
+  const result = await read(fields + ",allowed_link_hosts,blocked_words,warning_limit,moderation_actions");
   if (result.error) throw result.error;
   const data = result.data;
   if (ruleCache.size >= 1000) ruleCache.delete(ruleCache.keys().next().value!);
@@ -57,17 +79,31 @@ async function rulesFor(userId: string, jid: string): Promise<GroupRules | null>
   return data;
 }
 
-export function groupViolation(rules: GroupRules, history: Array<{ at: number; text: string }>, now: number, messageText?: string): Violation | null {
+function moderationAction(rules: GroupRules, rule: ModerationRule): ModerationAction {
+  return rules.moderation_actions?.[rule] ?? (rule === "link" || rule === "word" || rule === "spam" || rule === "flood"
+    ? (rules.warning_limit ?? 0) > 0 ? "warn" : "delete" : "allow");
+}
+
+export function groupViolation(rules: GroupRules, history: Array<{ at: number; text: string }>, now: number,
+  messageText?: string, contentRule?: ContentRule): ModerationRule | null {
   if (!rules.active || !history.length) return null;
   const latest = history.at(-1)!.text;
   const content = messageText ?? latest;
-  if (rules.anti_link && hasDisallowedGroupLink(content, rules.allowed_link_hosts ?? [])) return "link";
-  if (rules.blocked_words?.length) {
+  const found: ModerationRule[] = [];
+  if (rules.anti_link && moderationAction(rules, "link") !== "allow" && hasDisallowedGroupLink(content, rules.allowed_link_hosts ?? [])) found.push("link");
+  if (rules.blocked_words?.length && moderationAction(rules, "word") !== "allow") {
     const words = ` ${normalizeGroupPolicyText(content)} `;
-    if (rules.blocked_words.some((word) => words.includes(` ${word} `))) return "word";
+    if (rules.blocked_words.some((word) => words.includes(` ${word} `))) found.push("word");
   }
-  if (rules.anti_spam && latest && history.filter((entry) => entry.at >= now - 30000 && entry.text === latest).length >= 3) return "spam";
-  if (rules.anti_flood && history.filter((entry) => entry.at >= now - 10000).length > 5) return "flood";
+  if (rules.anti_spam && moderationAction(rules, "spam") !== "allow" && latest &&
+      history.filter((entry) => entry.at >= now - 30000 && entry.text === latest).length >= 3) found.push("spam");
+  if (rules.anti_flood && moderationAction(rules, "flood") !== "allow" &&
+      history.filter((entry) => entry.at >= now - 10000).length > 5) found.push("flood");
+  if (contentRule && moderationAction(rules, contentRule) !== "allow") found.push(contentRule);
+  for (const action of ["delete", "review", "warn"] as const) {
+    const match = found.find((rule) => moderationAction(rules, rule) === action);
+    if (match) return match;
+  }
   return null;
 }
 
@@ -98,94 +134,105 @@ export function canPostInGroup(group: GroupMetadata, identity?: { id?: string; l
   return Boolean(linked && (!group.announce || isGroupAdmin(linked)));
 }
 
-async function logEvent(userId: string, jid: string, rule: Violation | "welcome", outcome: Outcome) {
-  const { error } = await supabaseAdmin.from("agentx_group_events").insert({ user_id: userId, group_jid: jid, rule, outcome });
+async function logEvent(userId: string, jid: string, outcome: Outcome) {
+  const { error } = await supabaseAdmin.from("agentx_group_events").insert({ user_id: userId, group_jid: jid, rule: "welcome", outcome });
   if (error) throw error;
 }
 
-async function deleteModeratedMessage(socket: WASocket, userId: string, jid: string, key: WAMessageKey, rule: Violation) {
-  const { data: claim, error } = await supabaseAdmin.from("agentx_group_events").upsert({
-    user_id: userId, group_jid: jid, source_message_id: key.id, rule, outcome: "pending",
-  }, { onConflict: "user_id,group_jid,source_message_id", ignoreDuplicates: true })
-    .select("id").abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
-  if (error) throw error;
-  if (!claim) return;
+type ModerationClaim = { id: number; action: "warn" | "delete" | "review"; warningId?: string;
+  warningNumber?: number; warningLimit?: number; template?: string | null };
 
-  let outcome: Outcome = "failed";
-  try {
-    const response = await socket.sendMessage(jid, { delete: key });
-    if (response?.key?.id) outcome = "accepted";
-  } catch { /* The remote action may already have happened. Never send it again for this claim. */ }
-  const { error: saveError } = await supabaseAdmin.from("agentx_group_events").update({ outcome })
-    .eq("id", claim.id).eq("user_id", userId).eq("group_jid", jid).eq("outcome", "pending")
-    .abortSignal(AbortSignal.timeout(8_000));
-  if (saveError) throw saveError;
+export function groupWarningText(rule: ModerationRule, member: string, subject: string, claim: ModerationClaim) {
+  const mention = "@" + member.split("@")[0];
+  const base = claim.template || "Olá {membro}! Para manter a conversa organizada, pedimos que evites {motivo} neste grupo. Obrigado pela compreensão.";
+  const warning = base.replace(/\{(membro|motivo|grupo)\}/g, (_, name: "membro" | "motivo" | "grupo") => ({
+    membro: mention, motivo: violationReason[rule], grupo: subject.replace(/\s+/g, " ").trim().slice(0, 100) || "este grupo"
+  })[name]);
+  return claim.warningNumber != null && claim.warningNumber === claim.warningLimit
+    ? warning + " A equipa do grupo vai rever esta situação."
+    : warning;
 }
 
-async function warnGroupMember(socket: WASocket, userId: string, jid: string, member: string, messageId: string, rule: Violation) {
-  const { data: warning, error } = await supabaseAdmin.rpc("agentx_claim_group_warning", {
-    p_user: userId, p_group: jid, p_member: member, p_message: messageId, p_rule: rule,
+async function applyModeration(socket: WASocket, userId: string, jid: string, key: WAMessageKey,
+  rule: ModerationRule, member: string, subject: string) {
+  const { data, error } = await supabaseAdmin.rpc("agentx_claim_group_moderation", {
+    p_user: userId, p_group: jid, p_member: member, p_message: key.id, p_rule: rule,
   }).abortSignal(AbortSignal.timeout(8_000));
   if (error) throw error;
-  if (!warning || warning.status !== "pending") return;
-
-  let status = "failed";
+  const claim = data as ModerationClaim | null;
+  if (!claim || claim.action === "review") return;
+  let outcome: Outcome = "uncertain";
+  let deadline: NodeJS.Timeout | undefined;
   try {
-    const review = warning.warning_number >= warning.warning_limit ? " Limite de avisos atingido." : "";
-    const response = await socket.sendMessage(jid, {
-      text: `Aviso ${warning.warning_number}/${warning.warning_limit} para @${member.split("@")[0]}: ${violationReason[rule]}.${review}`,
-      mentions: [member],
+    const send = claim.action === "delete" ? socket.sendMessage(jid, { delete: key }) : socket.sendMessage(jid, {
+      text: groupWarningText(rule, member, subject, claim), mentions: [member],
     });
-    if (response?.key?.id) status = "sent";
-  } catch { /* Keep the pending claim from sending twice on an uncertain failure. */ }
+    const result = await Promise.race([send, new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error("Group action acknowledgement timed out")), 8_000);
+      deadline.unref();
+    })]);
+    if (result?.key?.id) outcome = "accepted";
+  } catch { /* The gateway may have accepted the action before the response was lost. */ }
+  finally { clearTimeout(deadline); }
 
-  const { error: updateError } = await supabaseAdmin.from("agentx_group_warnings").update({ status })
-    .eq("id", warning.id).eq("user_id", userId).eq("group_jid", jid).eq("status", "pending")
+  const event = supabaseAdmin.from("agentx_group_events").update({ outcome })
+    .eq("id", claim.id).eq("user_id", userId).eq("group_jid", jid).eq("outcome", "pending")
     .abortSignal(AbortSignal.timeout(8_000));
-  if (updateError) throw updateError;
+  const warning = claim.warningId ? supabaseAdmin.from("agentx_group_warnings")
+    .update({ status: outcome === "accepted" ? "sent" : "failed" })
+    .eq("id", claim.warningId).eq("user_id", userId).eq("group_jid", jid).eq("status", "pending")
+    .abortSignal(AbortSignal.timeout(8_000)) : null;
+  const results = await Promise.all([event, warning]);
+  if (results.some((result) => result?.error)) console.warn("[Groups] Could not record the moderation acknowledgement");
 }
 
-export async function moderateGroupMessage(socket: WASocket, userId: string, jid: string, key: WAMessageKey, text: string) {
-  if (!isGroupJid(jid) || !key.id || key.fromMe || !key.participant) return;
+export async function moderateGroupMessage(socket: WASocket, userId: string, jid: string, key: WAMessageKey,
+  text: string, contentRule?: ContentRule): Promise<boolean> {
+  if (!isGroupJid(jid) || !key.id || key.fromMe || !key.participant) return false;
   const now = Date.now();
-  const eventKey = `${userId}:${jid}:${key.id}`;
-  if ((recentGroupMessages.get(eventKey) ?? -Infinity) >= now - 30000) return;
+  const eventKey = userId + ":" + jid + ":" + key.id;
+  if ((recentGroupMessages.get(eventKey) ?? -Infinity) >= now - 30000) return true;
   if (recentGroupMessages.size >= 10000) recentGroupMessages.delete(recentGroupMessages.keys().next().value!);
   recentGroupMessages.set(eventKey, now);
 
   const rules = await rulesFor(userId, jid);
-  if (!rules?.active || !(rules.anti_link || rules.anti_flood || rules.anti_spam || rules.blocked_words?.length)) return;
-  const senderKey = `${userId}:${jid}:${normalizedGroupIdentity(key.participantAlt || key.participant)}`;
+  if (!rules?.active) return false;
+  const senderKey = userId + ":" + jid + ":" + normalizedGroupIdentity(key.participantAlt || key.participant);
   const entries = (activity.get(senderKey) ?? []).filter((entry) => entry.at >= now - 30000).slice(-19);
   entries.push({ at: now, text: text.toLowerCase().trim().replace(/\s+/g, " ").slice(0, 500) });
   if (activity.size >= 3000 && !activity.has(senderKey)) activity.delete(activity.keys().next().value!);
   activity.set(senderKey, entries);
-  const violation = groupViolation(rules, entries, now, text.slice(0, 16000));
-  if (!violation) return;
+  const rule = groupViolation(rules, entries, now, text.slice(0, 16000), contentRule);
+  if (!rule) return false;
 
-  let outcome: Outcome;
+  let group: GroupMetadata;
   try {
-    const group = await socket.groupMetadata(jid);
+    group = await socket.groupMetadata(jid);
     if (group.id !== jid) throw new Error("Group identity could not be verified");
-    const decision = groupRemovalDecision(group, [key.participant, key.participantAlt], [socket.user?.id, socket.user?.lid, socket.user?.phoneNumber]);
-    if (decision === "exempt") return;
-    if (decision === "remove") {
-      if ((rules.warning_limit ?? 0) > 0) {
-        const participant = groupParticipant(group, key.participant, key.participantAlt);
-        const member = [participant?.phoneNumber, participant?.id, participant?.lid].map(normalizedGroupIdentity)
-          .find((identity): identity is string => Boolean(identity && /^\d{5,20}@(s\.whatsapp\.net|lid)$/.test(identity)));
-        if (member) return await warnGroupMember(socket, userId, jid, member, key.id, violation);
-        outcome = "unverified_sender";
-      } else {
-        return await deleteModeratedMessage(socket, userId, jid, key, violation);
-      }
-    } else {
-      outcome = decision;
-    }
   } catch {
-    outcome = "failed";
+    await recordDeniedModeration(userId, jid, key.id, rule, moderationAction(rules, rule), "failed");
+    return true;
   }
-  await logEvent(userId, jid, violation, outcome);
+  const decision = groupRemovalDecision(group, [key.participant, key.participantAlt], [socket.user?.id, socket.user?.lid, socket.user?.phoneNumber]);
+  if (decision === "exempt") return false;
+  const participant = groupParticipant(group, key.participant, key.participantAlt);
+  const member = [participant?.phoneNumber, participant?.id, participant?.lid].map(normalizedGroupIdentity)
+    .find((identity): identity is string => Boolean(identity && /^\d{5,20}@(s\.whatsapp\.net|lid)$/.test(identity)));
+  if (decision === "remove" && member) {
+    await applyModeration(socket, userId, jid, key, rule, member, group.subject ?? "");
+  } else {
+    await recordDeniedModeration(userId, jid, key.id, rule, moderationAction(rules, rule),
+      decision === "remove" ? "unverified_sender" : decision);
+  }
+  return true;
+}
+
+async function recordDeniedModeration(userId: string, jid: string, sourceMessageId: string,
+  rule: ModerationRule, action: ModerationAction, outcome: Outcome) {
+  const { error } = await supabaseAdmin.from("agentx_group_events").upsert({
+    user_id: userId, group_jid: jid, source_message_id: sourceMessageId, rule, action, outcome,
+  }, { onConflict: "user_id,group_jid,source_message_id", ignoreDuplicates: true }).abortSignal(AbortSignal.timeout(8_000));
+  if (error) throw error;
 }
 
 export async function welcomeGroupParticipants(socket: WASocket, userId: string, jid: string, participants: string[]) {
@@ -214,5 +261,5 @@ export async function welcomeGroupParticipants(socket: WASocket, userId: string,
   } catch {
     outcome = "failed";
   }
-  await logEvent(userId, jid, "welcome", outcome);
+  await logEvent(userId, jid, outcome);
 }

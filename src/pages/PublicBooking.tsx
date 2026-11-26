@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { useParams } from "react-router-dom";
-import { formatInTimeZone } from "date-fns-tz";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -19,7 +18,9 @@ import {
 import { Button } from "../components/ui/Button";
 import AgentXLogo from "../components/AgentXLogo";
 import { apiFetch, ApiError } from "../lib/api";
+import { dayInZone, readBookingManagePath, readBookingManageToken, readBookingZone } from "../lib/publicBooking";
 import { readContactPhone } from "../../shared/contactPhone";
+import ManageBooking from "./ManageBooking";
 
 interface Service {
   id: string;
@@ -45,6 +46,7 @@ interface Reservation {
   time: string;
   timeZone: string;
   confirmation?: ConfirmationStatus;
+  managePath: string | null;
 }
 
 const confirmationLabels: Record<ConfirmationStatus, string> = {
@@ -54,15 +56,15 @@ const confirmationLabels: Record<ConfirmationStatus, string> = {
   uncertain: "O envio do aviso ainda não foi confirmado pelo WhatsApp."
 };
 
-const dayInZone = (timeZone: string) => formatInTimeZone(Date.now(), timeZone, "yyyy-MM-dd");
-const readZone = (timeZone: unknown, fallback: string) => {
-  if (typeof timeZone !== "string" || !timeZone) return fallback;
-  try { dayInZone(timeZone); return timeZone; } catch { return fallback; }
-};
-
 export default function PublicBooking() {
   const { userId } = useParams<{ userId: string }>();
+  const { hash, pathname } = useLocation();
+  const token = readBookingManageToken(hash);
+  if (token !== null) return <ManageBooking key={pathname + hash} token={token} bookingPath={pathname} />;
+  return <BookingForm key={userId} userId={userId} />;
+}
 
+function BookingForm({ userId }: { userId: string | undefined }) {
   const [loading, setLoading] = useState(true);
   const [businessName, setBusinessName] = useState("Marcações");
   const [infoScope, setInfoScope] = useState<string | undefined>();
@@ -121,10 +123,12 @@ export default function PublicBooking() {
     }
     void (async () => {
       try {
-        const res = await apiFetch(`/api/appointments/public/info/${encodeURIComponent(userId)}`, { signal: controller.signal });
+        const res = await apiFetch(`/api/appointments/public/info/${encodeURIComponent(userId)}`, {
+          signal: controller.signal, authenticate: false
+        });
         if (controller.signal.aborted) return;
         if (!res.success || !res.data) throw new Error("Não foi possível abrir o link de marcação.");
-        const zone = readZone(res.data.timeZone, "Africa/Maputo");
+        const zone = readBookingZone(res.data.timeZone, "Africa/Maputo");
         setBusinessName(res.data.business?.name || "Marcações");
         setServices(res.data.services || []);
         setProfessionals(res.data.professionals || []);
@@ -169,10 +173,10 @@ export default function PublicBooking() {
     setSlotError("");
     void (async () => {
       try {
-        const res = await apiFetch(`/api/appointments/public/slots?${slotScope}`, { signal: controller.signal });
+        const res = await apiFetch(`/api/appointments/public/slots?${slotScope}`, { signal: controller.signal, authenticate: false });
         if (controller.signal.aborted) return;
         if (!res.success || !Array.isArray(res.slots)) throw new Error("Não foi possível consultar horários.");
-        setTimeZone((current) => readZone(res.timeZone, current));
+        setTimeZone((current) => readBookingZone(res.timeZone, current));
         setSlotResult({ scope: slotScope, slots: res.slots });
       } catch (error) {
         if (!controller.signal.aborted) setSlotError(error instanceof Error ? error.message : "Não foi possível consultar horários.");
@@ -211,6 +215,7 @@ export default function PublicBooking() {
     try {
       const res = await apiFetch("/api/appointments/public/book", {
         method: "POST",
+        authenticate: false,
         body: JSON.stringify({ ...payload, requestId: attempt.requestId })
       });
       if (bookingRequest.current !== attempt) return;
@@ -221,7 +226,8 @@ export default function PublicBooking() {
         date: res.data.appointment_date || selectedDate,
         time: (res.data.start_time || selectedSlot).slice(0, 5),
         timeZone: res.data.time_zone || timeZone,
-        confirmation: res.confirmation
+        confirmation: res.confirmation,
+        managePath: readBookingManagePath(res.managePath, userId)
       });
       setStep(5);
     } catch (error) {
@@ -691,6 +697,14 @@ export default function PublicBooking() {
               </div>
 
               <div className="pt-2 space-y-2">
+                {confirmedData.managePath && (
+                  <div className="space-y-2">
+                    <Link to={confirmedData.managePath} className="inline-flex min-h-10 w-full items-center justify-center rounded-2xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2">
+                      Gerir marcação
+                    </Link>
+                    <p className="text-xs text-slate-600">Guarda o teu link privado para remarcar ou cancelar.</p>
+                  </div>
+                )}
                 <Button
                   onClick={() => {
                     bookingRequest.current = null;

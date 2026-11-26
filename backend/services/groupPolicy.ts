@@ -4,6 +4,20 @@ export const defaultGroupPolicy = {
 
 export type GroupPolicy = typeof defaultGroupPolicy;
 export type GroupHours = { enabled: boolean; timezone: string; days: number[]; opens_at: string; closes_at: string };
+export const contentRules = ["image", "video", "audio", "voice", "document", "sticker", "gif", "poll", "contact", "location", "reaction", "invite", "event"] as const;
+export const moderationRules = ["link", "word", "spam", "flood", ...contentRules] as const;
+export type ContentRule = typeof contentRules[number];
+export type ModerationRule = typeof moderationRules[number];
+export const moderationActions = ["allow", "warn", "delete", "review"] as const;
+export type ModerationAction = typeof moderationActions[number];
+export type ModerationPolicy = {
+  moderation_actions: Partial<Record<ModerationRule, ModerationAction>>;
+  moderation_warning: string | null;
+  catalog_sales_enabled: boolean;
+};
+export const defaultModerationPolicy: ModerationPolicy = {
+  moderation_actions: {}, moderation_warning: null, catalog_sales_enabled: false
+};
 
 const hostName = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const clockTime = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -11,6 +25,23 @@ const links = /(?:https?:\/\/|\bwww\.|\b(?:chat\.)?whatsapp\.com\/)(?:(?!https?:
 
 const record = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+export function readModerationPolicy(input: unknown): ModerationPolicy | null {
+  const body = record(input);
+  const actions = record(body?.moderation_actions);
+  if (!body || !actions || typeof body.catalog_sales_enabled !== "boolean" ||
+      (body.moderation_warning !== null && (typeof body.moderation_warning !== "string" ||
+        body.moderation_warning.length > 600 ||
+        /[\u0000-\u0008\u000B-\u001F\u007F]/.test(body.moderation_warning)))) return null;
+  for (const [rule, action] of Object.entries(actions)) {
+    if (!moderationRules.includes(rule as ModerationRule) || !moderationActions.includes(action as ModerationAction)) return null;
+  }
+  return {
+    moderation_actions: actions as ModerationPolicy["moderation_actions"],
+    moderation_warning: typeof body.moderation_warning === "string" ? body.moderation_warning.trim() || null : null,
+    catalog_sales_enabled: body.catalog_sales_enabled
+  };
+}
 
 export function normalizeGroupPolicyText(text: string) {
   return text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();

@@ -3,6 +3,7 @@ import { appointmentConfirmationMessage, appointmentInstant, appointmentReminder
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
 import { normalizeContactPhone } from "../../shared/contactPhone.ts";
+import { appointmentNotificationManageUrl } from "./appointmentManagement.ts";
 
 export type AppointmentNotificationKind = "confirmation" | "manual" | "reminder_24h" | "reminder_2h";
 type NotificationStatus = "sending" | "sent" | "retry" | "uncertain" | "ineligible";
@@ -26,7 +27,7 @@ export async function dispatchAppointmentNotification(
   if (!claim.id || !claim.appointment) throw new Error("Appointment notification claim is incomplete");
 
   // The gateway can acknowledge after the HTTP caller times out. Keep the claim and record the later result.
-  const pending = sendClaimedNotification(userId, claim.id, kind, claim.appointment);
+  const pending = sendClaimedNotification(userId, appointmentId, revision, claim.id, kind, claim.appointment);
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<DispatchResult>((resolve) => {
     timer = setTimeout(() => resolve({ status: "uncertain" }), 12_000);
@@ -35,7 +36,7 @@ export async function dispatchAppointmentNotification(
   return Promise.race([pending, deadline]).finally(() => clearTimeout(timer));
 }
 
-async function sendClaimedNotification(userId: string, notificationId: string, kind: AppointmentNotificationKind,
+async function sendClaimedNotification(userId: string, appointmentId: string, revision: string, notificationId: string, kind: AppointmentNotificationKind,
   appointment: NonNullable<Notification["appointment"]>): Promise<DispatchResult> {
   let status: "sent" | "retry" | "uncertain" = "uncertain";
   let messageId: string | null = null;
@@ -43,7 +44,10 @@ async function sendClaimedNotification(userId: string, notificationId: string, k
     const phone = normalizeContactPhone(appointment.customer_phone);
     if (phone) {
       const makeMessage = kind === "confirmation" ? appointmentConfirmationMessage : appointmentReminderMessage;
-      const result = await whatsappManager.sendMessage(userId, `${phone}@s.whatsapp.net`, makeMessage(appointment, appointment.time_zone));
+      const manageUrl = await appointmentNotificationManageUrl(userId, appointmentId, revision, phone);
+      const message = makeMessage(appointment, appointment.time_zone);
+      const result = await whatsappManager.sendMessage(userId, `${phone}@s.whatsapp.net`, manageUrl
+        ? `${message}\n\nPara consultar, remarcar ou cancelar a tua marcação, usa este link privado:\n${manageUrl}` : message);
       if (result?.key?.id) {
         messageId = result.key.id;
         status = "sent";

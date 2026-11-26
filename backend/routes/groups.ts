@@ -2,7 +2,7 @@ import express, { type Response } from "express";
 import type { GroupMetadata, GroupParticipant } from "@whiskeysockets/baileys";
 import type { AuthRequest } from "../middleware/auth.ts";
 import { groupParticipant, invalidateGroupRules, isGroupAdmin, isGroupJid, normalizedGroupIdentity } from "../services/groupModeration.ts";
-import { defaultGroupPolicy, readGroupPolicy } from "../services/groupPolicy.ts";
+import { defaultGroupPolicy, defaultModerationPolicy, readGroupPolicy, readModerationPolicy } from "../services/groupPolicy.ts";
 import { readContactPhone } from "../../shared/contactPhone.ts";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { whatsappManager } from "../whatsappManager.ts";
@@ -79,6 +79,52 @@ groups.put("/:jid/policy", forGroup(true, async (req, res, { userId, jid, group 
   if (error) return res.status(503).json({ error: "A base não confirmou a gravação destas regras e horários." });
   invalidateGroupRules(userId, jid);
   return showGroupPolicy(res, userId, jid, group.announce);
+}));
+
+const moderationFields = "moderation_actions,moderation_warning,catalog_sales_enabled";
+
+async function showModeration(res: Response, userId: string, jid: string, includeReviews: boolean) {
+  const signal = AbortSignal.timeout(8_000);
+  const [policy, reviews] = await Promise.all([
+    supabaseAdmin.from("group_rules").select(moderationFields).eq("user_id", userId).eq("group_jid", jid)
+      .abortSignal(signal).maybeSingle(),
+    includeReviews ? supabaseAdmin.from("agentx_group_events")
+      .select("id,rule,action,outcome,participant_jid,review_status,created_at")
+      .eq("user_id", userId).eq("group_jid", jid).eq("review_status", "pending")
+      .order("id", { ascending: false }).limit(30).abortSignal(signal)
+      : { data: [], error: null },
+  ]);
+  if (policy.error || reviews.error) return res.status(503).json({ error: "A configuração de moderação está indisponível." });
+  return res.json({ success: true, policy: policy.data ?? defaultModerationPolicy, reviews: reviews.data ?? [] });
+}
+
+groups.get("/:jid/moderation", forGroup(false, async (_req, res, { userId, jid, self }) =>
+  showModeration(res, userId, jid, isGroupAdmin(self))));
+
+groups.put("/:jid/moderation", forGroup(true, async (req, res, { userId, jid }) => {
+  const policy = readModerationPolicy(req.body);
+  if (!policy) return res.status(400).json({ error: "Verifica as ações de moderação e o texto do aviso." });
+  const { error } = await supabaseAdmin.from("group_rules").upsert({
+    ...policy, user_id: userId, group_jid: jid, updated_at: new Date().toISOString()
+  }, { onConflict: "user_id,group_jid" }).abortSignal(AbortSignal.timeout(8_000));
+  if (error) return res.status(503).json({ error: "A base não confirmou a gravação da moderação." });
+  invalidateGroupRules(userId, jid);
+  return showModeration(res, userId, jid, true);
+}));
+
+groups.patch("/:jid/moderation/reviews/:id", forGroup(true, async (req, res, { userId, jid }) => {
+  const { id } = req.params;
+  const { decision } = req.body ?? {};
+  if (!/^[1-9]\d{0,17}$/.test(id) || (decision !== "reviewed" && decision !== "dismissed")) {
+    return res.status(400).json({ error: "Decisão de revisão inválida." });
+  }
+  const { data, error } = await supabaseAdmin.from("agentx_group_events")
+    .update({ review_status: decision, reviewed_at: new Date().toISOString() })
+    .eq("id", id).eq("user_id", userId).eq("group_jid", jid).eq("review_status", "pending")
+    .select("id").abortSignal(AbortSignal.timeout(8_000)).maybeSingle();
+  if (error) return res.status(503).json({ error: "A base não confirmou a conclusão da revisão." });
+  if (!data) return res.status(404).json({ error: "Esta ocorrência já saiu da fila ou não pertence ao grupo." });
+  return res.json({ success: true });
 }));
 
 groups.post("/:jid/subject", forGroup(true, async (req, res, { userId, jid }) => {

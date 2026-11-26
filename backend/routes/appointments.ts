@@ -1,9 +1,12 @@
-import { Router, type Response } from "express";
+import { randomUUID } from "node:crypto";
+import { Router, type Request, type Response } from "express";
 import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { authenticate, type AuthRequest } from "../middleware/auth.ts";
 import { readContactPhone } from "../../shared/contactPhone.ts";
 import { appointmentInstant, appointmentZone, getAppointmentTimeZone } from "../services/appointmentReminders.ts";
 import { dispatchAppointmentNotification, manualAppointmentKind } from "../services/appointmentDelivery.ts";
+import { appointmentManageHash, appointmentManagePath, appointmentManageToken, appointmentManageTokenPattern,
+  appointmentManageUrl } from "../services/appointmentManagement.ts";
 
 const router = Router();
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -16,6 +19,10 @@ function isValidDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value + "T00:00:00Z");
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function privateBookingHeaders(res: Response) {
+  res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
 }
 
 function appointmentError(res: Response, error: unknown, publicRequest = false) {
@@ -157,13 +164,25 @@ router.get("/public/slots", async (req, res) => {
 });
 
 router.post("/public/book", async (req, res) => {
+  privateBookingHeaders(res);
   try {
     const { userId, serviceId, professionalId, customerName, customerPhone, appointmentDate, startTime, notes, requestId } = req.body ?? {};
     if (!isUuid(userId)) return res.status(404).json({ error: "Estabelecimento indisponível." });
-    const { appointment, replayed } = await saveAppointment(userId, null, {
+    const fields = saveFields({
       service_id: serviceId, professional_id: professionalId, customer_name: customerName, customer_phone: customerPhone,
-      appointment_date: appointmentDate, start_time: startTime, notes, request_id: requestId
-    }, true);
+      appointment_date: appointmentDate, start_time: startTime, notes, request_id: requestId ?? randomUUID()
+    });
+    if (!fields.request_id) throw new AppointmentInputError("Identificador de marcação inválido.");
+    if (!fields.customer_phone) throw new AppointmentInputError("Indica um número de WhatsApp válido.");
+    const token = appointmentManageToken(userId, fields.request_id, fields.customer_phone);
+    const { data, error } = await supabaseAdmin.rpc("agentx_book_public_appointment", {
+      p_user: userId, p_input: fields, p_token_hash: appointmentManageHash(token),
+    }).abortSignal(AbortSignal.timeout(10_000));
+    if (error) throw error;
+    if (!data?.appointment?.id) throw new Error("Appointment was not returned");
+    const { appointment, replayed, manageAvailable } = data as { appointment: Appointment; replayed: boolean; manageAvailable: boolean };
+    if (!manageAvailable) return res.status(409).json({ error: "Esta marcação já foi registada. Usa o link privado recebido ou fala com o estabelecimento." });
+    const managePath = appointmentManagePath(userId, token);
 
     const [labels, delivery] = await Promise.allSettled([
       appointmentLabels(userId, [appointment]),
@@ -172,7 +191,7 @@ router.post("/public/book", async (req, res) => {
     const display = labels.status === "fulfilled" ? labels.value[0] : null;
     const confirmation = delivery.status === "fulfilled" && delivery.value.status !== "ineligible"
       ? delivery.value.status : "uncertain";
-    return res.json({ success: true, confirmation, replayed, data: {
+    return res.json({ success: true, confirmation, replayed, managePath, manageUrl: appointmentManageUrl(managePath), data: {
       id: appointment.id, appointment_date: appointment.appointment_date, start_time: appointment.start_time,
       end_time: appointment.end_time, time_zone: appointment.time_zone,
       services: display?.services ? { name: display.services.name } : null,
@@ -182,6 +201,50 @@ router.post("/public/book", async (req, res) => {
     return appointmentError(res, error, true);
   }
 });
+
+function manageAppointment(action: "read" | "slots" | "reschedule" | "cancel") {
+  return async (req: Request, res: Response) => {
+    privateBookingHeaders(res);
+    const token = req.get("X-Booking-Token");
+    const unavailable = () => res.status(404).json({ error: "O link da marcação é inválido ou expirou." });
+    if (!token || !appointmentManageTokenPattern.test(token)) return unavailable();
+
+    const mutation = action === "cancel" || action === "reschedule";
+    const date = action === "slots" ? req.query.date : action === "reschedule" ? req.body?.appointmentDate : null;
+    const start = action === "reschedule" ? req.body?.startTime : null;
+    const revision = mutation ? req.body?.revision : null;
+    if (((action === "reschedule" || action === "slots") && !isValidDate(date)) ||
+      (action === "reschedule" && (typeof start !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(start))) ||
+      (mutation && !isUuid(revision))) {
+      return res.status(400).json({ error: "Confere a data, o horário e os dados da marcação." });
+    }
+    try {
+      const { data, error } = await supabaseAdmin.rpc("agentx_public_manage_appointment", {
+        p_token_hash: appointmentManageHash(token), p_action: action,
+        p_revision: revision, p_date: date, p_start: start,
+      }).abortSignal(AbortSignal.timeout(10_000));
+      if (error) throw error;
+      if (!data) return unavailable();
+      if (action === "slots") {
+        if (!Array.isArray(data.slots)) throw new Error("Appointment slots were not returned");
+        return res.json({ success: true, slots: data.slots, timeZone: data.timeZone, durationMinutes: data.durationMinutes });
+      }
+      if (!data.data?.id) throw new Error("Appointment was not returned");
+      if (action === "reschedule" && !data.replayed) {
+        void dispatchAppointmentNotification(data.userId, data.data.id, data.data.revision, "confirmation")
+          .catch(() => console.warn("[Appointments] Could not immediately send reschedule confirmation"));
+      }
+      return res.json({ success: true, data: data.data, replayed: Boolean(data.replayed) });
+    } catch (error) {
+      return appointmentError(res, error, true);
+    }
+  };
+}
+
+router.get("/public/manage", manageAppointment("read"));
+router.get("/public/manage/slots", manageAppointment("slots"));
+router.post("/public/manage/reschedule", manageAppointment("reschedule"));
+router.post("/public/manage/cancel", manageAppointment("cancel"));
 
 router.use(authenticate);
 

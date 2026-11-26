@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { CalendarClock, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
+import { moderationRuleLabels } from "./GroupModerationPanel";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 
@@ -44,7 +45,6 @@ const defaultSchedule = {
   enabled: false, timezone: localTimezone, days: [1, 2, 3, 4, 5], opens_at: "08:00", closes_at: "18:00"
 };
 const weekdays = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"];
-const warningRules: Record<string, string> = { link: "Link bloqueado", word: "Palavra bloqueada", spam: "Spam", flood: "Excesso de mensagens" };
 const warningStates: Record<Warning["status"], string> = {
   pending: "Aviso ainda por confirmar", sent: "Aviso aceite pelo WhatsApp",
   failed: "Falha ao enviar o aviso", recorded: "Ocorrência registada"
@@ -244,10 +244,10 @@ export function GroupPolicyPanel({ jid, canManage }: { jid: string; canManage: b
         <label className="block text-sm">Avisos até revisão por um administrador
           <select className="mt-1 block min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm disabled:bg-slate-50"
             value={draft.warningLimit} onChange={(event) => updateDraft({ warningLimit: Number(event.target.value) })}>
-            <option value={0}>Sem avisos automáticos</option>
+            <option value={0}>Usar limite padrão</option>
             {Array.from({ length: 10 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}
           </select>
-          <span className="mt-1 block text-xs text-slate-600">O limite conta ocorrências por membro em 24 horas. A decisão de remover um membro cabe ao administrador.</span>
+          <span className="mt-1 block text-xs text-slate-600">O limite conta ocorrências por membro em 24 horas. O padrão é 3 para a ação Avisar. Uma regra antiga que herda a configuração apaga a mensagem quando o limite fica no padrão.</span>
         </label>
       </fieldset>
       {canManage && <Button type="submit" disabled={busy || !hasChanges}>Guardar regras e horário</Button>}
@@ -258,10 +258,10 @@ export function GroupPolicyPanel({ jid, canManage }: { jid: string; canManage: b
       {warnings.length ? <ul className="divide-y divide-slate-100">
         {warnings.map((warning) => <li className="flex flex-wrap items-start justify-between gap-2 py-2 text-sm" key={warning.id}>
           <div>
-            <p className="font-medium text-slate-900">{warningRules[warning.rule] ?? "Regra do grupo"} · {warning.participant_jid.includes("@lid")
+            <p className="font-medium text-slate-900">{moderationRuleLabels[warning.rule] ?? "Regra do grupo"} · {warning.participant_jid.includes("@lid")
               ? `Membro ${warning.participant_jid.split("@")[0].slice(-6)}` : `+${warning.participant_jid.split("@")[0]}`}</p>
             <p className="text-xs text-slate-600">{warningStates[warning.status] ?? "Estado por confirmar"} · {warning.warning_number}/{warning.warning_limit}
-              {warning.warning_number >= warning.warning_limit && <span className="ml-2 font-semibold text-amber-800">Revisão do administrador</span>}</p>
+              {warning.warning_number >= warning.warning_limit && <span className="ml-2 font-semibold text-amber-800">Limite de avisos atingido</span>}</p>
           </div>
           <time className="text-xs text-slate-600" dateTime={warning.created_at}>{formatDate(warning.created_at, schedule?.timezone ?? localTimezone)}</time>
         </li>)}

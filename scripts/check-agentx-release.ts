@@ -15,7 +15,9 @@ const workflowContracts = [
   ["agentx_catalog_campaigns_ready", "29_catalog_campaigns.sql"],
   ["agentx_whatsapp_quote_ready", "30_whatsapp_quoted_agenda.sql"],
   ["agentx_whatsapp_operator_audit_ready", "31_whatsapp_operator_audit.sql"],
-  ["agentx_human_handoff_ready", "32_human_handoff_alerts.sql"]
+  ["agentx_human_handoff_ready", "32_human_handoff_alerts.sql"],
+  ["agentx_appointment_self_service_ready", "33_appointment_self_service.sql"],
+  ["agentx_group_moderation_ready", "34_group_content_moderation.sql"]
 ] as const;
 
 async function check() {

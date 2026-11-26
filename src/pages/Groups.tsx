@@ -19,6 +19,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { apiFetch } from '../lib/api';
 import { GroupControls, type EditableGroup, type GroupPermissions } from '../components/GroupControls';
+import { GroupModerationPanel, moderationActionLabels, moderationOutcomeLabels, moderationRuleLabels } from '../components/GroupModerationPanel';
 import { GroupPolicyPanel } from '../components/GroupPolicyPanel';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -31,6 +32,7 @@ interface GroupSummary {
 
 interface Member {
   id: string;
+  lid?: string;
   name?: string;
   notify?: string;
   phoneNumber?: string;
@@ -41,16 +43,13 @@ interface Member {
 
 interface Group extends EditableGroup { participants: Member[]; permissions: GroupPermissions }
 type MemberAction = "add" | "remove" | "promote" | "demote";
-type GroupEvent = { id: number; rule: string; outcome: string; created_at: string };
+type GroupEvent = { id: number; rule: string; action?: string | null; outcome: string; review_status?: string | null; created_at: string };
 
 const memberActions = { add: "Adicionar membro", remove: "Remover do grupo", promote: "Promover a administrador", demote: "Remover função de administrador" };
 const memberLabel = (member: Member) => member.name || member.notify || (member.phoneNumber ?? member.id).split("@")[0];
 const defaultRules = { anti_link: false, anti_spam: false, anti_flood: false, welcome_msg: "", active: true };
-const ruleNames: Record<string, string> = { link: "Link", word: "Palavra bloqueada", spam: "Spam", flood: "Flood", welcome: "Boas-vindas" };
-const outcomes: Record<string, string> = {
-  accepted: "Ação aceite pelo WhatsApp", no_permission: "Conta sem permissão",
-  unverified_sender: "Remetente não identificado", failed: "Falha no WhatsApp", pending: "Ação por confirmar"
-};
+const normalizedMemberId = (value: string) => value.toLowerCase().replace(/:\d+@/, "@").replace(/@c\.us$/, "@s.whatsapp.net");
+const reviewStates: Record<string, string> = { pending: "Aguarda revisão", reviewed: "Revista", dismissed: "Arquivada" };
 
 export default function Groups() {
   const [groups, setGroups] = useState<GroupSummary[]>([]);
@@ -452,7 +451,7 @@ export default function Groups() {
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">Anti-Link</p>
-                            <p className="text-[10px] text-slate-500">Remove links de não-admins</p>
+                            <p className="text-xs text-slate-600">Deteta links fora dos domínios permitidos</p>
                           </div>
                         </div>
                         <button
@@ -473,7 +472,7 @@ export default function Groups() {
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">Anti-Spam</p>
-                            <p className="text-[10px] text-slate-500">Remove a terceira repetição de um membro em 30 segundos</p>
+                            <p className="text-xs text-slate-600">Deteta a terceira repetição de um membro em 30 segundos</p>
                           </div>
                         </div>
                         <button
@@ -494,7 +493,7 @@ export default function Groups() {
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">Anti-Flood</p>
-                            <p className="text-[10px] text-slate-500">Remove a partir da sexta mensagem do membro em 10 segundos</p>
+                            <p className="text-xs text-slate-600">Deteta a partir da sexta mensagem do membro em 10 segundos</p>
                           </div>
                         </div>
                         <button
@@ -547,7 +546,7 @@ export default function Groups() {
                         <div className="flex gap-3">
                           <Info className="w-5 h-5 text-amber-500 shrink-0" />
                           <p className="text-xs text-amber-700 leading-relaxed">
-                            <strong>Nota:</strong> Para as regras funcionarem, o bot precisa ser <strong>Administrador</strong> do grupo. Algumas regras podem levar até 30s para serem aplicadas.
+                            Escolhe abaixo o que fazer quando cada regra é detetada. A conta ligada precisa da permissão do WhatsApp para apagar mensagens.
                           </p>
                         </div>
                       </div>
@@ -558,13 +557,23 @@ export default function Groups() {
                         {!eventsUnavailable && groupEvents.length === 0 && <p className="text-sm">Ainda sem ações registadas.</p>}
                         <ul className="mt-2 grid gap-2 text-sm">
                           {groupEvents.map((event) => <li key={event.id} className="rounded-lg bg-slate-50 p-2">
-                            {ruleNames[event.rule]} · {outcomes[event.outcome]} · {new Date(event.created_at).toLocaleString("pt-MZ")}
+                            {[moderationRuleLabels[event.rule] ?? "Ocorrência do grupo", event.action && moderationActionLabels[event.action],
+                              event.review_status ? reviewStates[event.review_status] : moderationOutcomeLabels[event.outcome] ?? "Estado por confirmar",
+                              new Date(event.created_at).toLocaleString("pt-MZ")].filter(Boolean).join(" · ")}
                           </li>)}
                         </ul>
                       </section>
                     </div>
                   </div>
                 </div>
+                <GroupModerationPanel key={selectedGroup.id} jid={selectedGroup.id} groupName={selectedGroup.subject}
+                  canManage={selectedGroup.permissions.manage} canPost={selectedGroup.permissions.post}
+                  memberLabel={(jid) => {
+                    const target = normalizedMemberId(jid);
+                    const member = selectedGroup.participants.find((person) => [person.id, person.lid, person.phoneNumber]
+                      .some((identity) => identity && normalizedMemberId(identity) === target));
+                    return member?.name || member?.notify;
+                  }} />
               </motion.div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-center p-12 bg-white border border-slate-200 rounded-[40px] border-dashed">

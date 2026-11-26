@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WASocket } from "@whiskeysockets/baileys";
-import { invalidateGroupRules, moderateGroupMessage } from "../backend/services/groupModeration.ts";
+import { groupContentRule, groupWarningText, invalidateGroupRules, moderateGroupMessage } from "../backend/services/groupModeration.ts";
+import { readModerationPolicy, type ModerationPolicy } from "../backend/services/groupPolicy.ts";
 import { processGroupAccessSchedules } from "../backend/services/groupAccessSchedule.ts";
 
 const mock = vi.hoisted(() => ({ from: vi.fn(), rpc: vi.fn(), metadata: vi.fn(), identity: vi.fn(), updateAccess: vi.fn() }));
@@ -22,8 +23,8 @@ const socketMetadata = vi.fn();
 const send = vi.fn();
 const socket = { user: self, groupMetadata: socketMetadata, sendMessage: send } as unknown as WASocket;
 const groupSettings = { active: true, anti_link: false, anti_flood: false, anti_spam: true, welcome_msg: "" };
-let configuredRules: typeof groupSettings & { blocked_words?: string[]; warning_limit?: number };
-const claimDeletion = vi.fn();
+let configuredRules: typeof groupSettings & Partial<ModerationPolicy> & { blocked_words?: string[]; warning_limit?: number };
+const claimModeration = vi.fn();
 const update = vi.fn();
 
 function message(id: string, content: string) {
@@ -41,7 +42,8 @@ beforeEach(() => {
   mock.identity.mockReturnValue(self);
   mock.metadata.mockResolvedValue(metadata());
   mock.updateAccess.mockResolvedValue(undefined);
-  claimDeletion.mockResolvedValue({ data: { id: 123 }, error: null });
+  claimModeration.mockReturnValue(rpcResult({ id: 123, action: "delete" }));
+  mock.rpc.mockImplementation((method, args) => method === "agentx_claim_group_moderation" ? claimModeration(args) : rpcResult(null));
 
   mock.from.mockImplementation((table: string) => {
     if (table === "group_rules") {
@@ -49,9 +51,8 @@ beforeEach(() => {
         maybeSingle: async () => ({ data: configuredRules, error: null }) };
       return read;
     }
-    const claim = { select: () => claim, abortSignal: () => claim, maybeSingle: claimDeletion };
     const finish = { eq: () => finish, abortSignal: async () => ({ error: null }) };
-    return { upsert: () => claim, update: (values: unknown) => { update(table, values); return finish; } };
+    return { upsert: () => finish, update: (values: unknown) => { update(table, values); return finish; } };
   });
 });
 
@@ -64,34 +65,56 @@ describe("group policy at the WhatsApp boundary", () => {
     expect(socketMetadata).not.toHaveBeenCalled();
     await message("flood-2", content);
     await message("flood-3", content);
-    expect(claimDeletion).toHaveBeenCalledOnce();
+    expect(claimModeration).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledExactlyOnceWith(group, { delete: { id: "flood-3", participant: sender.id } });
     expect(update).toHaveBeenCalledExactlyOnceWith("agentx_group_events", { outcome: "accepted" });
-    expect(claimDeletion.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]);
+    expect(claimModeration.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]);
   });
 
   it("does not repeat a previously persisted deletion after a restart", async () => {
     configuredRules = { ...groupSettings, anti_link: true };
-    claimDeletion.mockResolvedValue({ data: null, error: null });
+    claimModeration.mockReturnValue(rpcResult(null));
     await message("already-claimed", "https://blocked.example");
-    expect(claimDeletion).toHaveBeenCalledOnce();
+    expect(claimModeration).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
   });
 
   it("records the acknowledged warning without deleting or sending above the threshold", async () => {
     configuredRules = { ...groupSettings, blocked_words: ["proibida"], warning_limit: 1 };
-    mock.rpc.mockReturnValueOnce(rpcResult({ id: "warn-1", warning_number: 1, warning_limit: 1, status: "pending" }))
-      .mockReturnValueOnce(rpcResult({ id: "warn-2", warning_number: 2, warning_limit: 1, status: "recorded" }));
+    claimModeration.mockReturnValueOnce(rpcResult({ id: 125, action: "warn", warningId: "warn-1", warningNumber: 1, warningLimit: 1 }))
+      .mockReturnValueOnce(rpcResult(null));
     await message("word-1", "PALAVRA PROIBIDA");
     await message("word-2", "PALAVRA PROIBIDA");
-    expect(mock.rpc).toHaveBeenNthCalledWith(1, "agentx_claim_group_warning", {
+    expect(mock.rpc).toHaveBeenNthCalledWith(1, "agentx_claim_group_moderation", {
       p_user: actor, p_group: group, p_member: sender.phoneNumber, p_rule: "word", p_message: "word-1",
     });
     expect(send).toHaveBeenCalledExactlyOnceWith(group, {
-      text: expect.stringMatching(/Aviso 1\/1.*Limite de avisos atingido/), mentions: [sender.phoneNumber],
+      text: expect.stringMatching(/Olá @258851234567.*certas palavras.*vai rever/), mentions: [sender.phoneNumber],
     });
-    expect(update).toHaveBeenCalledExactlyOnceWith("agentx_group_warnings", { status: "sent" });
-    expect(claimDeletion).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith("agentx_group_warnings", { status: "sent" });
+    expect(update).toHaveBeenCalledWith("agentx_group_events", { outcome: "accepted" });
+  });
+
+  it("sends a violation for review without a WhatsApp action", async () => {
+    configuredRules = { ...groupSettings, moderation_actions: { document: "review" } };
+    claimModeration.mockReturnValue(rpcResult({ id: 126, action: "review" }));
+    await expect(moderateGroupMessage(socket, actor, group, { id: "review-1", participant: sender.id }, "", "document")).resolves.toBe(true);
+    expect(claimModeration).toHaveBeenCalledWith(expect.objectContaining({ p_rule: "document" }));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes voice notes and music, GIFs and video, and validates custom actions", () => {
+    expect(groupContentRule({ audioMessage: { ptt: true } })).toBe("voice");
+    expect(groupContentRule({ audioMessage: {} })).toBe("audio");
+    expect(groupContentRule({ videoMessage: { gifPlayback: true } })).toBe("gif");
+    expect(groupContentRule({ ptvMessage: {} })).toBe("video");
+    expect(groupContentRule({ contactsArrayMessage: {} })).toBe("contact");
+    const policy = { moderation_actions: { image: "delete", voice: "warn" }, moderation_warning: "Olá {membro}! Evita {motivo} em {grupo}.",
+      catalog_sales_enabled: true };
+    expect(readModerationPolicy(policy)).toEqual(policy);
+    expect(readModerationPolicy({ ...policy, moderation_actions: { image: "ban" } })).toBeNull();
+    expect(groupWarningText("voice", sender.phoneNumber, "Clube", { id: 130, action: "warn", template: policy.moderation_warning }))
+      .toBe("Olá @258851234567! Evita notas de voz em Clube.");
   });
 });
 

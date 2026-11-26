@@ -75,6 +75,7 @@ let apiServer;
 try {
   process.env.SUPABASE_URL = `http://127.0.0.1:${authProxy.address().port}`;
   process.env.SUPABASE_SERVICE_ROLE_KEY = serviceToken;
+  process.env.PUBLIC_APP_URL = "https://booking.fixture.invalid";
   const [{ default: appointmentRoutes }, { whatsappManager }, { processAppointmentReminders }] = await Promise.all([
     import("../../backend/routes/appointments.ts"), import("../../backend/whatsappManager.ts"),
     import("../../backend/services/appointmentDelivery.ts")
@@ -98,14 +99,15 @@ try {
   await once(apiServer, "listening");
   const base = `http://127.0.0.1:${apiServer.address().port}/api/appointments`;
 
-  async function call(path, { method = "GET", auth, body } = {}) {
+  async function call(path, { method = "GET", auth, body, bookingToken } = {}) {
     const response = await fetch(base + path, {
       method,
-      headers: { ...(auth ? { authorization: `Bearer ${auth}` } : {}), ...(body ? { "content-type": "application/json" } : {}) },
+      headers: { ...(auth ? { authorization: `Bearer ${auth}` } : {}), ...(body ? { "content-type": "application/json" } : {}),
+        ...(bookingToken ? { "x-booking-token": bookingToken } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(10_000)
     });
-    return { status: response.status, body: await response.json() };
+    return { status: response.status, body: await response.json(), headers: response.headers };
   }
 
   function expectStatus(result, expected) {
@@ -131,7 +133,7 @@ try {
 
   async function until(check, description) {
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (check()) return;
+      if (await check()) return;
       await delay(25);
     }
     throw new Error(`Timed out waiting for ${description}`);
@@ -343,7 +345,68 @@ try {
   assert.equal(outbound.length, 6);
   assert.equal(outbound[5].jid, "258849999902@s.whatsapp.net");
 
+  const selfBooking = { ...publicBody, requestId: randomUUID(), customerPhone: "258849999903", startTime: "13:00" };
+  const selfService = expectStatus(await book(selfBooking), [200, 201]);
+  const manageUrl = new URL(selfService.managePath, process.env.PUBLIC_APP_URL);
+  const manageToken = new URLSearchParams(manageUrl.hash.slice(1)).get("manage");
+  assert.equal(manageUrl.pathname, `/book/${owner}`);
+  assert.equal(manageUrl.search, "");
+  assert.match(manageToken, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(selfService.manageUrl, manageUrl.href);
+  assert.equal(outbound.at(-1).jid, "258849999903@s.whatsapp.net");
+  assert.ok(outbound.at(-1).text.includes(manageUrl.href));
+  assert.doesNotMatch(outbound.at(-1).text, /Nota privada|Cliente da agenda/);
+  const publicReplay = expectStatus(await book(selfBooking), [200, 201]);
+  assert.equal(publicReplay.managePath, selfService.managePath);
+
+  const manage = (path = "", options = {}) => call(`/public/manage${path}`, { bookingToken: manageToken, ...options });
+  const missingToken = await manage("", { bookingToken: undefined });
+  assert.deepEqual(expectStatus(missingToken, 404), expectStatus(await manage("", { bookingToken: "x".repeat(43) }), 404));
+  expectStatus(await manage(`?token=${manageToken}`, { bookingToken: undefined }), 404);
+  const manageResult = await manage();
+  assert.match(manageResult.headers.get("cache-control"), /no-store/i);
+  const bookingDetails = expectStatus(manageResult, 200).data;
+  assert.equal(bookingDetails.id, selfService.data.id);
+  assert.equal(bookingDetails.start_time.slice(0, 5), "13:00");
+  assert.equal(bookingDetails.time_zone, "Africa/Maputo");
+  assert.equal(bookingDetails.canManage, true);
+  for (const field of ["customer_phone", "customer_name", "notes", "contact_id", "user_id"]) assert.equal(bookingDetails[field], undefined);
+  assert.equal(bookingDetails.services.name, "Consulta");
+  assert.equal(bookingDetails.professionals.name, "Ana");
+
+  const selfSlots = expectStatus(await manage(`/slots?date=${date}`), 200).slots;
+  assert.ok(selfSlots.includes("13:30"));
+  const rescheduleSelf = (startTime, revision = bookingDetails.revision) => manage("/reschedule", {
+    method: "POST", body: { appointmentDate: date, startTime, revision }
+  });
+  expectStatus(await rescheduleSelf("11:30"), 409);
+  const moveSelf = expectStatus(await rescheduleSelf("13:30"), 200).data;
+  assert.equal(moveSelf.id, bookingDetails.id);
+  assert.equal(moveSelf.start_time.slice(0, 5), "13:30");
+  assert.notEqual(moveSelf.revision, bookingDetails.revision);
+  assert.ok(expectStatus(await slots(), 200).slots.includes("13:00"));
+  expectStatus(await rescheduleSelf("14:00"), 409);
+  await until(async () => {
+    const [notification] = await select(`/agentx_appointment_notifications?appointment_id=eq.${moveSelf.id}&revision=eq.${moveSelf.revision}&kind=eq.confirmation`);
+    return notification?.status === "sent";
+  }, "the WhatsApp acknowledgement for the rescheduled appointment");
+  assert.equal(outbound.at(-1).jid, "258849999903@s.whatsapp.net");
+  assert.match(outbound.at(-1).text, /13:30/);
+  assert.ok(outbound.at(-1).text.includes(manageUrl.href));
+
+  const cancelSelf = () => manage("/cancel", { method: "POST", body: { revision: moveSelf.revision } });
+  const cancelResult = expectStatus(await cancelSelf(), 200).data;
+  assert.equal(cancelResult.status, "cancelled");
+  assert.equal(cancelResult.canManage, false);
+  assert.equal(expectStatus(await manage(), 200).data.status, "cancelled");
+  const outboundAfterCancel = outbound.length;
+  assert.equal(expectStatus(await cancelSelf(), 200).data.status, "cancelled");
+  assert.equal(outbound.length, outboundAfterCancel);
+  assert.ok(expectStatus(await slots(), 200).slots.includes("13:30"));
+  assert.equal((await select(`/appointments?id=eq.${bookingDetails.id}`))[0].status, "cancelled");
+
   console.log("Appointment integration passed with PostgreSQL and PostgREST: public hours, tenant scope, concurrent booking, WhatsApp acknowledgement, rescheduling, unknown send containment and server retry after process interruption.");
+  console.log("Public booking management passed: a private WhatsApp link, no personal-data disclosure, slot conflicts, revision checks, rescheduling and idempotent cancellation.");
 } finally {
   apiServer?.closeAllConnections();
   apiServer?.close();

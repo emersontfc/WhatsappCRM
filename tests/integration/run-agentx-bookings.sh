@@ -51,6 +51,11 @@ fi
 
 psql_fixture < tests/integration/appointment-booking-contract.sql >/dev/null
 printf 'Appointment SQL contract passed.\n'
+psql_fixture < supabase/migrations/33_appointment_self_service.sql >/dev/null
+if [[ $(appointments_filenode) != "$before_filenode" ]]; then
+  printf 'Migration 33 rewrote the appointments table.\n' >&2
+  exit 1
+fi
 
 export AGENTX_FIXTURE_JWT_SECRET="agentx-bookings-jwt-test-secret-local-only"
 rest="$(docker run --rm -d --network "$network" -p 127.0.0.1::3000 \

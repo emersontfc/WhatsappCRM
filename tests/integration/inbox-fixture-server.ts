@@ -17,17 +17,19 @@ const contactsMap = new Map([
   ["109876543211123@lid", { id: "109876543211123@lid", phoneNumber: "258831234567@s.whatsapp.net", name: "Número resolvido" }],
 ]);
 function connectedSession(userId: string, phone: string, contacts = new Map()) {
-  const groupId = "120363000000001@g.us";
-  const group = phone === "258860000001" ? {
-    id: groupId, subject: "Grupo de teste de campanhas", announce: true,
-    participants: [{ id: `${phone}@s.whatsapp.net`, admin: "admin" }]
-  } : null;
+  const linkedAdmin = { id: `${phone}@s.whatsapp.net`, admin: "admin" };
+  const groups = phone === "258860000001" ? [{
+    id: "120363000000001@g.us", subject: "Grupo de teste de campanhas", announce: true, participants: [linkedAdmin]
+  }, {
+    id: "120363000000002@g.us", subject: "Grupo da loja piloto", announce: false,
+    participants: [linkedAdmin, { id: "258842210001@s.whatsapp.net" }]
+  }] : [];
   return { status: "connected", contactsMap: contacts, socket: {
     user: { id: `${phone}:1@s.whatsapp.net`, name: "Loja de teste" },
     end() {},
     async sendPresenceUpdate() {},
-    async groupFetchAllParticipating() { return group ? { [groupId]: group } : {}; },
-    async groupMetadata(jid: string) { return jid === groupId && group ? group : { id: jid, participants: [] }; },
+    async groupFetchAllParticipating() { return Object.fromEntries(groups.map((group) => [group.id, group])); },
+    async groupMetadata(jid: string) { return groups.find((group) => group.id === jid) ?? { id: jid, participants: [] }; },
     async sendMessage(jid: string, content: unknown, options?: { statusJidList?: string[] }) {
       process.send?.({ event: "outbound", userId, jid, content, statusJidList: options?.statusJidList });
       return confirmSend ? { key: { id: `fixture-outbound-${randomUUID()}` } } : undefined;
@@ -42,19 +44,23 @@ sessions.set(other, otherSession);
 process.on("message", async (message: {
   event: string; requestId: string; text?: string; messageId?: string; jid?: string; altJid?: string;
   upsertType?: "notify" | "append" | "history"; account?: "owner" | "other";
-  participant?: string; fromMe?: boolean; timestamp?: number;
+  participant?: string; participantAlt?: string; fromMe?: boolean; timestamp?: number;
+  media?: "image" | "video" | "document" | "audio" | "sticker";
 }) => {
   if (message.event === "unconfirmed") confirmSend = false;
   if (message.event === "confirmed") confirmSend = true;
   let ok = true;
   if (message.event === "handoffs") await processHumanHandoffs(whatsappManager);
-  if (message.event === "ingress" && message.text && message.messageId && message.jid) {
+  if (message.event === "ingress" && (message.text || message.media) && message.messageId && message.jid) {
     const userId = message.account === "other" ? other : owner;
     const session = message.account === "other" ? otherSession : ownerSession;
+    const caption = message.text ?? undefined;
+    const content = message.media === "audio" ? { audioMessage: { ptt: true } }
+      : message.media ? { [`${message.media}Message`]: { caption } } : { conversation: message.text };
     const incoming = {
       key: { id: message.messageId, remoteJid: message.jid, remoteJidAlt: message.altJid,
-        participant: message.participant, fromMe: message.fromMe ?? false },
-      message: { conversation: message.text },
+        participant: message.participant, participantAlt: message.participantAlt, fromMe: message.fromMe ?? false },
+      message: content,
       messageTimestamp: message.timestamp ?? Math.floor(Date.now() / 1000),
       pushName: "Cliente do teste de receção"
     };

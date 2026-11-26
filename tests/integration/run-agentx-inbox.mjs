@@ -1189,6 +1189,104 @@ try {
     assert.ok(!JSON.stringify(otherOrigin).includes("Grupo de teste de campanhas"));
     console.log("Campaign pilot passed: private cover, authorized group, one acknowledged promotion and one scoped lead attribution.");
 
+    const shopGroup = "120363000000002@g.us";
+    const shopper = "258842210001";
+    const shopperJid = `${shopper}@s.whatsapp.net`;
+    const groupPath = `/whatsapp/groups/${encodeURIComponent(shopGroup)}`;
+    const moderationPath = `${groupPath}/moderation`;
+    const groupConfig = (path, method, body, index = 0) => fetch(app.base + "/api" + path, {
+      method, headers: { authorization: `Bearer ${userTokens[index]}`, "content-type": "application/json" },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(12000)
+    });
+    const groupIngress = (messageId, overrides = {}) => app.simulate("ingress", {
+      jid: shopGroup, participant: shopperJid, messageId, ...overrides
+    });
+    const shopSends = () => app.outbound.filter(({ jid }) => jid === shopGroup);
+    await groupIngress("fixture-shop-disabled", { text: "/loja" });
+    assert.equal(shopSends().length, 0);
+
+    const moderation = {
+      moderation_actions: { image: "delete", voice: "warn", document: "review" },
+      moderation_warning: "Atenção {membro}, regra deste grupo: {motivo}.", catalog_sales_enabled: true
+    };
+    assert.equal((await api(`${groupPath}/rules`, 0, { active: true })).status, 200);
+    assert.equal((await groupConfig(moderationPath, "PUT", moderation, 1)).status, 403);
+    const updateModeration = await groupConfig(moderationPath, "PUT", moderation);
+    assert.equal(updateModeration.status, 200, await updateModeration.clone().text());
+    const [configuredGroup] = await read("group_rules", `?user_id=eq.${owner}&group_jid=eq.${shopGroup}`);
+    assert.deepEqual(configuredGroup.moderation_actions, moderation.moderation_actions);
+    assert.equal(configuredGroup.catalog_sales_enabled, true);
+
+    await groupIngress("fixture-group-delete-image", { media: "image" });
+    await groupIngress("fixture-group-delete-image", { media: "image" });
+    const removed = shopSends().filter(({ content }) => content.delete);
+    assert.equal(removed.length, 1);
+    assert.equal(removed[0].content.delete.id, "fixture-group-delete-image");
+    assert.equal(removed[0].content.delete.participant, shopperJid);
+    await groupIngress("fixture-group-warn-voice", { media: "audio" });
+    const warning = shopSends().find(({ content }) => /Atenção/.test(content.text ?? ""));
+    assert.ok(warning);
+    assert.match(warning.content.text, /regra deste grupo:.*(?:voz|áudio)/i);
+    assert.ok(warning.content.mentions.includes(shopperJid));
+    const sendCountBeforeReview = shopSends().length;
+    await groupIngress("fixture-group-review-document", { media: "document", text: "Nota privada do teste de moderação" });
+    assert.equal(shopSends().length, sendCountBeforeReview);
+    const eventsPath = `?user_id=eq.${owner}&group_jid=eq.${shopGroup}`;
+    const [pendingReview] = await read("agentx_group_events", `${eventsPath}&source_message_id=eq.fixture-group-review-document`);
+    assert.equal(pendingReview.rule, "document");
+    assert.equal(pendingReview.action, "review");
+    assert.equal(pendingReview.outcome, "queued_review");
+    assert.equal(pendingReview.review_status, "pending");
+    const listModeration = await api(moderationPath);
+    assert.equal(listModeration.status, 200);
+    const moderationData = await listModeration.text();
+    assert.match(moderationData, /document/);
+    assert.doesNotMatch(moderationData, /Nota privada do teste/);
+    const reviewPath = `${moderationPath}/reviews/${pendingReview.id}`;
+    assert.equal((await groupConfig(reviewPath, "PATCH", { decision: "reviewed" }, 1)).status, 403);
+    const reviewAction = await groupConfig(reviewPath, "PATCH", { decision: "reviewed" });
+    assert.equal(reviewAction.status, 200, await reviewAction.clone().text());
+    const [reviewed] = await read("agentx_group_events", `${eventsPath}&id=eq.${pendingReview.id}`);
+    assert.equal(reviewed.review_status, "reviewed");
+    assert.ok(reviewed.reviewed_at);
+    assert.equal(shopSends().length, sendCountBeforeReview);
+    console.log("Group moderation passed: one verified media deletion, an audio warning and a privately reviewed document.");
+
+    const noShopReply = [
+      ["fixture-shop-group-chat", { text: "O que vendem?" }],
+      ["fixture-shop-unverified-member", { text: "/loja", participant: "258842210099@s.whatsapp.net" }],
+      ["fixture-shop-other-account", { text: "/loja", account: "other" }],
+      ["fixture-shop-stale", { text: "/loja", timestamp: Math.floor(Date.now() / 1000) - 300 }],
+      ["fixture-shop-append", { text: "/loja", upsertType: "append" }],
+      ["fixture-shop-self", { text: "/loja", fromMe: true, participant: "258860000001@s.whatsapp.net" }]
+    ];
+    for (const [messageId, fields] of noShopReply) await groupIngress(messageId, fields);
+    assert.equal(shopSends().length, sendCountBeforeReview);
+    await groupIngress("fixture-shop-list", { text: "/loja" });
+    assert.equal(shopSends().length, sendCountBeforeReview + 1);
+    assert.match(shopSends().at(-1).content.text, /Livro do piloto.*250\s+MT/i);
+    const shopCommand = { text: "/loja Livro do piloto" };
+    await groupIngress("fixture-shop-product", shopCommand);
+    await groupIngress("fixture-shop-product", shopCommand);
+    assert.equal(shopSends().length, sendCountBeforeReview + 2);
+    const shopText = shopSends().at(-1).content.text;
+    assert.match(shopText, /Livro do piloto.*250\s+MT/i);
+    assert.doesNotMatch(shopText, /258840000005|258850000004|258870000006|AGX-|agentx-product-files/);
+    const privateUrl = new URL(shopText.match(/https:\/\/wa\.me\/[^\s]+/)?.[0]);
+    assert.equal(privateUrl.pathname, "/258860000001");
+    const privateText = privateUrl.searchParams.get("text");
+    assert.match(privateText, /preço de Livro do piloto/i);
+    const shopLead = `?user_id=eq.${owner}&phone=eq.${shopper}`;
+    const shopOrders = `?user_id=eq.${owner}&customer_phone=eq.${shopper}`;
+    assert.deepEqual(await read("leads", shopLead), []);
+    assert.deepEqual(await read("orders", shopOrders), []);
+    await app.simulate("ingress", { jid: shopperJid, text: privateText, messageId: "fixture-shop-private-enquiry" });
+    assert.equal(app.outbound.at(-1).jid, shopperJid);
+    assert.match(app.outbound.at(-1).content.text, /Livro do piloto.*250\s+MT/i);
+    assert.equal((await read("leads", shopLead)).length, 1);
+    assert.deepEqual(await read("orders", shopOrders), []);
+    console.log("Opt-in group shop passed: eligible members can browse once and continue privately without exposing CRM or payment information.");
+
     const text = "teste de receção idempotente";
     const responseText = "Resposta única da automação";
     const jid = "258841110099@s.whatsapp.net";

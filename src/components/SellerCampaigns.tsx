@@ -20,9 +20,11 @@ function message(error: unknown, fallback: string) {
 }
 
 export function SellerCampaigns() {
-  const { hash } = useLocation();
+  const { hash, search } = useLocation();
+  const requestedGroup = hash === "#campanhas" ? new URLSearchParams(search).get("group") : null;
   const section = useRef<HTMLElement>(null);
   const requestKey = useRef<string | null>(null);
+  const appliedGroupLink = useRef<string | null>(null);
   const [open, setOpen] = useState(hash === "#campanhas");
   const [data, setData] = useState<CampaignsData | null>(null);
   const [revision, setRevision] = useState(0);
@@ -33,7 +35,7 @@ export function SellerCampaigns() {
   const [productId, setProductId] = useState("");
   const [groupJid, setGroupJid] = useState("");
   const [caption, setCaption] = useState("");
-  const [mode, setMode] = useState<"now" | "scheduled">("now");
+  const [mode, setMode] = useState<"now" | "scheduled">(requestedGroup ? "scheduled" : "now");
   const [scheduledAt, setScheduledAt] = useState("");
   const [preview, setPreview] = useState("");
   const [cover, setCover] = useState("");
@@ -43,6 +45,7 @@ export function SellerCampaigns() {
   const [cancelCampaign, setCancelCampaign] = useState<string | null>(null);
   const product = data?.products.find((entry) => entry.id === productId);
   const group = data?.groups.find((entry) => entry.id === groupJid);
+  const requestedGroupUnavailable = requestedGroup && data && !data.groups.some((entry) => entry.id === requestedGroup);
 
   useEffect(() => {
     if (hash !== "#campanhas") return;
@@ -63,6 +66,14 @@ export function SellerCampaigns() {
     });
     return () => controller.abort();
   }, [open, revision]);
+
+  useEffect(() => {
+    if (!requestedGroup || !data || appliedGroupLink.current === requestedGroup) return;
+    appliedGroupLink.current = requestedGroup;
+    setGroupJid(data.groups.some((entry) => entry.id === requestedGroup) ? requestedGroup : "");
+    setMode("scheduled");
+    changeDraft();
+  }, [requestedGroup, data]);
 
   useEffect(() => {
     setCover("");
@@ -234,6 +245,7 @@ export function SellerCampaigns() {
                 {data.groups.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </label>
+            {requestedGroupUnavailable && !groupJid && <p className="text-sm text-amber-900">O grupo selecionado não está disponível para publicar. Escolhe um grupo em que a conta ligada pode escrever.</p>}
             <label className="block text-sm font-medium">Texto da campanha (opcional)
               <textarea className="min-h-20 w-full rounded-xl border border-slate-200 p-3" maxLength={400} value={caption}
                 onChange={(event) => { setCaption(event.target.value); changeDraft(); }} />
@@ -249,7 +261,7 @@ export function SellerCampaigns() {
               <Input type="datetime-local" required value={scheduledAt} onChange={(event) => { setScheduledAt(event.target.value); changeDraft(); }} />
             </label>}
           </fieldset>
-          <Button type="submit" disabled={Boolean(working) || !product || !group || !cover || Boolean(preview)}>
+          <Button type="submit" disabled={Boolean(working) || !product || !group || !cover || Boolean(preview) || (mode === "scheduled" && !data.schedulerEnabled)}>
             {working === "preview" ? "A preparar…" : "Rever publicação"}
           </Button>
         </form>}

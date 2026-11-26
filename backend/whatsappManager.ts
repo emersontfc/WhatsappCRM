@@ -1,4 +1,5 @@
-import { isGroupJid, moderateGroupMessage, welcomeGroupParticipants } from "./services/groupModeration.ts";
+import { groupContentRule, isGroupJid, moderateGroupMessage, welcomeGroupParticipants } from "./services/groupModeration.ts";
+import { parseGroupSalesCommand, processGroupSales } from "./services/groupSales.ts";
 import { GROUP_PROOF_LIMIT, groupProofOrderNumber, processGroupPaymentProof } from "./services/groupPaymentProofs.ts";
 import { alertOperator, handleOperatorCommand, isOperatorSelfChat, parseOperatorCommand } from "./services/whatsappOperator.ts";
 import makeWASocket, {
@@ -359,6 +360,8 @@ export class WhatsAppManager implements IWhatsAppTransport {
           const media = content?.imageMessage ?? content?.documentMessage;
           const proofText = content?.conversation || content?.extendedTextMessage?.text ||
             content?.imageMessage?.caption || content?.documentMessage?.caption || "";
+          if (type === "notify" && await moderateGroupMessage(socket, userId, jid, msg.key,
+            proofText || text, groupContentRule(content))) continue;
           if (!isMe && groupProofOrderNumber(proofText, Boolean(media))) {
             if (type === "notify") {
               void processGroupPaymentProof({ userId, jid, key: msg.key, text: proofText, linked: socket.user,
@@ -368,9 +371,16 @@ export class WhatsAppManager implements IWhatsAppTransport {
                 } : undefined }).catch(() => console.warn("[GroupProofs] Could not process a group proof"));
             }
           } else {
-            await this.syncMessage(userId, msg);
+            const shopText = content?.conversation || content?.extendedTextMessage?.text || "";
+            const shopCommand = type === "notify" && isMe === false && parseGroupSalesCommand(shopText);
+            const saved = await this.syncMessage(userId, msg, undefined, undefined, undefined, undefined, undefined, undefined,
+              { liveIngress: Boolean(shopCommand) });
+            if (shopCommand && saved?.agentx_live_ingress === true) {
+              await processGroupSales({ userId, jid, key: msg.key, text: shopText, timestamp: saved.timestamp,
+                linked: socket.user, loadGroup: () => socket.groupMetadata(jid),
+                send: (reply) => socket.sendMessage(jid, { text: reply }) });
+            }
           }
-          if (type === "notify") await moderateGroupMessage(socket, userId, jid, msg.key, proofText || text);
           continue;
         }
 
@@ -497,6 +507,9 @@ export class WhatsAppManager implements IWhatsAppTransport {
       }
 
       if (!text && !explicitMediaUrl) return null;
+      if (msg.key.fromMe) {
+        text = text.replace(/(\/book\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})#manage=[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/gi, "$1");
+      }
 
       const isGroupOrBroadcast = jid.includes("@g.us") || 
                                  jid.includes("@broadcast") || 
