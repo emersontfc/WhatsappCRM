@@ -2,7 +2,7 @@ BEGIN;
 
 DO $$
 BEGIN
-  ASSERT (SELECT count(*) = 1 FROM agentx_internal.installation WHERE version = '0000+00-26+20261123');
+  ASSERT (SELECT count(*) = 1 FROM agentx_internal.installation WHERE version = '0000+00-31+20261123');
   ASSERT to_regprocedure('public.exec_sql(text)') IS NULL;
   ASSERT NOT EXISTS (SELECT 1 FROM pg_class AS relation
     WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p') AND NOT relrowsecurity);
@@ -19,6 +19,9 @@ BEGIN
   ASSERT NOT has_table_privilege('authenticated', 'public.subscriptions', 'INSERT,UPDATE,DELETE');
   ASSERT has_function_privilege('service_role', 'public.agentx_seller_confirm_delivery(uuid,uuid)', 'EXECUTE');
   ASSERT NOT has_function_privilege('authenticated', 'public.agentx_seller_confirm_delivery(uuid,uuid)', 'EXECUTE');
+  ASSERT NOT has_table_privilege('authenticated', 'public.agentx_whatsapp_action_claims', 'SELECT,INSERT');
+  ASSERT NOT has_function_privilege('anon', 'public.agentx_claim_whatsapp_action(uuid,text)', 'EXECUTE');
+  ASSERT NOT has_function_privilege('authenticated', 'public.agentx_claim_whatsapp_action(uuid,text)', 'EXECUTE');
 END;
 $$;
 
@@ -88,4 +91,20 @@ BEGIN
   ASSERT (SELECT count(*) = 0 FROM storage.objects);
 END;
 $$;
+SET LOCAL ROLE service_role;
+INSERT INTO public.messages (user_id, type, text, msg_id, agentx_live_ingress) VALUES
+  ('91000000-0000-4000-8000-000000000001', 'inbound', 'Histórico', 'legacy-action', NULL),
+  ('91000000-0000-4000-8000-000000000001', 'inbound', 'Actual', 'live-action', true),
+  ('91000000-0000-4000-8000-000000000002', 'inbound', 'Actual de outra conta', 'live-action', true);
+DO $$
+BEGIN
+  ASSERT public.agentx_whatsapp_action_ready();
+  ASSERT NOT public.agentx_claim_whatsapp_action('91000000-0000-4000-8000-000000000001', 'legacy-action');
+  ASSERT NOT public.agentx_claim_whatsapp_action('91000000-0000-4000-8000-000000000002', 'legacy-action');
+  ASSERT public.agentx_claim_whatsapp_action('91000000-0000-4000-8000-000000000001', 'live-action');
+  ASSERT NOT public.agentx_claim_whatsapp_action('91000000-0000-4000-8000-000000000001', 'live-action');
+  ASSERT public.agentx_claim_whatsapp_action('91000000-0000-4000-8000-000000000002', 'live-action');
+END;
+$$;
+RESET ROLE;
 ROLLBACK;

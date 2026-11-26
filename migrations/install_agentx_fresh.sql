@@ -58,6 +58,11 @@ COMMIT;
 \ir ../supabase/migrations/24_appointment_booking_delivery.sql
 \ir ../supabase/migrations/25_group_payment_proofs.sql
 \ir ../supabase/migrations/26_seller_delivery_recovery.sql
+\ir ../supabase/migrations/27_whatsapp_action_claims.sql
+\ir ../supabase/migrations/28_group_policy_schedule.sql
+\ir ../supabase/migrations/29_catalog_campaigns.sql
+\ir ../supabase/migrations/30_whatsapp_quoted_agenda.sql
+\ir ../supabase/migrations/31_whatsapp_operator_audit.sql
 \ir apply_agentx_v2.sql
 
 BEGIN;
@@ -93,6 +98,11 @@ BEGIN
      OR public.agentx_schedule_dispatch_ready() IS DISTINCT FROM true
      OR public.agentx_appointment_contract_ready() IS DISTINCT FROM true
      OR public.agentx_group_proof_contract_ready() IS DISTINCT FROM true
+     OR public.agentx_whatsapp_action_ready() IS DISTINCT FROM true
+     OR public.agentx_group_policy_ready() IS DISTINCT FROM true
+     OR public.agentx_catalog_campaigns_ready() IS DISTINCT FROM true
+     OR public.agentx_whatsapp_quote_ready() IS DISTINCT FROM true
+     OR public.agentx_whatsapp_operator_audit_ready() IS DISTINCT FROM true
      OR NOT has_function_privilege('service_role', 'public.agentx_seller_confirm_delivery(uuid,uuid)', 'EXECUTE')
      OR public.agentx_contact_phone('841234567') IS DISTINCT FROM '258841234567' THEN
     RAISE EXCEPTION 'AgentX fresh install: schema contract is incomplete';
@@ -100,7 +110,7 @@ BEGIN
 END;
 $$;
 
-INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-26+20261123');
+INSERT INTO agentx_internal.installation (version) VALUES ('0000+00-31+20261123');
 COMMIT;
 NOTIFY pgrst, 'reload schema';
 SELECT pg_advisory_unlock(879621, 3);
