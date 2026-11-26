@@ -43,9 +43,10 @@ LANGUAGE sql STABLE SET search_path = '' AS $$
   WHERE p.user_id = p_user;
 $$;
 
-CREATE OR REPLACE FUNCTION public.agentx_catalog_insert_reserved_order(
+CREATE OR REPLACE FUNCTION public.agentx_catalog_write_order(
   p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
-  p_contact uuid, p_method text, p_order_number text, p_expected_price numeric, p_expected_currency text
+  p_contact uuid, p_method text, p_order_number text, p_expected_price numeric, p_expected_currency text,
+  p_hold boolean
 ) RETURNS jsonb LANGUAGE plpgsql SET search_path = '' AS $$
 DECLARE
   product public.products%ROWTYPE;
@@ -63,22 +64,27 @@ BEGIN
 
   SELECT * INTO product FROM public.products p WHERE p.id = p_product AND p.user_id = p_user
     AND p.is_active FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Produto indisponível' USING ERRCODE = 'P0002'; END IF;
+  IF NOT FOUND THEN
+    IF NOT p_hold THEN RAISE EXCEPTION 'Produto indisponível ou sem stock suficiente'; END IF;
+    RAISE EXCEPTION 'Produto indisponível' USING ERRCODE = 'P0002';
+  END IF;
   IF (p_expected_price IS NOT NULL AND product.price IS DISTINCT FROM p_expected_price)
     OR (p_expected_currency IS NOT NULL AND upper(btrim(product.currency)) IS DISTINCT FROM upper(btrim(p_expected_currency))) THEN
     RAISE EXCEPTION 'Catalog price or currency changed' USING ERRCODE = 'P0001';
   END IF;
   IF product.price IS NULL OR NOT (product.price > 0 AND product.price * p_quantity < 10000000000) THEN
+    IF NOT p_hold THEN RAISE EXCEPTION 'Produto indisponível ou sem stock suficiente'; END IF;
     RAISE EXCEPTION 'Produto sem preço válido para venda' USING ERRCODE = '22023';
   END IF;
   IF COALESCE(product.stock, 0) - public.agentx_seller_held_units(p_user, p_product) < p_quantity THEN
+    IF NOT p_hold THEN RAISE EXCEPTION 'Produto indisponível ou sem stock suficiente'; END IF;
     RAISE EXCEPTION 'Insufficient available stock' USING ERRCODE = 'P0001';
   END IF;
 
   INSERT INTO public.orders (order_number, user_id, contact_id, customer_name, customer_phone, total_amount,
     currency, status, payment_method, tracks_catalog_stock, reservation_expires_at)
   VALUES (p_order_number, p_user, p_contact, p_customer, p_phone, product.price * p_quantity, product.currency,
-    'awaiting_payment', p_method, true, clock_timestamp() + interval '30 minutes')
+    'awaiting_payment', p_method, p_hold, CASE WHEN p_hold THEN clock_timestamp() + interval '30 minutes' END)
   RETURNING * INTO created;
   INSERT INTO public.order_items (order_id, product_id, product_name, quantity, unit_price, total_price, deliverable_snapshot)
   VALUES (created.id, product.id, product.name, p_quantity, product.price, created.total_amount,
@@ -88,18 +94,21 @@ BEGIN
 END;
 $$;
 
+-- Legacy callers do not know reservation deadlines. Activate holds only on the
+-- explicit reserved-order RPC once a deadline-aware release starts using it.
 CREATE OR REPLACE FUNCTION public.agentx_catalog_create_order(
   p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
   p_contact uuid, p_method text, p_order_number text
 ) RETURNS jsonb LANGUAGE sql SET search_path = '' AS $$
-  SELECT public.agentx_catalog_insert_reserved_order(p_user, p_product, p_quantity, public.agentx_contact_phone(p_phone),
-    p_customer, p_contact, p_method, p_order_number, NULL, NULL);
+  SELECT public.agentx_catalog_write_order(p_user, p_product, p_quantity, p_phone,
+    p_customer, p_contact, p_method, p_order_number, NULL, NULL, false);
 $$;
 
-CREATE OR REPLACE FUNCTION public.agentx_whatsapp_reserve_order(
+CREATE OR REPLACE FUNCTION public.agentx_whatsapp_write_order(
   p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
   p_contact uuid, p_method text, p_order_number text, p_source_message text,
-  p_expected_price numeric, p_expected_currency text, p_destination jsonb, p_requires_destination boolean
+  p_expected_price numeric, p_expected_currency text, p_destination jsonb, p_requires_destination boolean,
+  p_hold boolean
 ) RETURNS jsonb LANGUAGE plpgsql SET search_path = '' AS $$
 DECLARE
   existing public.orders%ROWTYPE;
@@ -141,8 +150,8 @@ BEGIN
 
   -- Approval and creation both acquire the lead before any product lock.
   linked_lead := public.agentx_capture_sales_lead(p_user, phone, p_contact, p_customer, 'order');
-  created := public.agentx_catalog_insert_reserved_order(p_user, p_product, p_quantity, phone, p_customer,
-    p_contact, p_method, p_order_number, p_expected_price, p_expected_currency);
+  created := public.agentx_catalog_write_order(p_user, p_product, p_quantity, phone, p_customer,
+    p_contact, p_method, p_order_number, p_expected_price, p_expected_currency, p_hold);
 
   IF p_destination IS NOT NULL AND EXISTS (
     SELECT 1 FROM public.products p WHERE p.id = p_product AND p.user_id = p_user AND p.type = 'digital'
@@ -151,7 +160,7 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Produto digital sem ficheiro ou conteúdo para entrega' USING ERRCODE = '22023';
   END IF;
-  UPDATE public.orders o SET lead_id = linked_lead, source_message_id = p_source_message,
+  UPDATE public.orders o SET lead_id = linked_lead, source_message_id = p_source_message, tracks_catalog_stock = true,
     seller_payment = CASE WHEN p_destination IS NOT NULL THEN
       jsonb_build_object('method', p_method, 'recipient', p_destination->>'recipient', 'name', p_destination->>'name') END
   WHERE o.id = (created->>'id')::uuid AND o.user_id = p_user RETURNING to_jsonb(o) INTO created;
@@ -165,14 +174,14 @@ CREATE OR REPLACE FUNCTION public.agentx_whatsapp_create_order(
   p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
   p_contact uuid, p_method text, p_order_number text, p_source_message text
 ) RETURNS jsonb LANGUAGE sql SET search_path = '' AS $$
-  SELECT public.agentx_whatsapp_reserve_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
-    p_method, p_order_number, p_source_message, NULL, NULL, NULL, false);
+  SELECT public.agentx_whatsapp_write_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
+    p_method, p_order_number, p_source_message, NULL, NULL, NULL, false, false);
 $$;
 
-CREATE OR REPLACE FUNCTION public.agentx_seller_create_reserved_order(
+CREATE OR REPLACE FUNCTION public.agentx_seller_write_order(
   p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
   p_contact uuid, p_method text, p_order_number text, p_source_message text,
-  p_expected_price numeric DEFAULT NULL, p_expected_currency text DEFAULT NULL
+  p_expected_price numeric, p_expected_currency text, p_hold boolean
 ) RETURNS jsonb LANGUAGE plpgsql SET search_path = '' AS $$
 DECLARE
   settings public.agentx_seller_settings%ROWTYPE;
@@ -191,17 +200,26 @@ BEGIN
   ELSE
     chosen_method := COALESCE(p_method, 'mpesa');
   END IF;
-  RETURN public.agentx_whatsapp_reserve_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
-    chosen_method, p_order_number, p_source_message, p_expected_price, p_expected_currency, destination, requires_destination);
+  RETURN public.agentx_whatsapp_write_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
+    chosen_method, p_order_number, p_source_message, p_expected_price, p_expected_currency, destination, requires_destination, p_hold);
 END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.agentx_seller_create_reserved_order(
+  p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
+  p_contact uuid, p_method text, p_order_number text, p_source_message text,
+  p_expected_price numeric DEFAULT NULL, p_expected_currency text DEFAULT NULL
+) RETURNS jsonb LANGUAGE sql SET search_path = '' AS $$
+  SELECT public.agentx_seller_write_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
+    p_method, p_order_number, p_source_message, p_expected_price, p_expected_currency, true);
 $$;
 
 CREATE OR REPLACE FUNCTION public.agentx_seller_create_order(
   p_user uuid, p_product uuid, p_quantity integer, p_phone text, p_customer text,
   p_contact uuid, p_method text, p_order_number text, p_source_message text
 ) RETURNS jsonb LANGUAGE sql SET search_path = '' AS $$
-  SELECT public.agentx_seller_create_reserved_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
-    p_method, p_order_number, p_source_message);
+  SELECT public.agentx_seller_write_order(p_user, p_product, p_quantity, p_phone, p_customer, p_contact,
+    p_method, p_order_number, p_source_message, NULL, NULL, false);
 $$;
 
 -- Every change that acquires or consumes a hold locks the current order before
@@ -373,16 +391,18 @@ $$;
 
 REVOKE ALL ON FUNCTION public.agentx_seller_hold_is_live(text,timestamptz,timestamptz),
   public.agentx_seller_held_units(uuid,uuid,uuid), public.agentx_seller_catalog_availability(uuid),
-  public.agentx_catalog_insert_reserved_order(uuid,uuid,integer,text,text,uuid,text,text,numeric,text),
-  public.agentx_whatsapp_reserve_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text,jsonb,boolean),
+  public.agentx_catalog_write_order(uuid,uuid,integer,text,text,uuid,text,text,numeric,text,boolean),
+  public.agentx_whatsapp_write_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text,jsonb,boolean,boolean),
+  public.agentx_seller_write_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text,boolean),
   public.agentx_seller_create_reserved_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text),
   public.agentx_lock_seller_order_stock(uuid,uuid), public.agentx_guard_seller_stock_review(),
   public.agentx_guard_product_stock_holds(), public.agentx_seller_cancel_order(uuid,uuid),
   public.agentx_expire_seller_reservations(integer), public.agentx_seller_reservations_ready() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.agentx_seller_hold_is_live(text,timestamptz,timestamptz),
   public.agentx_seller_held_units(uuid,uuid,uuid), public.agentx_seller_catalog_availability(uuid),
-  public.agentx_catalog_insert_reserved_order(uuid,uuid,integer,text,text,uuid,text,text,numeric,text),
-  public.agentx_whatsapp_reserve_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text,jsonb,boolean),
+  public.agentx_catalog_write_order(uuid,uuid,integer,text,text,uuid,text,text,numeric,text,boolean),
+  public.agentx_whatsapp_write_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text,jsonb,boolean,boolean),
+  public.agentx_seller_write_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text,boolean),
   public.agentx_seller_create_reserved_order(uuid,uuid,integer,text,text,uuid,text,text,text,numeric,text),
   public.agentx_lock_seller_order_stock(uuid,uuid), public.agentx_seller_cancel_order(uuid,uuid),
   public.agentx_expire_seller_reservations(integer), public.agentx_seller_reservations_ready() TO service_role;

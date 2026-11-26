@@ -231,7 +231,7 @@ Numa instalação com a migração 32, aplique `supabase/migrations/33_appointme
 
 Se a base já recebeu a migração 34, aplique `supabase/migrations/35_seller_stock_reservations.sql` e `supabase/migrations/36_seller_conversation_quotes.sql` por esta ordem. Antes de publicar, confirme que `SELECT public.agentx_seller_reservations_ready(), public.agentx_seller_quotes_ready();` devolve `true` em ambas as colunas.
 
-O cliente pode confirmar a proposta durante 10 minutos. Um pedido confirmado reserva stock durante 30 minutos. Se o comprovativo entrar em revisão antes do prazo, o stock fica reservado até à decisão da equipa. O stock volta a ficar disponível assim que uma reserva sem comprovativo vencer, mesmo entre execuções do agendador.
+Depois de publicar a versão que comunica o prazo ao cliente, o cliente pode confirmar a proposta durante 10 minutos e o pedido confirmado reserva stock durante 30 minutos. Se o comprovativo entrar em revisão antes do prazo, o stock fica reservado até à decisão da equipa. O stock volta a ficar disponível assim que uma reserva sem comprovativo vencer, mesmo entre execuções do agendador.
 
 Se for preciso voltar a uma imagem anterior à implementação das reservas, pause temporariamente os agentes de vendas. Reative-os quando a versão que verifica os prazos das reservas estiver em execução.
 
