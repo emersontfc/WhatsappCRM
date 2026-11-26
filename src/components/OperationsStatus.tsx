@@ -9,7 +9,7 @@ const modules = [
   ["agent", "Agente de IA", "/agent"],
   ["agenda", "Agenda de mensagens", "/schedule"],
   ["sales", "Catálogo, vendas e pagamentos", "/orders"],
-  ["delivery", "Entregas digitais", "/digital-orders"],
+  ["delivery", "Entrega de ficheiros", "/digital-orders"],
   ["bookings", "Marcações e lembretes", "/appointments"],
   ["groups", "Moderação de grupos", "/groups"]
 ] as const;

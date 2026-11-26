@@ -1,10 +1,10 @@
 import { Link, useSearchParams } from "react-router-dom";
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Button } from "../components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
-import { apiFetch } from "../lib/api";
+import { ApiError, apiFetch } from "../lib/api";
 
 const api = "/api/v2/commerce";
 const field = "w-full rounded-lg border border-slate-300 bg-transparent p-2 dark:border-slate-700";
@@ -80,6 +80,52 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
     <CardContent className="grid gap-4">{children}</CardContent>
   </Card>;
+}
+
+function suggestCompanyIdentifier(name: string) {
+  const identifier = name.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 63).replace(/-+$/, "");
+  return identifier && identifier.length < 3 ? identifier + "-empresa" : identifier;
+}
+
+function CreateOrganizationForm({ onCreated }: { onCreated: (id: string) => void }) {
+  const [name, setName] = useState("");
+  const [editedIdentifier, setEditedIdentifier] = useState<string | null>(null);
+  const identifierHint = useId();
+  const suggestion = suggestCompanyIdentifier(name);
+
+  return <ActionForm label="Criar empresa" submit={async (data) => {
+    try {
+      const result = await write("/organizations", { name: data.get("name"), slug: data.get("slug") });
+      setName("");
+      setEditedIdentifier(null);
+      onCreated(result.data.id);
+      toast.success("Empresa criada.");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        throw new Error("Esse identificador já está em uso. Edita-o e tenta novamente.");
+      }
+      throw error;
+    }
+  }}>
+    <label className="grid gap-1 text-sm font-medium">Nome da empresa
+      <Input name="name" minLength={2} maxLength={120} required value={name}
+        onChange={(event) => setName(event.target.value)} />
+    </label>
+    <div className="grid gap-1">
+      <label className="grid gap-1 text-sm font-medium">Identificador
+        <Input name="slug" minLength={3} maxLength={63} pattern={String.raw`[a-z0-9][a-z0-9\-]{2,62}`}
+          placeholder="loja-central" autoCapitalize="none" spellCheck={false} aria-describedby={identifierHint}
+          required value={editedIdentifier ?? suggestion} onChange={(event) => setEditedIdentifier(event.target.value)} />
+      </label>
+      <p id={identifierHint} className="text-sm text-slate-600 dark:text-slate-300">
+        Sugerido a partir do nome. Podes editar com letras minúsculas, números e hífen.
+      </p>
+      {editedIdentifier !== null && suggestion && <button type="button"
+        className="justify-self-start rounded text-sm font-semibold text-emerald-800 underline focus-visible:ring-2 focus-visible:ring-emerald-600 dark:text-emerald-300"
+        onClick={() => setEditedIdentifier(null)}>Usar sugestão</button>}
+    </div>
+  </ActionForm>;
 }
 
 function saveFile(file: Blob, name: string) {
@@ -256,8 +302,8 @@ export default function DigitalOrders({ accountId }: { accountId: string }) {
     </header>
     {message && <p role="status">{message}</p>}
     {!message && !organization && <Section title="Sem acesso a uma fila de pagamentos">
-      <p className="text-sm">Pede ao titular da empresa para te atribuir acesso financeiro. Se és o titular, abre Pedidos digitais para gerir a empresa.</p>
-      <Link to="/digital-orders" className="text-sm font-semibold text-emerald-800 underline">Abrir Pedidos digitais</Link>
+      <p className="text-sm">Pede ao titular da empresa para te atribuir acesso financeiro. Se és o titular, podes gerir a empresa em Entrega de ficheiros.</p>
+      <Link to="/digital-orders" className="text-sm font-semibold text-emerald-800 underline">Abrir Entrega de ficheiros</Link>
     </Section>}
     {!message && organization && <>
       <label className="max-w-sm text-sm font-medium">Empresa<select className={field} value={organizationId} onChange={(event) => setSelected(event.target.value)}>
@@ -269,7 +315,12 @@ export default function DigitalOrders({ accountId }: { accountId: string }) {
 
   return <div className="mx-auto grid max-w-5xl gap-5 p-4 sm:p-6">
     <header className="flex flex-wrap items-center justify-between gap-3">
-      <h1 className="text-2xl font-bold">Pedidos digitais</h1>
+      <div className="grid gap-1">
+        <h1 className="text-2xl font-bold">Entrega de ficheiros</h1>
+        <p className="max-w-prose text-sm text-slate-600 dark:text-slate-300">
+          Usa esta área quando o cliente precisa de descarregar um ficheiro privado no AgentX depois da confirmação do pagamento.
+        </p>
+      </div>
       <Button variant="outline" onClick={refresh}>Atualizar</Button>
     </header>
     {message && <p role="status">{message}</p>}
@@ -279,7 +330,7 @@ export default function DigitalOrders({ accountId }: { accountId: string }) {
         <p className="mt-2">Partilhe este identificador com o vendedor para associar um pedido à sua conta.</p>
         <code className="block break-all text-sm">{accountId}</code>
       </details>
-      {!message && !orders.length && <p>Sem pedidos digitais associados à sua conta.</p>}
+      {!message && !orders.length && <p>Ainda não tens pedidos com ficheiros associados à tua conta.</p>}
       {orders.map((order) => <article key={order.id} className="grid gap-3 rounded-lg border p-4">
         <div className="grid gap-1">
           <strong>{order.organizations.name} · {price(order.amount, order.currency)}</strong>
@@ -319,38 +370,40 @@ export default function DigitalOrders({ accountId }: { accountId: string }) {
         </div>}
       </article>)}
     </Section>
-    <Section title="Empresas">
-      {organizations.length > 0 && <label>Empresa ativa<select className={field} value={selected} onChange={(event) => setSelected(event.target.value)}>
+    {organization && <label className="max-w-sm text-sm font-medium">Empresa ativa
+      <select className={field} value={organizationId} onChange={(event) => setSelected(event.target.value)}>
         {organizations.map((item) => <option key={item.organization_id} value={item.organization_id}>{item.organizations.name}</option>)}
-      </select></label>}
+      </select>
+    </label>}
+    {organization && ["owner", "admin", "operator"].includes(organization.role) && <SalesForms key={organizationId} id={organizationId} />}
+    {organization && ["owner", "finance_admin"].includes(organization.role) && <ReviewQueue key={organizationId} id={organizationId} />}
+    <Card>
       <details>
-        <summary className="cursor-pointer font-medium">Criar empresa</summary>
-        <div className="mt-3"><ActionForm label="Criar empresa" submit={async (data) => {
-          const result = await write("/organizations", { name: data.get("name"), slug: data.get("slug") });
-          setSelected(result.data.id);
-          refresh();
-        }}>
-          <label>Nome<Input name="name" minLength={2} maxLength={120} required /></label>
-          <label>Identificador (ex. loja-central)<Input name="slug" pattern={String.raw`[a-z0-9][a-z0-9\-]{2,62}`} required /></label>
-        </ActionForm></div>
+        <summary className="cursor-pointer rounded-xl p-5 text-base font-semibold focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-600">
+          Configuração
+        </summary>
+        <CardContent className="grid gap-5 border-t border-slate-200 pt-5 dark:border-slate-800">
+          <div className="grid max-w-lg gap-3">
+            <h2 className="text-sm font-semibold">Criar empresa</h2>
+            <CreateOrganizationForm onCreated={(id) => { setSelected(id); refresh(); }} />
+          </div>
+          {organization?.role === "owner" && <details key={organizationId}>
+            <summary className="cursor-pointer text-sm font-semibold">Alterar ou remover acesso</summary>
+            <div className="mt-3 max-w-lg"><ActionForm label="Guardar acesso" submit={async (data) => {
+              const member = encodeURIComponent(String(data.get("member")).trim());
+              const role = data.get("role");
+              await write(`/${organizationId}/members/${member}`, { role: role === "remove" ? null : role }, "PUT");
+              toast.success("Acesso atualizado");
+            }}>
+              <label>UUID da conta do membro<Input name="member" required /></label>
+              <label>Papel<select className={field} name="role">
+                {roles.map((role) => <option key={role}>{role}</option>)}
+                <option value="remove">Remover acesso</option>
+              </select></label>
+            </ActionForm></div>
+          </details>}
+        </CardContent>
       </details>
-      {organization?.role === "owner" && <details key={selected}>
-        <summary className="cursor-pointer font-medium">Alterar ou remover acesso</summary>
-        <div className="mt-3"><ActionForm label="Guardar acesso" submit={async (data) => {
-          const member = encodeURIComponent(String(data.get("member")).trim());
-          const role = data.get("role");
-          await write(`/${selected}/members/${member}`, { role: role === "remove" ? null : role }, "PUT");
-          toast.success("Acesso atualizado");
-        }}>
-          <label>UUID da conta do membro<Input name="member" required /></label>
-          <label>Papel<select className={field} name="role">
-            {roles.map((role) => <option key={role}>{role}</option>)}
-            <option value="remove">Remover acesso</option>
-          </select></label>
-        </ActionForm></div>
-      </details>}
-    </Section>
-    {organization && ["owner", "admin", "operator"].includes(organization.role) && <SalesForms key={selected} id={selected} />}
-    {organization && ["owner", "finance_admin"].includes(organization.role) && <ReviewQueue key={selected} id={selected} />}
+    </Card>
   </div>;
 }

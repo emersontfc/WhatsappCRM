@@ -12,7 +12,7 @@ const workflows = {
     icon: CreditCard,
     tasks: [
       { label: "Ver comprovativos de vendas", detail: "Confere valor e referência no prestador antes de aprovar.", to: "/orders?tab=verifications" },
-      { label: "Rever pagamentos digitais", detail: "Abre a fila da empresa se tens acesso financeiro.", to: "/digital-orders?view=review" },
+      { label: "Rever pagamentos da Entrega de ficheiros", detail: "Abre a fila da empresa se tens acesso financeiro.", to: "/digital-orders?view=review" },
       { label: "Acompanhar pedidos e entregas", detail: "Vê quais pedidos estão pagos e quais ainda aguardam entrega.", to: "/orders?tab=orders" }
     ]
   },

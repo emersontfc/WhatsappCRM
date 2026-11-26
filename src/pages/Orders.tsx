@@ -427,7 +427,7 @@ export default function Orders() {
             Vendedor
           </Link>
           <Link to="/digital-orders" className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50">
-            Pedidos digitais
+            Entrega de ficheiros
           </Link>
           <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
             <RefreshCw size={16} className={cn(loading && "animate-spin")} /> Atualizar
@@ -657,7 +657,7 @@ export default function Orders() {
             <p className="mt-1 text-slate-700">Confere no prestador se o valor do pedido entrou na conta da loja.</p>
             {query && <Link to="/orders?tab=verifications" className="mt-2 mr-4 inline-block font-semibold text-emerald-800 underline">Ver todos os comprovativos</Link>}
             <Link to="/digital-orders?view=review" className="mt-2 inline-block font-semibold text-emerald-800 underline">
-              Rever comprovativos de pedidos digitais
+              Rever comprovativos na Entrega de ficheiros
             </Link>
           </div>
           {loading ? <p role="status">A carregar comprovativos…</p> : proofsUnavailable ? (
