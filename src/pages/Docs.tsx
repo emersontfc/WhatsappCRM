@@ -1,474 +1,306 @@
-import React, { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import {
-  BookOpen,
-  Search,
-  MessageCircle,
-  Mic,
-  CalendarCheck,
-  Zap,
-  Bot,
-  UserPlus,
-  Users2,
-  Clock,
-  Settings,
-  ShieldCheck,
-  ChevronRight,
-  ExternalLink,
-  Copy,
-  Check,
-  Sparkles,
-  ArrowRight,
-  HelpCircle,
-  Menu,
-  X,
-  Play
+  ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, CalendarCheck, Check, ChevronDown,
+  ChevronRight, Copy, Info, MessageCircle, Search, ShoppingBag, X
 } from "lucide-react";
-import { Button } from "../components/ui/Button";
-import { Badge } from "../components/ui/Badge";
-import { toast } from "sonner";
+import AgentXLogo from "../components/AgentXLogo";
+import { guideGroups, guides, searchGuides } from "../lib/agentxGuides";
 
-interface DocSection {
-  id: string;
-  title: string;
-  category: string;
-  icon: any;
-  summary: string;
-  content: React.ReactNode;
-}
+const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2";
+
+const startingPoints = [
+  { id: "seller-catalog", label: "Vender produtos", icon: ShoppingBag },
+  { id: "messages-inbox", label: "Atender clientes", icon: MessageCircle },
+  { id: "appointments-system", label: "Organizar marcações", icon: CalendarCheck }
+];
 
 export default function Docs() {
-  const [activeSection, setActiveSection] = useState<string>("quick-start");
-  const [searchQuery, setSearchQuery] = useState<string>("");
-  const [copiedText, setCopiedText] = useState<string | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const { hash, pathname, key } = useLocation();
+  const [query, setQuery] = useState("");
+  const [copiedCommand, setCopiedCommand] = useState("");
+  const [clipboardStatus, setClipboardStatus] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
+  const mobileIndex = useRef<HTMLDetailsElement>(null);
+  const main = useRef<HTMLElement>(null);
+  const article = useRef<HTMLElement>(null);
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedText(label);
-    toast.success("Copiado para a área de transferência!");
-    setTimeout(() => setCopiedText(null), 2500);
+  const selected = guides.find((guide) => `#${guide.id}` === hash) ?? guides[0];
+  const selectedIndex = guides.indexOf(selected);
+  const SectionIcon = selected.icon;
+  const searching = Boolean(query.trim());
+  const results = searching ? searchGuides(query) : [];
+  const sectionUrl = (id: string) => `${pathname}#${id}`;
+
+  useEffect(() => {
+    const previous = document.title;
+    document.title = "Documentação | AgentX";
+    return () => { document.title = previous; };
+  }, []);
+
+  useEffect(() => {
+    if (!guides.some((guide) => `#${guide.id}` === hash)) return;
+    const frame = requestAnimationFrame(() => {
+      article.current?.scrollIntoView({ block: "start" });
+      article.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [hash, key]);
+
+  const openGuide = () => {
+    setQuery("");
+    setCopiedCommand("");
+    setClipboardStatus("");
+    if (mobileIndex.current) mobileIndex.current.open = false;
   };
 
-  const sections: DocSection[] = [
-    {
-      id: "quick-start",
-      title: "Primeiros Passos & Conexão",
-      category: "Introdução",
-      icon: Zap,
-      summary: "Como criar sua conta e conectar seu número de WhatsApp via QR Code com reconexão automática.",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            O <strong>WhatsCRM</strong> transforma seu WhatsApp comum ou WhatsApp Business em uma central de vendas, agendamento de consultas e atendimento com inteligência artificial.
-          </p>
+  const clearSearch = () => {
+    setQuery("");
+    searchInput.current?.focus();
+  };
 
-          <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-5 space-y-3">
-            <h4 className="text-sm font-bold text-emerald-900 flex items-center gap-2">
-              <Sparkles size={16} className="text-emerald-600" /> Passo a Passo para Conectar seu WhatsApp:
-            </h4>
-            <ol className="list-decimal list-inside space-y-2 text-xs sm:text-sm text-emerald-950">
-              <li>Acesse o menu <strong>Configurações</strong> (<Link to="/settings" className="underline font-bold">/settings</Link>) no painel lateral.</li>
-              <li>Na seção <strong>Conexão WhatsApp</strong>, clique em <strong>"Gerar QR Code"</strong>.</li>
-              <li>Abra o WhatsApp no seu celular ➔ toque nos <strong>3 pontinhos ou Ajustes</strong> ➔ <strong>Aparelhos conectados</strong> ➔ <strong>Conectar um aparelho</strong>.</li>
-              <li>Aponte a câmera para o QR Code na tela. Em instantes a tela atualizará para <Badge variant="success">Conectado ✅</Badge>.</li>
-            </ol>
-          </div>
+  const copyCommand = async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopiedCommand(command);
+      setClipboardStatus("Comando copiado.");
+    } catch {
+      setCopiedCommand("");
+      setClipboardStatus("Seleciona o texto do comando para copiar manualmente.");
+    }
+  };
 
-          <div className="space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">Reconexão Automática em Background</h4>
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-              O sistema utiliza a tecnologia <strong>Baileys Multi-Device</strong> com persistência de sessão. Se o servidor for reiniciado ou o celular passar por oscilações de sinal, o WhatsCRM restabelece a conexão sozinho sem necessidade de ler o QR Code novamente.
-            </p>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "messages-inbox",
-      title: "Inbox Comercial & Chat 1-a-1",
-      category: "Atendimento",
-      icon: MessageCircle,
-      summary: "Atendimento em tempo real, painel CRM lateral, controle de modo humano e respostas rápidas.",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            A tela de <strong>Mensagens</strong> (<Link to="/messages" className="underline font-bold text-emerald-600">/messages</Link>) centraliza todas as suas conversas individuais em uma interface fluida com CRM integrado.
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-              <h4 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                🛑 Assumir Atendimento Humano
-              </h4>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                No topo da conversa, clique no botão para alternar entre <strong>IA Ativa</strong> e <strong>Atendimento Humano</strong>. Ao assumir o controle humano, o robô não responderá automaticamente nessa conversa.
-              </p>
-            </div>
-
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-              <h4 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                🏷️ Painel CRM Lateral
-              </h4>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Clique no ícone de gráfico no topo direito do chat para abrir o painel lateral: edite o nome do contato, adicione etiquetas (tags), altere o estágio comercial e salve anotações confidenciais.
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <h4 className="text-sm font-bold text-slate-900">Respostas Rápidas (/atalho)</h4>
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-              Clique no ícone de lista na barra de envio para escolher respostas prontas ou acesse <Link to="/quick-replies" className="underline font-bold text-emerald-600">Respostas Rápidas</Link> para cadastrar mensagens frequentes com atalhos como <code>/pix</code>, <code>/horarios</code> ou <code>/endereco</code>.
-            </p>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "voice-audio",
-      title: "Gravação & Envio de Áudios de Voz",
-      category: "Atendimento",
-      icon: Mic,
-      summary: "Como gravar áudios com pré-escuta (Play/Pause) e envio nativo em formato de nota de voz WhatsApp PTT.",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            O WhatsCRM conta com um conversor de áudio integrado com <strong>FFmpeg</strong>, transformando gravações de qualquer navegador para o formato nativo do WhatsApp: <strong>OGG Opus 16kHz mono (PTT)</strong>.
-          </p>
-
-          <div className="bg-slate-900 text-white p-5 rounded-2xl space-y-3">
-            <h4 className="text-sm font-bold flex items-center gap-2 text-emerald-400">
-              <Play size={16} /> Fluxo de Gravação com Pré-Escuta:
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              <div className="bg-white/10 p-3 rounded-xl">
-                <span className="font-bold text-emerald-300 block mb-1">1. Gravar</span>
-                Clique no ícone de Microfone e fale enquanto o tempo é exibido.
-              </div>
-              <div className="bg-white/10 p-3 rounded-xl">
-                <span className="font-bold text-emerald-300 block mb-1">2. Ouvir</span>
-                Clique no botão Play (▶️) para escutar sua gravação antes de disparar.
-              </div>
-              <div className="bg-white/10 p-3 rounded-xl">
-                <span className="font-bold text-emerald-300 block mb-1">3. Enviar</span>
-                Envie diretamente com 1 clique ou descarte e regrave se desejar.
-              </div>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "appointments-system",
-      title: "Agenda, Consultas & Auto-Agendamento",
-      category: "Saúde & Serviços",
-      icon: CalendarCheck,
-      summary: "Gestão completa de consultas, catálogo de serviços, equipe médica, página pública e lembretes automáticos anti-falta.",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            Desenvolvido especialmente para <strong>clínicas, consultórios médicos, dentistas, salões de beleza, escritórios e consultorias</strong>.
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-2xl space-y-2">
-              <h4 className="font-bold text-sm text-emerald-950 flex items-center gap-1.5">
-                📅 1. Painel da Agenda (/appointments)
-              </h4>
-              <p className="text-xs text-slate-600">
-                Visualize consultas por dia/mês, filtre por médico ou status, e chame o paciente no WhatsApp com 1 clique direto na linha do agendamento.
-              </p>
-            </div>
-
-            <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-2xl space-y-2">
-              <h4 className="font-bold text-sm text-emerald-950 flex items-center gap-1.5">
-                🌐 2. Auto-Agendamento Público (/book/:id)
-              </h4>
-              <p className="text-xs text-slate-600">
-                Compartilhe seu link exclusivo ou QR Code. O paciente escolhe o serviço, o médico e o horário vago em tempo real, recebendo confirmação na hora.
-              </p>
-            </div>
-          </div>
-
-          <div className="p-5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2">
-            <h4 className="font-bold text-sm text-amber-950 flex items-center gap-2">
-              ⏰ Lembretes Automáticos Anti-Falta (WhatsApp)
-            </h4>
-            <ul className="list-disc list-inside text-xs sm:text-sm text-amber-900 space-y-1">
-              <li><strong>24 horas antes:</strong> O WhatsCRM envia uma mensagem lembrando da consulta com opção de responder <code>1 para Confirmar</code> ou <code>2 para Reagendar</code>.</li>
-              <li><strong>2 horas antes:</strong> Disparo automático de aviso no dia da consulta para reduzir o índice de faltas (no-show).</li>
+  function renderIndex() {
+    return (
+      <nav aria-label="Índice dos guias" className="space-y-6">
+        {guideGroups.map((group) => (
+          <div key={group}>
+            <p className="mb-2 px-3 text-xs font-semibold text-slate-500">{group}</p>
+            <ul className="space-y-0.5">
+              {guides.filter((guide) => guide.group === group).map((guide) => {
+                const Icon = guide.icon;
+                const active = !searching && selected.id === guide.id;
+                return (
+                  <li key={guide.id}>
+                    <Link to={sectionUrl(guide.id)} onClick={openGuide} aria-current={active ? "location" : undefined}
+                      className={`flex min-h-10 items-center gap-2.5 rounded-lg px-3 py-2 text-sm ${focusRing} ${active
+                        ? "bg-emerald-50 font-semibold text-emerald-800"
+                        : "text-slate-700 hover:bg-slate-100 hover:text-slate-950"}`}>
+                      <Icon size={16} aria-hidden="true" className={active ? "shrink-0 text-emerald-700" : "shrink-0 text-slate-500"} />
+                      <span>{guide.title}</span>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           </div>
-        </div>
-      )
-    },
-    {
-      id: "leads-funnel",
-      title: "Funil de Vendas & Leads (Kanban)",
-      category: "Comercial",
-      icon: UserPlus,
-      summary: "Acompanhamento visual de oportunidades em formato Kanban com valores e estágios de negociação.",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            No menu <strong>Leads</strong> (<Link to="/leads" className="underline font-bold text-emerald-600">/leads</Link>), você organiza todos os seus negócios em um painel visual do tipo Kanban.
-          </p>
-
-          <div className="space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">Estágios Padrão do Funil:</h4>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs font-semibold">
-              <div className="p-3 bg-slate-100 rounded-xl border border-slate-200">1. Novo Lead</div>
-              <div className="p-3 bg-blue-50 text-blue-700 rounded-xl border border-blue-200">2. Em Qualificação</div>
-              <div className="p-3 bg-amber-50 text-amber-700 rounded-xl border border-amber-200">3. Proposta Enviada</div>
-              <div className="p-3 bg-purple-50 text-purple-700 rounded-xl border border-purple-200">4. Em Negociação</div>
-              <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">5. Venda Fechada 🏆</div>
-              <div className="p-3 bg-red-50 text-red-700 rounded-xl border border-red-200">6. Perdido</div>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "automations-menus",
-      title: "Automações & Menus Inteligentes",
-      category: "Automação",
-      icon: Zap,
-      summary: "Respostas automáticas por palavras-chave com simulação de digitação e menus numéricos (1, 2, 3...).",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            Deixe seu atendimento funcionando 24/7 configurando gatilhos instantâneos e menus interativos para direcionar os clientes.
-          </p>
-
-          <div className="space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">1. Automações por Palavras-Chave (/automations)</h4>
-            <p className="text-xs sm:text-sm text-slate-600">
-              Cadastre termos como <code>preco, catalogo, horario, pix</code>. Quando um cliente enviar uma mensagem contendo essas palavras, o WhatsCRM responde no mesmo instante com texto, áudio gravado ou arquivo PDF.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">2. Construtor de Menus Inteligentes (/menu-builder)</h4>
-            <p className="text-xs sm:text-sm text-slate-600">
-              Crie menus numéricos (ex: <i>"Digite 1 para Suporte, 2 para Compras, 3 para Agendar Consulta"</i>). O sistema reconhece a opção digitada e entrega a resposta correspondente.
-            </p>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "ai-agent",
-      title: "Agente de IA Autônomo (Google Gemini)",
-      category: "Inteligência Artificial",
-      icon: Bot,
-      summary: "Configuração do assistente virtual com inteligência artificial para atendimento automático.",
-      content: (
-        <div className="space-y-6">
-          <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
-            O <strong>Agente IA</strong> (<Link to="/agent" className="underline font-bold text-emerald-600">/agent</Link>) utiliza o modelo <strong>Google Gemini</strong> para conversar com seus clientes com linguagem natural, cordial e contextualizada.
-          </p>
-
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-2">
-            <h4 className="font-bold text-sm text-slate-900">Como Treinar seu Agente:</h4>
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-              No campo <strong>Instruções do Sistema</strong>, escreva quem é sua empresa, os preços dos seus produtos/serviços, regras de entrega e o tom de voz desejado. A IA responderá com precisão baseada estritamente nas suas instruções.
-            </p>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "groups-schedule",
-      title: "Grupos & Disparos Programados",
-      category: "Avançado",
-      icon: Clock,
-      summary: "Moderação anti-spam para grupos de WhatsApp e agendamento de mensagens e Status futuros.",
-      content: (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-              <h4 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                👥 Moderação de Grupos (/groups)
-              </h4>
-              <p className="text-xs text-slate-600">
-                Ative proteção <strong>Anti-Link</strong>, <strong>Anti-Spam</strong> e configure mensagens de <strong>Boas-Vindas Automáticas</strong> para novos membros que entrarem nos seus grupos.
-              </p>
-            </div>
-
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-              <h4 className="font-bold text-sm text-slate-900 flex items-center gap-1.5">
-                ⏰ Disparos Programados (/schedule)
-              </h4>
-              <p className="text-xs text-slate-600">
-                Programe mensagens para clientes em datas futuras ou automatize postagens de imagens e vídeos nos seus <strong>Status (Stories)</strong> do WhatsApp.
-              </p>
-            </div>
-          </div>
-        </div>
-      )
-    }
-  ];
-
-  const filteredSections = sections.filter(s => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return s.title.toLowerCase().includes(q) || s.summary.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
-  });
-
-  const currentSection = sections.find(s => s.id === activeSection) || sections[0];
+        ))}
+      </nav>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-emerald-500 selection:text-white">
-      {/* Top Navbar */}
-      <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-8 py-3.5 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-bold shadow-sm">
-              W
-            </div>
-            <span className="font-black text-lg text-slate-900 tracking-tight">
-              Whats<span className="text-emerald-600">CRM</span> <span className="text-xs font-mono font-bold text-slate-400">Docs</span>
-            </span>
+    <div className="min-h-screen bg-[#f5f8f7] text-slate-900">
+      <a href="#conteudo-docs" onClick={(event) => { event.preventDefault(); main.current?.focus(); }}
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-emerald-900">
+        Saltar para o conteúdo
+      </a>
+      <header className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-8">
+          <div className="flex min-w-0 items-center gap-4">
+            <Link to="/" aria-label="AgentX, página inicial" className={`shrink-0 rounded-lg ${focusRing}`}>
+              <AgentXLogo size="sm" />
+            </Link>
+            <span className="hidden border-l border-slate-200 pl-4 text-sm font-medium text-slate-600 sm:block">Documentação</span>
+          </div>
+          <Link to="/dashboard" className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-700 px-3 text-sm font-semibold text-white hover:bg-emerald-800 sm:gap-2 sm:px-4 ${focusRing}`}>
+            Abrir painel <ArrowUpRight size={16} aria-hidden="true" />
           </Link>
-        </div>
-
-        <div className="flex items-center gap-2.5">
-          <Link to="/dashboard">
-            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold gap-1.5 shadow-sm">
-              Acessar Painel <ArrowRight size={14} />
-            </Button>
-          </Link>
-
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 text-slate-600 md:hidden hover:bg-slate-100 rounded-xl"
-          >
-            {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
         </div>
       </header>
 
-      {/* Main Container */}
-      <div className="flex-1 max-w-7xl w-full mx-auto flex flex-col md:flex-row gap-6 p-4 sm:p-6 lg:p-8">
-        
-        {/* Left Navigation Sidebar */}
-        <aside className={`md:w-72 shrink-0 space-y-4 ${mobileMenuOpen ? 'block' : 'hidden md:block'}`}>
-          {/* Search Input */}
-          <div className="relative">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Buscar na documentação..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 shadow-sm"
-            />
-          </div>
-
-          {/* Navigation Items */}
-          <div className="bg-white p-2.5 rounded-2xl border border-slate-200/80 shadow-sm space-y-1">
-            {filteredSections.map((sec) => {
-              const Icon = sec.icon;
-              const isActive = activeSection === sec.id;
-              return (
-                <button
-                  key={sec.id}
-                  onClick={() => {
-                    setActiveSection(sec.id);
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2.5 transition-all ${
-                    isActive
-                      ? "bg-emerald-600 text-white shadow-sm"
-                      : "text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  <Icon size={16} className={isActive ? "text-white" : "text-emerald-600"} />
-                  <span className="truncate">{sec.title}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="p-4 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl space-y-2 text-xs">
-            <h5 className="font-bold text-emerald-950 flex items-center gap-1.5">
-              <HelpCircle size={14} className="text-emerald-600" /> Precisa de Ajuda?
-            </h5>
-            <p className="text-slate-600 text-[11px] leading-relaxed">
-              Nossa equipe está disponível para tirar dúvidas e ajudar na configuração do seu WhatsApp.
+      <main id="conteudo-docs" ref={main} tabIndex={-1} className="mx-auto max-w-7xl scroll-mt-20 px-4 pb-12 pt-5 focus:outline-none sm:px-8 sm:pt-8">
+        <section aria-labelledby="docs-title"
+          className="grid gap-7 rounded-3xl border border-emerald-950 bg-[#102c27] bg-[radial-gradient(ellipse_at_top_right,#255949_0%,transparent_70%)] p-6 text-white sm:p-9 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,25rem)] lg:items-end lg:gap-10">
+          <div>
+            <h1 id="docs-title" className="text-[2rem] font-bold leading-tight tracking-tight sm:text-4xl lg:text-[2.75rem]">Como usar o AgentX</h1>
+            <p className="mt-3 max-w-lg text-sm leading-6 text-emerald-50/90 sm:text-base">
+              Liga o WhatsApp e aprende a atender clientes, gerir vendas, cuidar dos grupos e organizar marcações.
             </p>
-            <a
-              href="https://wa.me/258848858288"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 font-bold text-emerald-700 hover:underline pt-1"
-            >
-              Falar com Suporte WhatsApp <ExternalLink size={12} />
-            </a>
           </div>
-        </aside>
-
-        {/* Right Content Area */}
-        <main className="flex-1 bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 sm:p-10 space-y-8 animate-in fade-in duration-300">
-          
-          {/* Header of Section */}
-          <div className="border-b border-slate-100 pb-6 space-y-3">
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="text-emerald-700 border-emerald-200 bg-emerald-50">
-                {currentSection.category}
-              </Badge>
+          <div role="search" className="min-w-0">
+            <label htmlFor="doc-search" className="mb-2 block text-sm font-medium text-emerald-50">Pesquisar nos guias</label>
+            <div className="flex items-center gap-2 rounded-xl border border-white/25 bg-white px-3 text-slate-900 shadow-sm focus-within:ring-2 focus-within:ring-emerald-300">
+              <Search size={19} aria-hidden="true" className="shrink-0 text-emerald-700" />
+              <input id="doc-search" ref={searchInput} type="search" autoComplete="off" value={query}
+                onChange={(event) => setQuery(event.target.value)} placeholder="Ex. comprovativos, áudio, agenda"
+                className="min-h-12 min-w-0 flex-1 bg-transparent text-base placeholder:text-slate-500 focus:outline-none sm:text-sm [&::-webkit-search-cancel-button]:appearance-none" />
+              {query && <button type="button" onClick={clearSearch} aria-label="Limpar pesquisa"
+                className={`inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 ${focusRing}`}>
+                <X size={17} aria-hidden="true" />
+              </button>}
             </div>
-            
-            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
-              <currentSection.icon className="h-8 w-8 text-emerald-600" />
-              {currentSection.title}
-            </h1>
-            
-            <p className="text-sm sm:text-base text-slate-500 leading-relaxed max-w-3xl">
-              {currentSection.summary}
-            </p>
           </div>
+        </section>
 
-          {/* Section Body */}
-          <div className="prose prose-slate max-w-none text-slate-700">
-            {currentSection.content}
-          </div>
+        <div className="mt-5 grid gap-5 sm:mt-7 lg:grid-cols-[15.5rem_minmax(0,1fr)] lg:gap-7">
+          <aside className="hidden lg:block">
+            <div className="sticky top-21 max-h-[calc(100dvh-6.5rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-3">
+              <p className="mb-5 flex items-center gap-2 px-3 pt-2 text-sm font-semibold text-slate-900"><BookOpen size={17} aria-hidden="true" className="text-emerald-700" /> Guias</p>
+              {renderIndex()}
+            </div>
+          </aside>
 
-          {/* Next / Previous Navigation */}
-          <div className="pt-8 border-t border-slate-100 flex items-center justify-between gap-4">
-            {(() => {
-              const idx = sections.findIndex(s => s.id === currentSection.id);
-              const prev = idx > 0 ? sections[idx - 1] : null;
-              const next = idx < sections.length - 1 ? sections[idx + 1] : null;
+          <details ref={mobileIndex} className="group min-w-0 rounded-2xl border border-slate-200 bg-white lg:hidden">
+            <summary className={`flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden ${focusRing}`}>
+              <span className="flex items-center gap-2"><BookOpen size={17} aria-hidden="true" className="text-emerald-700" /> Guias</span>
+              <ChevronDown size={18} aria-hidden="true" className="shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="border-t border-slate-100 px-3 pb-4 pt-4">{renderIndex()}</div>
+          </details>
 
-              return (
-                <>
-                  {prev ? (
-                    <button
-                      onClick={() => setActiveSection(prev.id)}
-                      className="text-left px-4 py-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 transition-colors"
-                    >
-                      <span className="block text-[10px] text-slate-400 font-normal">Anterior</span>
-                      ← {prev.title}
+          <div className="min-w-0">
+            {searching ? (
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-7" aria-labelledby="docs-results">
+                <div className="mb-5">
+                  <h2 id="docs-results" className="text-xl font-bold tracking-tight">Resultados da pesquisa</h2>
+                  <p role="status" className="mt-1 text-sm text-slate-600">
+                    {results.length === 1 ? "1 guia encontrado" : `${results.length} guias encontrados`}
+                  </p>
+                </div>
+                {results.length ? (
+                  <ul className="space-y-2">
+                    {results.map((guide) => {
+                      const Icon = guide.icon;
+                      return (
+                        <li key={guide.id}>
+                          <Link to={sectionUrl(guide.id)} onClick={openGuide}
+                            className={`flex items-start gap-3 rounded-xl border border-slate-200 p-3.5 hover:border-emerald-300 hover:bg-emerald-50/60 sm:p-4 ${focusRing}`}>
+                            <Icon size={19} aria-hidden="true" className="mt-0.5 shrink-0 text-emerald-700" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-semibold">{guide.title}</span>
+                              <span className="mt-1 block text-sm leading-6 text-slate-600">{guide.summary}</span>
+                            </span>
+                            <ChevronRight size={17} aria-hidden="true" className="mt-1 shrink-0 text-slate-500" />
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <div className="rounded-xl bg-slate-50 px-4 py-6 text-sm text-slate-700">
+                    <p>Tenta pesquisar por um assunto, como pagamento, grupo ou ligação.</p>
+                    <button type="button" onClick={clearSearch} className={`mt-3 rounded font-semibold text-emerald-800 underline underline-offset-4 ${focusRing}`}>
+                      Limpar pesquisa e voltar ao guia
                     </button>
-                  ) : <div />}
+                  </div>
+                )}
+              </section>
+            ) : (
+              <article id={selected.id} ref={article} tabIndex={-1} aria-labelledby="guide-title"
+                className="scroll-mt-21 rounded-2xl border border-slate-200 bg-white p-4 focus:outline-none sm:p-7 lg:p-8">
+                <header className="flex items-start gap-3 sm:gap-4">
+                  <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800 sm:size-13">
+                    <SectionIcon size={23} aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-emerald-800 sm:text-sm">{selected.group}</p>
+                    <h2 id="guide-title" className="mt-1 text-2xl font-bold leading-tight tracking-tight sm:text-3xl">{selected.title}</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600 sm:text-base">{selected.summary}</p>
+                  </div>
+                </header>
 
-                  {next ? (
-                    <button
-                      onClick={() => setActiveSection(next.id)}
-                      className="text-right px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 rounded-xl border border-emerald-200 text-xs font-bold text-emerald-800 transition-colors"
-                    >
-                      <span className="block text-[10px] text-emerald-600 font-normal">Próximo</span>
-                      {next.title} →
-                    </button>
-                  ) : <div />}
-                </>
-              );
-            })()}
+                {selectedIndex === 0 && (
+                  <nav aria-label="Atalhos para começar" className="mt-6 grid gap-2 sm:grid-cols-3">
+                    {startingPoints.map(({ id, label, icon: Icon }) => (
+                      <Link key={id} to={sectionUrl(id)} onClick={openGuide}
+                        className={`flex min-h-12 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800 hover:border-emerald-300 hover:bg-emerald-50 ${focusRing}`}>
+                        <Icon size={17} aria-hidden="true" className="shrink-0 text-emerald-700" />
+                        <span className="flex-1">{label}</span>
+                        <ArrowRight size={15} aria-hidden="true" className="shrink-0 text-emerald-800" />
+                      </Link>
+                    ))}
+                  </nav>
+                )}
+
+                <ol className="mt-7 space-y-4">
+                  {selected.steps.map(({ title, detail }, index) => (
+                    <li key={title} className="flex gap-3 border-t border-slate-100 pt-4 sm:gap-4">
+                      <span aria-hidden="true" className="flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-xs font-bold text-emerald-800">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="font-semibold text-slate-900">{title}</h3>
+                        <p className="mt-1 text-sm leading-6 text-slate-700 sm:text-[0.95rem]">{detail}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+
+                {selected.commands && (
+                  <div className="mt-6 space-y-2">
+                    <ul className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-slate-50">
+                      {selected.commands.map(({ text, detail }) => (
+                        <li key={text} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 p-3 sm:flex-nowrap sm:p-4">
+                          <div className="min-w-0">
+                            <code className="break-words text-sm font-semibold text-emerald-900">{text}</code>
+                            <p className="mt-1 text-sm leading-5 text-slate-600">{detail}</p>
+                          </div>
+                          <button type="button" aria-label={`Copiar comando ${text}`} onClick={() => void copyCommand(text)}
+                            className={`inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold hover:bg-slate-100 ${focusRing}`}>
+                            {copiedCommand === text ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                            {copiedCommand === text ? "Copiado" : "Copiar"}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <p role="status" className="text-sm text-slate-600">{clipboardStatus}</p>
+                  </div>
+                )}
+
+                {selected.note && (
+                  <div className="mt-6 flex gap-3 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3.5 sm:p-4">
+                    <Info size={18} aria-hidden="true" className="mt-0.5 shrink-0 text-emerald-800" />
+                    <div>
+                      <h3 className="text-sm font-semibold text-emerald-950">{selected.note.title}</h3>
+                      <p className="mt-1 text-sm leading-6 text-emerald-950/85">{selected.note.detail}</p>
+                    </div>
+                  </div>
+                )}
+
+                <Link to={selected.action.to} className={`mt-6 inline-flex min-h-11 max-w-full items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 ${focusRing}`}>
+                  <span>{selected.action.label}</span><ArrowUpRight size={16} aria-hidden="true" className="shrink-0" />
+                </Link>
+
+                <nav aria-label="Guias anterior e seguinte" className="mt-7 grid grid-cols-1 gap-2 border-t border-slate-200 pt-4 sm:grid-cols-2">
+                  {selectedIndex > 0 && (
+                    <Link to={sectionUrl(guides[selectedIndex - 1].id)} onClick={openGuide}
+                      className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 ${focusRing}`}>
+                      <ArrowLeft size={16} aria-hidden="true" className="shrink-0 text-emerald-700" />
+                      <span><span className="block text-xs text-slate-500">Anterior</span><span className="font-semibold">{guides[selectedIndex - 1].title}</span></span>
+                    </Link>
+                  )}
+                  {selectedIndex < guides.length - 1 && (
+                    <Link to={sectionUrl(guides[selectedIndex + 1].id)} onClick={openGuide}
+                      className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 sm:col-start-2 ${focusRing}`}>
+                      <span><span className="block text-xs text-slate-500">Seguinte</span><span className="font-semibold">{guides[selectedIndex + 1].title}</span></span>
+                      <ArrowRight size={16} aria-hidden="true" className="shrink-0 text-emerald-700" />
+                    </Link>
+                  )}
+                </nav>
+              </article>
+            )}
+
+            <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 py-2 text-sm text-slate-600">
+              <span>Precisas de ajuda?</span>
+              <a href="https://wa.me/258848858288" target="_blank" rel="noreferrer"
+                className={`inline-flex min-h-9 items-center gap-1.5 rounded font-semibold text-emerald-800 hover:underline ${focusRing}`}>
+                Falar com o suporte <ArrowUpRight size={15} aria-hidden="true" />
+              </a>
+            </footer>
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }
