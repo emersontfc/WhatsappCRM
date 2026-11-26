@@ -1153,12 +1153,80 @@ try {
     await Promise.all([app.simulate("ingress", live), app.simulate("ingress", live)]);
     assert.equal(repeats(), 1);
     assert.equal((await read("agentx_whatsapp_action_claims", "?message_id=eq.fixture-live-action")).length, 1);
+
+    const adminPhone = "258841110201";
+    const adminJid = `${adminPhone}@s.whatsapp.net`;
+    const alternateAdmin = "258851110202";
+    const adminLid = "109876543212122@lid";
+    const otherAdmin = "258841110204";
+    const operatorProfile = { phone: "+258 84 111 0201", admin_phones: "85 111 0202" };
+    assert.equal((await api("/ai/profile", -1, operatorProfile)).status, 401);
+    const setupOperator = await api("/ai/profile", 0, operatorProfile);
+    const ownerProfile = await setupOperator.json();
+    assert.equal(setupOperator.status, 200, JSON.stringify(ownerProfile));
+    assert.equal(ownerProfile.data.id, owner);
+    assert.equal(ownerProfile.data.phone, operatorProfile.phone);
+    assert.equal(ownerProfile.data.admin_phones, operatorProfile.admin_phones);
+    const setupOther = await api("/ai/profile", 1, { phone: otherAdmin, admin_phones: "" });
+    const otherProfile = await setupOther.json();
+    assert.equal(setupOther.status, 200, JSON.stringify(otherProfile));
+    assert.equal(otherProfile.data.id, other);
+    assert.equal(otherProfile.data.phone, otherAdmin);
+    const statusCommand = { jid: adminJid, text: "/agentx status Horário de hoje", messageId: "fixture-admin-status" };
+    const commandWireStart = app.outbound.length;
+    const rejectedCommands = [
+      { ...statusCommand, jid: "258841110203@s.whatsapp.net", messageId: "fixture-unknown-admin" },
+      { ...statusCommand, account: "other", messageId: "fixture-cross-account-admin" },
+      { ...statusCommand, jid: `${otherAdmin}@s.whatsapp.net`, messageId: "fixture-other-account-admin" },
+      { ...statusCommand, jid: groupJid, participant: adminJid, messageId: "fixture-group-admin" },
+      { ...statusCommand, jid: `${adminPhone}@lid`, messageId: "fixture-unverified-admin-lid" },
+      { ...statusCommand, fromMe: true, messageId: "fixture-outgoing-admin-command" },
+      { ...statusCommand, timestamp: Math.floor(Date.now() / 1000) - 300, messageId: "fixture-stale-admin-command" },
+      { ...statusCommand, upsertType: "append", messageId: "fixture-appended-admin-command" }
+    ];
+    for (const parameters of rejectedCommands) await app.simulate("ingress", parameters);
+    const historyCommand = { ...statusCommand, messageId: "fixture-history-admin-command" };
+    await app.simulate("ingress", { ...historyCommand, upsertType: "history" });
+    await app.simulate("ingress", historyCommand);
+    assert.deepEqual(app.outbound.slice(commandWireStart), [], "Rejected commands cannot post Status, answer, or fall through to automation");
+
+    await Promise.all([app.simulate("ingress", statusCommand), app.simulate("ingress", statusCommand)]);
+    const posted = app.outbound.slice(commandWireStart);
+    assert.equal(posted.length, 2, "One Status and one private reply are sent even with concurrent duplicate upserts");
+    assert.equal(posted[0].userId, owner);
+    assert.equal(posted[0].jid, "status@broadcast");
+    assert.equal(posted[0].content.text, "Horário de hoje");
+    assert.ok(posted[0].statusJidList.includes("258860000001@s.whatsapp.net"));
+    assert.ok(!posted[0].statusJidList.includes("258860000002@s.whatsapp.net"));
+    assert.equal(posted[1].userId, owner);
+    assert.equal(posted[1].jid, adminJid);
+    assert.match(posted[1].content.text, /^AgentX: .*Status.*(?:publicado|aceite)/i);
+    assert.deepEqual((await read("whatsapp_operator_commands", `?message_id=eq.${statusCommand.messageId}&select=user_id,message_id`)),
+      [{ user_id: owner, message_id: statusCommand.messageId }]);
+
+    const lidCommand = { jid: adminLid, altJid: `${alternateAdmin}@s.whatsapp.net`, text: "/agentx status Horário atualizado", messageId: "fixture-verified-lid-admin" };
+    const lidWireStart = app.outbound.length;
+    await app.simulate("ingress", lidCommand);
+    const lidPosted = app.outbound.slice(lidWireStart);
+    assert.equal(lidPosted.length, 2);
+    assert.equal(lidPosted[0].userId, owner);
+    assert.equal(lidPosted[0].jid, "status@broadcast");
+    assert.equal(lidPosted[0].content.text, "Horário atualizado");
+    assert.equal(lidPosted[1].userId, owner);
+    assert.ok([adminLid, `${alternateAdmin}@s.whatsapp.net`].includes(lidPosted[1].jid), "The reply reaches only the verified LID or its associated PN");
+    assert.match(lidPosted[1].content.text, /^AgentX: .*Status.*(?:publicado|aceite)/i);
+    assert.equal((await read("contacts", `?user_id=eq.${owner}&lid=eq.${adminLid.split("@")[0]}&select=phone`))[0]?.phone, alternateAdmin);
+
     const ingressPort = app.port;
     await app.stop();
     app = await start(ingressPort);
     await app.simulate("ingress", live);
     assert.equal(repeats(), 0, "A replay after a process restart must not trigger an automation again");
+    await app.simulate("ingress", statusCommand);
+    await app.simulate("ingress", lidCommand);
+    assert.deepEqual(app.outbound, [], "Authorized commands already processed cannot post again after restart");
     console.log("WhatsApp action deduplication passed: sync-only history, concurrent upserts and replay after restart.");
+    console.log("WhatsApp remote admin commands passed: one Status and private confirmation, verified LID mapping, tenant isolation, group and history rejection.");
   }
 
   assert.equal((await call("/pause", 1, {})).status, 200);

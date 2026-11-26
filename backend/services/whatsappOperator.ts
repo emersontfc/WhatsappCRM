@@ -3,17 +3,24 @@ import { supabaseAdmin } from "../supabaseAdmin.ts";
 import { executeToolByName } from "../tools/index.ts";
 import { saveContactIdentity } from "./contactIdentity.ts";
 
-type LinkedIdentity = { id?: string; lid?: string } | null | undefined;
+type LinkedIdentity = { id?: string; lid?: string; phoneNumber?: string } | null | undefined;
+type SenderEvidence = {
+  remoteJidAlt?: string | null;
+  resolveLid?: (jid: string) => Promise<string | null | undefined>;
+};
 type OperatorTransport = {
   getMe(userId: string): LinkedIdentity;
   sendMessage(userId: string, jid: string, text: string): Promise<unknown>;
 };
 
-function privateIdentity(jid?: string) {
-  const [who, domain, ...extra] = (jid ?? "").split("@");
-  const number = who.split(":")[0];
-  if (extra.length || !/^\d+$/.test(number) || !["s.whatsapp.net", "lid"].includes(domain)) return null;
-  return `${number}@${domain}`;
+function privateIdentity(jid?: string | null) {
+  const match = /^(\d{1,20})(?::\d+)?@(s\.whatsapp\.net|c\.us|lid)$/.exec(jid ?? "");
+  if (!match) return null;
+  return `${match[1]}@${match[2] === "c.us" ? "s.whatsapp.net" : match[2]}`;
+}
+
+function phoneFromOperatorJid(jid?: string | null) {
+  return /^([1-9]\d{7,14})@s\.whatsapp\.net$/.exec(privateIdentity(jid) ?? "")?.[1] ?? null;
 }
 
 export function isOperatorSelfChat(jid: string, fromMe: boolean, identity: LinkedIdentity) {
@@ -37,23 +44,49 @@ export function parseOperatorCommand(text: string) {
   return { command: match[1]?.toLowerCase() || "ajuda", argument: match[2]?.trim() || "" };
 }
 
+async function authorizedOperator(transport: OperatorTransport, userId: string, jid: string, fromMe: boolean, evidence: SenderEvidence) {
+  const sender = privateIdentity(jid);
+  if (!sender) return null;
+  if (fromMe === true) {
+    const identity = transport.getMe(userId);
+    if (!isOperatorSelfChat(jid, true, identity)) return null;
+    return { phone: phoneFromOperatorJid(identity?.id) ?? phoneFromOperatorJid(sender) ?? readContactPhone(identity?.phoneNumber) ?? "" };
+  }
+  if (fromMe !== false) return null;
+
+  // Only Baileys' direct sender address and its server-provided PN alternate
+  // (or the linked account's own Signal LID mapping) establish the identity.
+  let phone = phoneFromOperatorJid(sender);
+  if (sender.endsWith("@lid")) {
+    phone = phoneFromOperatorJid(evidence.remoteJidAlt) ?? phoneFromOperatorJid(await evidence.resolveLid?.(sender));
+  }
+  if (!phone) return null;
+
+  const { data, error } = await supabaseAdmin.from("users").select("phone,admin_phones")
+    .eq("id", userId).abortSignal(AbortSignal.timeout(5_000)).maybeSingle();
+  if (error) throw error;
+  const configured = [data?.phone, ...(data?.admin_phones ?? "").split(/[\n,;]+/)];
+  return configured.some((value) => !value?.includes("@") && readContactPhone(value) === phone) ? { phone } : null;
+}
+
 export async function handleOperatorCommand(
-  transport: OperatorTransport, userId: string, jid: string, fromMe: boolean, text: string, messageId: string
+  transport: OperatorTransport, userId: string, jid: string, fromMe: boolean, text: string, messageId: string,
+  evidence: SenderEvidence = {}
 ) {
   const parsed = parseOperatorCommand(text);
-  if (!parsed) return false;
-  // Commands are reserved for the linked device's conversation with itself.
-  if (!isOperatorSelfChat(jid, fromMe, transport.getMe(userId))) return false;
+  if (!parsed || !messageId || messageId.length > 200) return false;
+  const operator = await authorizedOperator(transport, userId, jid, fromMe, evidence);
+  if (!operator) return false;
 
   const { data: claimed, error } = await supabaseAdmin.from("whatsapp_operator_commands")
     .upsert({ user_id: userId, message_id: messageId }, { onConflict: "user_id,message_id", ignoreDuplicates: true })
-    .select("message_id").maybeSingle();
+    .select("message_id").abortSignal(AbortSignal.timeout(5_000)).maybeSingle();
   if (error) throw error;
   if (!claimed) return true;
 
   let reply: string;
   try {
-    reply = await operatorReply(transport, userId, jid, parsed.command, parsed.argument, messageId);
+    reply = await operatorReply(transport, userId, jid, operator.phone, parsed.command, parsed.argument, messageId);
   } catch {
     reply = parsed.command === "pausar" || parsed.command === "retomar"
       ? "Não foi possível concluir o comando. Confirma o estado da IA na aba Mensagens."
@@ -104,13 +137,13 @@ async function changeConversationAI(userId: string, argument: string, paused: bo
     : `IA retomada para +${phone}. As respostas automáticas voltaram a estar disponíveis nesta conversa.`;
 }
 
-async function operatorReply(transport: OperatorTransport, userId: string, jid: string, command: string, argument: string, messageId: string) {
+async function operatorReply(transport: OperatorTransport, userId: string, jid: string, phone: string, command: string, argument: string, messageId: string) {
   if (command === "mensagens") {
-    const { data, error } = await supabaseAdmin.from("messages").select("text,contacts!inner(name,phone,user_id)")
+    const { data, error } = await supabaseAdmin.from("messages").select("msg_id,text,contacts!inner(name,phone,user_id)")
       .eq("user_id", userId).eq("contacts.user_id", userId).eq("type", "inbound").eq("is_read", false)
-      .order("timestamp", { ascending: false }).limit(5);
+      .order("timestamp", { ascending: false }).limit(6).abortSignal(AbortSignal.timeout(5_000));
     if (error) throw error;
-    const lines = (data ?? []).map((row) => {
+    const lines = (data ?? []).filter((row) => row.msg_id !== messageId).slice(0, 5).map((row) => {
       const contact = Array.isArray(row.contacts) ? row.contacts[0] : row.contacts;
       return `• ${contact?.name || contact?.phone || "Contacto"}: ${String(row.text || "Multimédia").slice(0, 140)}`;
     });
@@ -180,7 +213,7 @@ async function operatorReply(transport: OperatorTransport, userId: string, jid: 
   }
 
   const [first, second, ...rest] = argument.split("|").map((part) => part.trim());
-  const context = { userId, jid, phone: jid.split("@")[0], role: "admin" as const, whatsappManager: transport };
+  const context = { userId, jid, phone, role: "admin" as const, whatsappManager: transport };
   if (command === "status" && argument && argument.length <= 700) {
     return (await executeToolByName("post_whatsapp_status", { text: argument }, context)).message;
   }
@@ -192,7 +225,7 @@ async function operatorReply(transport: OperatorTransport, userId: string, jid: 
   }
   // Avoid echoing a valid command as the first token of a WhatsApp reply.
   return ["Comandos AgentX para esta conversa", ...operatorCommands.map((value) => `• ${value}`),
-    "Para pausar ou retomar a IA, escreve o número do cliente nesta conversa contigo mesmo."].join("\n");
+    "Para pausar ou retomar a IA, indica o número do cliente no comando."].join("\n");
 }
 
 export async function alertOperator(transport: OperatorTransport, userId: string, contactId: string) {

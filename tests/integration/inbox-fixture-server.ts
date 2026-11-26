@@ -5,6 +5,7 @@ import type { WASocket } from "@whiskeysockets/baileys";
 
 // Only the WhatsApp transport is simulated. The app and its database client are unchanged.
 const owner = "00000000-0000-4000-8000-000000000001";
+const other = "00000000-0000-4000-8000-000000000002";
 const sessions = (whatsappManager as unknown as { sessions: Map<string, unknown> }).sessions;
 let confirmSend = true;
 let sequence = 0;
@@ -14,7 +15,7 @@ const contactsMap = new Map([
   ["109876543211122@lid", { id: "109876543211122@lid", name: "Número desconhecido" }],
   ["109876543211123@lid", { id: "109876543211123@lid", phoneNumber: "258831234567@s.whatsapp.net", name: "Número resolvido" }],
 ]);
-function connectedSession(phone: string, contacts = new Map()) {
+function connectedSession(userId: string, phone: string, contacts = new Map()) {
   const groupId = "120363000000001@g.us";
   const group = phone === "258860000001" ? {
     id: groupId, subject: "Grupo de teste de campanhas", announce: true,
@@ -26,34 +27,39 @@ function connectedSession(phone: string, contacts = new Map()) {
     async sendPresenceUpdate() {},
     async groupFetchAllParticipating() { return group ? { [groupId]: group } : {}; },
     async groupMetadata(jid: string) { return jid === groupId && group ? group : { id: jid, participants: [] }; },
-    async sendMessage(jid: string, content: unknown) {
-      process.send?.({ event: "outbound", jid, content });
+    async sendMessage(jid: string, content: unknown, options?: { statusJidList?: string[] }) {
+      process.send?.({ event: "outbound", userId, jid, content, statusJidList: options?.statusJidList });
       return confirmSend ? { key: { id: `fixture-outbound-${++sequence}` } } : undefined;
     }
   } };
 }
-const ownerSession = connectedSession("258860000001", contactsMap);
+const ownerSession = connectedSession(owner, "258860000001", contactsMap);
+const otherSession = connectedSession(other, "258860000002");
 sessions.set(owner, ownerSession);
-sessions.set("00000000-0000-4000-8000-000000000002", connectedSession("258860000002"));
+sessions.set(other, otherSession);
 
 process.on("message", async (message: {
   event: string; requestId: string; text?: string; messageId?: string; jid?: string; altJid?: string;
-  upsertType?: "notify" | "append" | "history";
+  upsertType?: "notify" | "append" | "history"; account?: "owner" | "other";
+  participant?: string; fromMe?: boolean; timestamp?: number;
 }) => {
   if (message.event === "unconfirmed") confirmSend = false;
   if (message.event === "confirmed") confirmSend = true;
   let ok = true;
   if (message.event === "ingress" && message.text && message.messageId && message.jid) {
+    const userId = message.account === "other" ? other : owner;
+    const session = message.account === "other" ? otherSession : ownerSession;
     const incoming = {
-      key: { id: message.messageId, remoteJid: message.jid, fromMe: false },
+      key: { id: message.messageId, remoteJid: message.jid, remoteJidAlt: message.altJid,
+        participant: message.participant, fromMe: message.fromMe ?? false },
       message: { conversation: message.text },
-      messageTimestamp: Math.floor(Date.now() / 1000),
+      messageTimestamp: message.timestamp ?? Math.floor(Date.now() / 1000),
       pushName: "Cliente do teste de receção"
     };
     if (message.upsertType === "history") {
-      ok = Boolean(await whatsappManager.syncMessage(owner, incoming));
+      ok = Boolean(await whatsappManager.syncMessage(userId, incoming, message.altJid));
     } else {
-      await whatsappManager.handleMessageUpsert(owner, ownerSession.socket as unknown as WASocket,
+      await whatsappManager.handleMessageUpsert(userId, session.socket as unknown as WASocket,
         { messages: [incoming], type: message.upsertType ?? "notify" });
     }
   }

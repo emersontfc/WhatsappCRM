@@ -29,7 +29,7 @@ describe("WhatsApp self-chat commands", () => {
     expect(isOperatorSelfChat("13579@lid", true, transport.getMe())).toBe(true);
     expect(isOperatorSelfChat("0258841234567@s.whatsapp.net", true, transport.getMe())).toBe(false);
     expect(isOperatorSelfChat("258841234567@g.us", true, transport.getMe())).toBe(false);
-    expect(await handleOperatorCommand(transport, user, jid, false, "/agentx mensagens", "test-id")).toBe(false);
+    expect(await handleOperatorCommand(transport, user, "258841234567@g.us", false, "/agentx mensagens", "test-id")).toBe(false);
     expect(mocks.from).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
   });
@@ -166,6 +166,74 @@ describe("WhatsApp self-chat commands", () => {
     await alertOperator(transport, user, "contact");
     expect(mocks.rpc).toHaveBeenLastCalledWith("agentx_claim_contact_alert", { p_user: user, p_contact: "contact" });
     expect(mocks.send).toHaveBeenCalledExactlyOnceWith(user, jid, expect.stringContaining("recebeste uma mensagem"));
+  });
+});
+
+describe("commands from a configured administrator to the bot", () => {
+  const adminPhone = "258849990001";
+  const adminJid = `${adminPhone}@s.whatsapp.net`;
+  const lid = "987654321987654@lid";
+  const status = "/agentx status Horário de hoje";
+
+  it("loads the current account's configured number before posting and replies to that administrator", async () => {
+    const profile = query({ phone: "84 999 0001", admin_phones: "" });
+    const claim = query({ message_id: "remote-status" });
+    mocks.from.mockReturnValueOnce(profile).mockReturnValueOnce(claim);
+    mocks.execute.mockResolvedValue({ success: true, message: "Status publicado." });
+
+    expect(await handleOperatorCommand(transport, user, adminJid, false, status, "remote-status")).toBe(true);
+    expect(mocks.from.mock.calls).toEqual([["users"], ["whatsapp_operator_commands"]]);
+    expect(profile.eq).toHaveBeenCalledExactlyOnceWith("id", user);
+    expect(claim.upsert).toHaveBeenCalledWith({ user_id: user, message_id: "remote-status" },
+      { onConflict: "user_id,message_id", ignoreDuplicates: true });
+    expect(mocks.execute).toHaveBeenCalledWith("post_whatsapp_status", { text: "Horário de hoje" },
+      expect.objectContaining({ userId: user, jid: adminJid, phone: adminPhone, role: "admin" }));
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(user, adminJid, "AgentX: Status publicado.");
+  });
+
+  it.each([
+    { name: "verified WhatsApp alternate", evidence: { remoteJidAlt: `${adminPhone}:3@s.whatsapp.net` } },
+    { name: "trusted Signal identity mapping", evidence: { resolveLid: async () => adminJid } }
+  ])("authorizes a direct LID with $name and uses its phone in the tool context", async ({ evidence }) => {
+    mocks.from.mockReturnValueOnce(query({ phone: null, admin_phones: "999999999; +258 84 999 0001\n" }))
+      .mockReturnValueOnce(query({ message_id: "lid-status" }));
+    mocks.execute.mockResolvedValue({ success: true, message: "Publicado." });
+    expect(await handleOperatorCommand(transport, user, lid, false, status, "lid-status", evidence)).toBe(true);
+    expect(mocks.execute).toHaveBeenCalledWith("post_whatsapp_status", { text: "Horário de hoje" },
+      expect.objectContaining({ phone: adminPhone, jid: lid }));
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(user, lid, "AgentX: Publicado.");
+  });
+
+  it("allows no command to a group, from a bare LID or from an outgoing message to someone else", async () => {
+    const linked = transport.getMe();
+    await expect(handleOperatorCommand(transport, user, lid, false, status, "unmapped")).resolves.toBe(false);
+    await expect(handleOperatorCommand(transport, user, "120363123456@g.us", false, status, "group", { remoteJidAlt: adminJid })).resolves.toBe(false);
+    await expect(handleOperatorCommand(transport, user, adminJid, true, status, "sent-to-client", { remoteJidAlt: linked.id })).resolves.toBe(false);
+    expect(mocks.from).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("does not substitute an alternate address for the direct sender or reuse another account's authorization", async () => {
+    const profile = query({ phone: adminPhone, admin_phones: "" });
+    const foreignProfile = query({ phone: null, admin_phones: "" });
+    mocks.from.mockReturnValueOnce(profile).mockReturnValueOnce(foreignProfile);
+    expect(await handleOperatorCommand(transport, user, "258849990002@s.whatsapp.net", false, status,
+      "wrong-direct-sender", { remoteJidAlt: adminJid })).toBe(false);
+    expect(await handleOperatorCommand(transport, "other-account", adminJid, false, status, "foreign-account")).toBe(false);
+    expect(foreignProfile.eq).toHaveBeenCalledExactlyOnceWith("id", "other-account");
+    expect(mocks.from.mock.calls).toEqual([["users"], ["users"]]);
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("fails closed if the account profile cannot be loaded", async () => {
+    mocks.from.mockReturnValueOnce(query(null, { code: "08006" }));
+    await expect(handleOperatorCommand(transport, user, adminJid, false, status, "db-offline"))
+      .rejects.toMatchObject({ code: "08006" });
+    expect(mocks.from.mock.calls).toEqual([["users"]]);
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 });
 

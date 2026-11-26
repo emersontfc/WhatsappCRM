@@ -2,17 +2,9 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../lib/api";
+import { whatsappCommandExamples, whatsappCommandsSettingsPath } from "../lib/agentxGuides";
 import { Button } from "./ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
-
-const commands = [
-  ["Mensagens por ler", "/agentx mensagens"],
-  ["Leads recentes", "/agentx leads"],
-  ["Próximos envios", "/agentx agenda"],
-  ["Publicar Status de texto", "/agentx status Novidades da loja"],
-  ["Agendar um Status", "/agentx agendar-status amanhã às 09:00 | Novidades da loja"],
-  ["Agendar mensagem", "/agentx agendar 258841234567 | amanhã às 09:00 | Bom dia!"]
-];
 
 export function WhatsAppOperatorCard({ agendaLink = true }: { agendaLink?: boolean }) {
   const [alerts, setAlerts] = useState<boolean | null>(null);
@@ -44,24 +36,23 @@ export function WhatsAppOperatorCard({ agendaLink = true }: { agendaLink?: boole
   return <Card>
     <CardHeader><CardTitle>Comandos pelo WhatsApp</CardTitle></CardHeader>
     <CardContent className="grid gap-4">
-      <p className="text-sm text-slate-600">Usa estes comandos na conversa contigo mesmo, a partir do número ligado ao AgentX.</p>
-      <label className="flex items-start gap-2 text-sm">
-        <input type="checkbox" className="mt-1" checked={alerts === true} disabled={alerts === null || saving}
-          onChange={(event) => void update(event.target.checked)} />
-        Avisar-me no WhatsApp quando um cliente escrever (até um aviso por contacto a cada 30 minutos).
-      </label>
-      {unavailable && <p className="text-sm text-slate-600" role="status">Preferências de aviso indisponíveis.</p>}
+      <div className="space-y-2 text-sm text-slate-700">
+        <p>Do teu WhatsApp autorizado, abre uma conversa individual com o número ligado ao AgentX. Envia <code className="font-semibold text-emerald-900">/agentx</code> para veres os comandos.</p>
+        <Link to={whatsappCommandsSettingsPath} className="inline-block font-semibold text-emerald-800 underline underline-offset-2">Autorizar números no perfil</Link>
+        <p className="text-xs text-slate-600">Também podes escrever na conversa contigo mesmo a partir do próprio número ligado.</p>
+      </div>
       <details>
         <summary className="cursor-pointer text-sm font-semibold">Ver comandos</summary>
         <ul className="mt-3 grid gap-2">
-          {commands.map(([label, command]) => <li key={command} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
+          {whatsappCommandExamples.map(({ label, text, detail }) => <li key={text} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-2">
             <div className="min-w-0">
-              <p className="text-sm font-medium">{label}</p>
-              <code className="break-all text-xs">{command}</code>
+              <p className="text-sm font-semibold">{label}</p>
+              <code className="break-words text-xs">{text}</code>
+              <p className="mt-1 text-xs text-slate-600">{detail}</p>
             </div>
-            <Button size="sm" variant="outline" aria-label={`Copiar comando: ${label}`} onClick={async () => {
+            <Button type="button" size="sm" variant="outline" aria-label={`Copiar comando ${label}`} onClick={async () => {
               try {
-                await navigator.clipboard.writeText(command);
+                await navigator.clipboard.writeText(text);
                 toast.success("Comando copiado");
               } catch {
                 toast.error("Seleciona o texto do comando para o copiares.");
@@ -70,6 +61,15 @@ export function WhatsAppOperatorCard({ agendaLink = true }: { agendaLink?: boole
           </li>)}
         </ul>
       </details>
+      <div className="space-y-2 border-t border-slate-100 pt-3">
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={alerts === true} disabled={alerts === null || saving}
+            onChange={(event) => void update(event.target.checked)} />
+          Avisar no número ligado quando um cliente escrever, até uma vez por contacto a cada 30 minutos.
+        </label>
+        {unavailable && <p className="text-sm text-slate-600" role="status">Preferências de aviso indisponíveis.</p>}
+        <p className="text-xs text-slate-600">Em Vendedor, o WhatsApp para avisos recebe notificações de vendas. A aprovação de pagamentos é feita no painel.</p>
+      </div>
       {agendaLink && <Link to="/schedule" className="text-sm font-medium text-emerald-700 underline">Abrir agenda</Link>}
     </CardContent>
   </Card>;

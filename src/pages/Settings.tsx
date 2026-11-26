@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Key, Plus, Trash2, ShieldCheck, Zap, Building2, Check, Sparkles, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { supabase, getUserId, getUser } from "../supabase";
@@ -33,6 +33,7 @@ interface UserProfile {
 
 export default function Settings() {
   const navigate = useNavigate();
+  const { hash } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [isAdmin, setIsAdmin] = useState(false);
   const [keys, setKeys] = useState<LicenseKey[]>([]);
@@ -125,6 +126,14 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+
+  useEffect(() => {
+    if (hash === "#whatsapp-comandos" && activeTab === "profile" && !pageLoading && profile?.id) {
+      const section = document.getElementById("whatsapp-comandos");
+      section?.scrollIntoView({ block: "start" });
+      section?.focus({ preventScroll: true });
+    }
+  }, [hash, activeTab, pageLoading, profile?.id]);
 
   const fetchKeys = async () => {
     try {
@@ -489,42 +498,32 @@ export default function Settings() {
                         <p className="text-[10px] text-slate-500">O e-mail não pode ser alterado.</p>
                       </div>
 
-                      <div className="space-y-2 pt-2 border-t border-slate-100">
-                        <div className="flex items-center justify-between">
-                          <label className="text-sm font-medium text-slate-900">Seu Telefone WhatsApp (Admin / Dono)</label>
-                          <span className="text-[10px] uppercase font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                            Operador Principal
-                          </span>
+                      <section id="whatsapp-comandos" aria-labelledby="whatsapp-comandos-title" tabIndex={-1}
+                        className="scroll-mt-4 space-y-4 border-t border-slate-100 pt-4 focus:outline-none">
+                        <h2 id="whatsapp-comandos-title" className="font-semibold text-slate-900">Comandos pelo WhatsApp</h2>
+                        <div className="space-y-1.5">
+                          <label htmlFor="whatsapp-admin-phone" className="text-sm font-medium text-slate-900">Número WhatsApp do administrador</label>
+                          <Input id="whatsapp-admin-phone" type="tel" aria-describedby="whatsapp-admin-phone-help"
+                            value={profile.phone || ""} onChange={e => setProfile({ ...profile, phone: e.target.value })}
+                            placeholder="+258 84 123 4567" />
+                          <p id="whatsapp-admin-phone-help" className="text-xs text-slate-600">Indica, com indicativo do país, o número a partir do qual vais enviar comandos ao AgentX.</p>
                         </div>
-                        <Input 
-                          value={profile.phone || ""}
-                          onChange={e => setProfile({...profile, phone: e.target.value})}
-                          placeholder="ex: +258 84 123 4567 ou 258841234567"
-                        />
-                        <p className="text-[11px] text-slate-500 leading-normal">
-                          Quando enviar mensagens para o WhatsApp da empresa a partir deste número, o <strong>AgentX</strong> o identificará como Administrador com acesso a relatórios e comandos operacionais.
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-sm font-medium text-slate-900">Telefones de Gerentes Autorizados</label>
-                          <span className="text-[10px] uppercase font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                            Acesso Executivo
-                          </span>
+                        <div className="space-y-1.5">
+                          <label htmlFor="whatsapp-admin-phones" className="text-sm font-medium text-slate-900">Números adicionais autorizados <span className="font-normal text-slate-500">(opcional)</span></label>
+                          <Input id="whatsapp-admin-phones" aria-describedby="whatsapp-admin-phones-help"
+                            value={profile.admin_phones || ""} onChange={e => setProfile({ ...profile, admin_phones: e.target.value })}
+                            placeholder="+258 85 123 4567, +258 86 123 4567" />
+                          <p id="whatsapp-admin-phones-help" className="text-xs text-slate-600">Separa os números por vírgula e inclui o indicativo do país em cada um.</p>
                         </div>
-                        <Input 
-                          value={profile.admin_phones || ""}
-                          onChange={e => setProfile({...profile, admin_phones: e.target.value})}
-                          placeholder="ex: +258 84 999 9999, +258 82 888 8888"
-                        />
-                        <p className="text-[11px] text-slate-500 leading-normal">
-                          Outros números autorizados a solicitar métricas e dar comandos ao AgentX pelo WhatsApp (separe por vírgula).
-                        </p>
-                      </div>
+                        <div className="space-y-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-3 text-sm text-slate-700">
+                          <p>Depois de guardar, abre no teu WhatsApp uma conversa individual com o número ligado ao AgentX e envia <code className="font-semibold text-emerald-900">/agentx</code>.</p>
+                          <p>O campo <strong>WhatsApp para avisos</strong> em Vendedor serve para receber notificações. A aprovação de pagamentos é feita no painel.</p>
+                          <Link to="/docs#whatsapp-commands" className="font-semibold text-emerald-800 underline underline-offset-2">Ver comandos e exemplos</Link>
+                        </div>
+                      </section>
 
                       <Button type="submit" disabled={loading}>
-                        {loading ? "Salvando..." : "Salvar Alterações"}
+                        {loading ? "A guardar…" : "Guardar alterações"}
                       </Button>
                     </form>
                   </CardContent>

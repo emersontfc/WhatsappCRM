@@ -384,17 +384,25 @@ export class WhatsAppManager implements IWhatsAppTransport {
           { liveIngress: true });
         if (type !== "notify" || saved?.agentx_live_ingress !== true || !msgKeyId) continue;
 
+        const age = Date.now() - Date.parse(saved.timestamp);
+        if (text && parseOperatorCommand(text)) {
+          if (age >= -30_000 && age < 2 * 60_000 && typeof isMe === "boolean") {
+            await handleOperatorCommand(this, userId, jid, isMe, text, msgKeyId, {
+              remoteJidAlt: msg.key.remoteJidAlt,
+              resolveLid: async (lid) => socket.signalRepository?.lidMapping?.getPNForLID(lid)
+            });
+          }
+          continue;
+        }
+
         // If it's a message sent to self ("chat with yourself" / notes), allow automations and agent to process
         const isSelfMessage = isOperatorSelfChat(jid, Boolean(isMe), this.getMe(userId));
         const isBroadcast = jid.includes("@broadcast") || jid.includes("@newsletter") || jid.startsWith("120363");
 
         if (isBroadcast || (isMe && !isSelfMessage)) continue;
-        const age = Date.now() - Date.parse(saved.timestamp);
         const alert = !isMe && saved.contact_id && age < 5 * 60_000;
-        const command = Boolean(text && parseOperatorCommand(text));
-        const runCommand = command && isSelfMessage && age < 2 * 60_000;
-        const runAssistant = !command && Boolean(text) && (!isMe || !text.startsWith("AgentX:"));
-        if (!alert && !runCommand && !runAssistant) continue;
+        const runAssistant = Boolean(text) && (!isMe || !text.startsWith("AgentX:"));
+        if (!alert && !runAssistant) continue;
 
         // The independent, idempotent CRM write may be recovered by a replay even
         // when delivery of an automated response is already reserved.
@@ -412,10 +420,6 @@ export class WhatsAppManager implements IWhatsAppTransport {
         if (alert) {
           void alertOperator(this, userId, saved.contact_id)
             .catch((error) => console.warn("[WhatsApp] Could not send contact alert:", error?.code || "delivery_failed"));
-        }
-        if (runCommand) {
-          await handleOperatorCommand(this, userId, jid, true, text, msgKeyId);
-          continue;
         }
         if (runAssistant) {
           const isButton = Boolean(msg.message?.buttonsResponseMessage || msg.message?.templateButtonReplyMessage || msg.message?.interactiveResponseMessage);

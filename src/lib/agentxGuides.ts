@@ -5,6 +5,21 @@ import {
 } from "lucide-react";
 
 export const guideGroups = ["Começar", "Atendimento e vendas", "Operação diária"] as const;
+export const whatsappCommandsSettingsPath = "/settings?tab=profile#whatsapp-comandos";
+
+export const whatsappCommandExamples = [
+  { label: "Ajuda", text: "/agentx", detail: "Pede a lista de comandos disponíveis." },
+  { label: "Mensagens por ler", text: "/agentx mensagens", detail: "Consulta as mensagens por ler." },
+  { label: "Leads recentes", text: "/agentx leads", detail: "Vê os leads recentes e as suas etapas." },
+  { label: "Agenda", text: "/agentx agenda", detail: "Consulta os próximos envios agendados." },
+  { label: "Pedidos", text: "/agentx pedidos", detail: "Vê os pedidos recentes e os seus estados." },
+  { label: "Comprovativos", text: "/agentx comprovativos", detail: "Consulta os comprovativos pendentes. A aprovação é feita no painel." },
+  { label: "Pausar IA", text: "/agentx pausar 258841234567 | Atendimento em curso", detail: "Pausa a IA na conversa do cliente. O motivo é opcional." },
+  { label: "Retomar IA", text: "/agentx retomar 258841234567", detail: "Volta a ativar a IA na conversa do cliente." },
+  { label: "Publicar Status", text: "/agentx status Horário de hoje", detail: "Publica o texto no Status do número ligado." },
+  { label: "Agendar Status", text: "/agentx agendar-status amanhã às 09:00 | Novidades da loja", detail: "Guarda uma publicação de texto na Agenda." },
+  { label: "Agendar mensagem", text: "/agentx agendar 258841234567 | amanhã às 09:00 | Bom dia!", detail: "Agenda uma mensagem de texto para o cliente indicado." }
+];
 
 type Guide = {
   id: string;
@@ -204,24 +219,18 @@ export const guides: Guide[] = [
     id: "whatsapp-commands",
     group: "Operação diária",
     title: "Comandos pelo WhatsApp",
-    summary: "Consulta pedidos, leads e agenda no chat do teu próprio número ligado.",
+    summary: "Consulta pedidos, leads e agenda enviando comandos do teu WhatsApp para o número ligado ao AgentX.",
     icon: Terminal,
-    action: { label: "Abrir ligação WhatsApp", to: "/dashboard#ligar-whatsapp" },
+    action: { label: "Autorizar números no perfil", to: whatsappCommandsSettingsPath },
     steps: [
-      { title: "Abre a conversa contigo", detail: "Usa a conversa Enviar mensagem para si mesmo do número que ligaste ao AgentX. Escreve um dos comandos abaixo." },
-      { title: "Indica o contacto certo", detail: "Para pausar ou retomar a IA, substitui o número de exemplo pelo número do cliente, incluindo o indicativo do país." }
+      { title: "Autoriza o teu número", detail: "Em Configurações → Meu Perfil → Comandos pelo WhatsApp, preenche Número WhatsApp do administrador com indicativo do país. Usa Números adicionais autorizados para acrescentar outros números, separados por vírgula. Guarda as alterações." },
+      { title: "Envia um comando à empresa", detail: "No WhatsApp de um número autorizado, abre uma conversa individual com o número ligado ao AgentX. Com a ligação ativa, envia /agentx para veres os comandos. A resposta chega nessa conversa." },
+      { title: "Indica o número do cliente", detail: "Nos comandos de pausa, retoma ou agendamento, substitui o número do exemplo pelo número do cliente com indicativo do país." },
+      { title: "Usa a conversa contigo mesmo", detail: "Também podes enviar um comando novo no chat contigo mesmo a partir do próprio número ligado." }
     ],
-    commands: [
-      { text: "/agentx mensagens", detail: "Consulta as mensagens por ler." },
-      { text: "/agentx leads", detail: "Vê os leads recentes e as etapas." },
-      { text: "/agentx agenda", detail: "Consulta os próximos envios programados." },
-      { text: "/agentx pedidos", detail: "Vê os últimos pedidos e os seus estados." },
-      { text: "/agentx comprovativos", detail: "Consulta os comprovativos pendentes de revisão." },
-      { text: "/agentx pausar 258841234567", detail: "Pausa a IA na conversa com esse contacto." },
-      { text: "/agentx retomar 258841234567", detail: "Volta a ativar a IA na conversa." },
-      { text: "/agentx status Horário de hoje", detail: "Publica o texto no Status. Usa /agentx para consultar a lista completa de comandos." }
-    ],
-    keywords: "comando dono operador administração chat privado status agendar-status"
+    note: { title: "Avisos e aprovação de pagamentos", detail: "O campo WhatsApp para avisos, em Vendedor, serve para receber notificações. Confirma o pagamento junto do prestador e aprova em Catálogo e pedidos → Comprovativos." },
+    commands: whatsappCommandExamples,
+    keywords: "comando dono operador administrador gerente autorização número separado chat privado status agendar-status"
   }
 ];
 
