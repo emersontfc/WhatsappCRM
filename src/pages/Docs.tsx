@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, CalendarCheck, Check, ChevronDown,
-  ChevronRight, Copy, Info, MessageCircle, Search, ShoppingBag, X
+  ChevronRight, Copy, Info, ListChecks, MessageCircle, Search, ShieldCheck, ShoppingBag, UsersRound, X
 } from "lucide-react";
 import AgentXLogo from "../components/AgentXLogo";
 import { guideGroups, guides, searchGuides } from "../lib/agentxGuides";
@@ -10,9 +10,12 @@ import { guideGroups, guides, searchGuides } from "../lib/agentxGuides";
 const focusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2";
 
 const startingPoints = [
+  { id: "first-test", label: "Preparar o primeiro teste", icon: ListChecks },
   { id: "seller-catalog", label: "Vender produtos", icon: ShoppingBag },
-  { id: "messages-inbox", label: "Atender clientes", icon: MessageCircle },
-  { id: "appointments-system", label: "Organizar marcações", icon: CalendarCheck }
+  { id: "seller-team", label: "Organizar a equipa", icon: UsersRound },
+  { id: "appointments-system", label: "Organizar marcações", icon: CalendarCheck },
+  { id: "groups-schedule", label: "Moderar grupos", icon: ShieldCheck },
+  { id: "messages-inbox", label: "Atender clientes", icon: MessageCircle }
 ];
 
 export default function Docs() {
@@ -125,7 +128,7 @@ export default function Docs() {
           <div>
             <h1 id="docs-title" className="text-[2rem] font-bold leading-tight tracking-tight sm:text-4xl lg:text-[2.75rem]">Como usar o AgentX</h1>
             <p className="mt-3 max-w-lg text-sm leading-6 text-emerald-50/90 sm:text-base">
-              Liga o WhatsApp e aprende a atender clientes, gerir vendas, cuidar dos grupos e organizar marcações.
+              Liga o WhatsApp, segue o primeiro teste e aprende a gerir vendas, tarefas da equipa, grupos e marcações.
             </p>
           </div>
           <div role="search" className="min-w-0">
@@ -211,7 +214,7 @@ export default function Docs() {
                 </header>
 
                 {selectedIndex === 0 && (
-                  <nav aria-label="Atalhos para começar" className="mt-6 grid gap-2 sm:grid-cols-3">
+                  <nav aria-label="Atalhos para começar" className="mt-6 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                     {startingPoints.map(({ id, label, icon: Icon }) => (
                       <Link key={id} to={sectionUrl(id)} onClick={openGuide}
                         className={`flex min-h-12 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800 hover:border-emerald-300 hover:bg-emerald-50 ${focusRing}`}>
@@ -224,7 +227,7 @@ export default function Docs() {
                 )}
 
                 <ol className="mt-7 space-y-4">
-                  {selected.steps.map(({ title, detail }, index) => (
+                  {selected.steps.map(({ title, detail, link }, index) => (
                     <li key={title} className="flex gap-3 border-t border-slate-100 pt-4 sm:gap-4">
                       <span aria-hidden="true" className="flex size-7 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-xs font-bold text-emerald-800">
                         {index + 1}
@@ -232,6 +235,11 @@ export default function Docs() {
                       <div className="min-w-0">
                         <h3 className="font-semibold text-slate-900">{title}</h3>
                         <p className="mt-1 text-sm leading-6 text-slate-700 sm:text-[0.95rem]">{detail}</p>
+                        {link && <Link to={link.to.startsWith("#") ? sectionUrl(link.to.slice(1)) : link.to}
+                          onClick={link.to.startsWith("#") ? openGuide : undefined}
+                          className={`mt-1.5 inline-flex items-center gap-1.5 rounded text-sm font-semibold text-emerald-800 underline-offset-4 hover:underline ${focusRing}`}>
+                          {link.label}<ArrowRight size={14} aria-hidden="true" className="shrink-0" />
+                        </Link>}
                       </div>
                     </li>
                   ))}

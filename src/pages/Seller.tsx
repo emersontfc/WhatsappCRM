@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { ArrowRight, CheckCircle2, Circle, FileText, Package, RefreshCw, Wallet } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -16,12 +16,14 @@ const orderStatus: Record<string, string> = {
 };
 
 export default function Seller() {
+  const { hash } = useLocation();
   const [overview, setOverview] = useState<SellerOverview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [editing, setEditing] = useState(false);
   const settingsSection = useRef<HTMLElement>(null);
+  const showPaymentSection = hash === "#seller-payment" && overview !== null;
 
   useEffect(() => {
     const request = new AbortController();
@@ -39,6 +41,10 @@ export default function Seller() {
     });
     return () => request.abort();
   }, [revision]);
+
+  useEffect(() => {
+    if (showPaymentSection) settingsSection.current?.scrollIntoView({ block: "start" });
+  }, [showPaymentSection]);
 
   const complete = overview && overview.agentActive && overview.whatsappConnected && overview.readyProducts > 0 && Boolean(overview.settings);
   return <div className="mx-auto max-w-6xl space-y-6 pb-8">
